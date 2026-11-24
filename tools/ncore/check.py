@@ -2573,7 +2573,10 @@ class FnCheck:
         # result: the result owns it (MEMORY.md §1, Temporaries)
         whole = set()
         if sm["res"] == "lent":
-            whole = {k for (k, path, kind) in sm["lends"] if not path and k < len(ops)
+            # (not one it names twice: that is a part of it, which nurlc
+            # copies out of the temporary - refused for a value with no copy)
+            twice = set(sm.get("twice", ()))
+            whole = {k for (k, path, kind) in sm["lends"] if not path and k < len(ops) and k not in twice
                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
                      and avs[k].own == "O"
                      # (a handle, or a raw string or an owned slice handed
@@ -2770,6 +2773,12 @@ class FnCheck:
                    or a[1][len(place[1]):] not in ((), ("#T0",), ("#F0",)) for a in av.alias):
                 continue
             if av.own == "O" and not av.loans:
+                continue
+            # (…nor the payload a call lent out of the place, `: String s (
+            # pay o )`: codegen keys an option owner by its payload only for
+            # a `??` cursor over it, and frees the old payload under a call's
+            # lend - a use after free under --no-borrowck, AGORA-1006)
+            if av.call and any(a[1][len(place[1]):] in (("#T0",), ("#F0",)) for a in av.alias):
                 continue
             # (a later reader the hand-over made a borrow of the first one:
             # replacing the first releases the value it was handed, which
@@ -5430,35 +5439,12 @@ class FnCheck:
                                 rest = av.loans - mine
                                 av = AV("L" if rest and av.own == "L" else "O", rest, av.alias - {(b, ())},
                                         {(hp, l) for hp, l in av.held if l not in mine}, av.call and bool(rest))
-                if (av.own in ("L", "O") and not av.call and av.loans and self.fn.ret is not None
-                        and self.fn.ret[0] not in VIEW_TYPES and self.T.owning(self.fn.ret)
-                        and op[0] == "v" and not op[2]
-                        and (self.fn.vars[op[1]].kind == "temp" or op[1] in self.join_vars)
-                        and op[1] not in self.lit_nocopy and op[1] not in self.lit_lendcopy):
-                    # the payload of an `in` parameter's option or result,
-                    # handed back as the value of the `??` over it: the
-                    # function moves the value on, so the caller's argument
-                    # is taken as by a `sink` and the result is the caller's
-                    # own on that path (MEMORY.md §7.6, h408-h415; or by a
-                    # binding given that value whole, h409, agora #887). (Handed
-                    # back by name inside the arm, or out of an enum of the
-                    # program's, it is lent: RULES.md, "One operation".)
-                    places = {self.loans[l][0] for l in av.loans
-                              if l in self.loans and self.loans[l][1] == "handle"} | set(av.alias)
-                    pay = {a for a in places
-                           if a[1] and a[1][-1].startswith("#") and "*" not in a[1] and a[0] in self.pidx
-                           and self.fn.modes[self.pidx[a[0]]] == "in" and st.vals[a[0]].own == "P"
-                           and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")
-                           # (the payload itself, not a field read out of it:
-                           # that lends the parameter back in part, agora #178)
-                           and not any(b[0] == a[0] and len(b[1]) > len(a[1]) and prefix(a[1], b[1])
-                                       for b in places)}
-                    if pay:
-                        for a in sorted(pay):
-                            self.effect(st, a, "take", ln)
-                            self.s_consumes.add(self.pidx[a[0]])
-                        left = {l for l in av.loans if self.loans.get(l, (None,))[0] not in pay}
-                        av = AV("O" if av.own == "O" or not left else "L", left, av.alias - pay, av.held)
+                # (The payload of an `in` parameter's option or result handed
+                # back as the value of the `??` over it, or by a binding given
+                # that value whole, is lent, as `^ x` inside the arm is: the
+                # function answers per call, and the caller keeps its option
+                # (D4c, AGORA-995; before, it was taken as by a `sink`, h408-
+                # h415, agora #887).)
                 gone = st.vals.get(op[1]) if before is not None else None
                 if st.defers and before is not None and gone is not None and gone.own == "M":
                     # the `;` blocks run after the result is made and before

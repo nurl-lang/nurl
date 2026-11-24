@@ -10093,19 +10093,26 @@ unsafe @ __gen_ret i lex i syms i cg → s {
                     // (mem_hown_one_answer). Anywhere else the caller gets
                     // a copy, its own: what the binding only borrowed
                     // stays behind.
-                    : s __one ( mem_hown_one_answer syms cg )
-                    ? == 0 ( nurl_str_len __one ) {
-                        = val ( mem_emit_cloneif cg rty val rb )
-                        = __ret_bcopy 2
-                    } {
-                        : s __cp ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print __cp ) ( nurl_print ` = and i1 ` ) ( nurl_print rb ) ( nurl_print `, ` ) ( nurl_print __one ) ( nurl_print `\n` )
-                        = val ( mem_emit_cloneif cg rty val __cp )
-                        : s __ho ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print __ho ) ( nurl_print ` = or i1 ` ) ( nurl_print rf ) ( nurl_print `, ` ) ( nurl_print __one ) ( nurl_print `\n` )
-                        = rf __ho
-                        = __ret_bcopy 1
-                    }
+                    // (…but a join's binding that lends only what the
+                    // caller lent this function — no local, no part of one:
+                    // no `__llocal` — hands that back lent on those runs, as
+                    // the join handed back directly does: the function
+                    // answers per call by the binding's flag, and nothing is
+                    // copied (D4c, AGORA-995).)
+                    : b __rjp & & & & ( seq rsb `dyn` ) != 0 ( nurl_sym_len2 syms rup `__jbind` ) == 0 ( nurl_sym_len2 syms rup `__llocal` ) == 0 g_bck_closure_depth == 0 ( nurl_str_len __bh )
+                    : s __one ? __rjp `` ( mem_hown_one_answer syms cg )
+                    ? __rjp { ( mem_hown_mark_dyn syms ) } { ? == 0 ( nurl_str_len __one ) {
+                            = val ( mem_emit_cloneif cg rty val rb )
+                            = __ret_bcopy 2
+                        } {
+                            : s __cp ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __cp ) ( nurl_print ` = and i1 ` ) ( nurl_print rb ) ( nurl_print `, ` ) ( nurl_print __one ) ( nurl_print `\n` )
+                            = val ( mem_emit_cloneif cg rty val __cp )
+                            : s __ho ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __ho ) ( nurl_print ` = or i1 ` ) ( nurl_print rf ) ( nurl_print `, ` ) ( nurl_print __one ) ( nurl_print `\n` )
+                            = rf __ho
+                            = __ret_bcopy 1
+                        } }
                 } {
                     // (Its flag is the answer, which differs per call.)
                     ( mem_hown_mark_dyn syms )
@@ -20112,9 +20119,11 @@ unsafe @ eng_byte s w i k → i {
     : i nl ( sm_n sm SM_LENDS )
     : b have_dest >= dest 0
     // an owned temporary the callee hands back whole leaves with the
-    // result: the result owns it
+    // result: the result owns it (not from a callee that names a parameter
+    // twice in a literal: a part, which nurlc copies out of the temporary,
+    // and refuses for a value with no copy - check.py's twice)
     : ~ i whole_set 0
-    ? == res RES_LENT {
+    ? & == res RES_LENT == 0 ( sm_word sm SM_TWICE ) {
         = e 0
         ~ < e nl {
             : i t ( sm_at sm SM_LENDS e )
@@ -23308,63 +23317,11 @@ unsafe @ eng_byte s w i k → i {
             = k + k 1
         }
     } {}
-    : i aown ( av_own av )
-    ? & & & & & & | == aown OW_L == aown OW_O ! ( av_call av ) != ( av_loans av ) 0 & != g_f_ret ET_NONE ! ( et_is_view g_f_ret ) ( et_owning g_f_ret ) & whole | == ( fv_kind ov ) VK_TEMP ( fx_has ov FX_JOIN_VAR ) & == 0 ( wv_at g_fx_nocopy ov ) ! ( fx_has ov FX_LENDCOPY ) {
-        // the payload of an `in` parameter's option or result, handed back
-        // as the value of the `??` over it - or by a binding given that
-        // value whole (`: String r ?? o {…} ^ r`, h409, agora #887): the
-        // function moves the value on, so the caller's argument is taken
-        // as by a `sink` and the result is the caller's own on that path.
-        // (Handed back by name inside the arm, or out of an enum of the
-        // program's, it is lent.)
-        : i loans ( av_loans av )
-        : ~ i places ( av_alias av )
-        : ~ i k 0
-        ~ < k ( sq_len loans ) {
-            : i l ( sq_at loans k )
-            ? == ( el_kind l ) LK_HANDLE { = places ( sq_add places ( el_place l ) ) } {}
-            = k + k 1
-        }
-        : ~ i pay 0
-        = k 0
-        ~ < k ( sq_len places ) {
-            : i a ( sq_at places k )
-            : i ap ( pl_path a )
-            : i avid ( pl_var a )
-            ? & & & & & != ap 0 ( ee_is_pay ( ep_last ap ) ) ! ( ep_has_star ap ) >= ( fv_pidx avid ) 0 == ( fp_mode ( fv_pidx avid ) ) PM_IN == ( st_own st avid ) OW_P {
-                : i pty ( eng_ty_of ( pl_make avid ( ep_parent ap ) ) )
-                ? & != pty ET_NONE | == ( et_kind pty ) EK_OPT == ( et_kind pty ) EK_RES {
-                    // (the payload itself, not a field read out of it: that
-                    // lends the parameter back in part)
-                    : ~ b deeper F
-                    : ~ i j 0
-                    ~ & ! deeper < j ( sq_len places ) {
-                        : i b ( sq_at places j )
-                        ? & & == ( pl_var b ) avid > ( ep_len ( pl_path b ) ) ( ep_len ap ) ( ep_prefix ap ( pl_path b ) ) { = deeper T } {}
-                        = j + j 1
-                    }
-                    ? ! deeper { = pay ( sq_add pay a ) } {}
-                } {}
-            } {}
-            = k + k 1
-        }
-        ? != pay 0 {
-            = k 0
-            ~ < k ( sq_len pay ) {
-                ( eng_effect st ( sq_at pay k ) EF_TAKE ln 0 )
-                = g_s_consumes ( sq_add g_s_consumes ( fv_pidx ( pl_var ( sq_at pay k ) ) ) )
-                = k + k 1
-            }
-            : ~ i left 0
-            = k 0
-            ~ < k ( sq_len loans ) {
-                : i l ( sq_at loans k )
-                ? ! & ( el_is_loan l ) ( sq_has pay ( el_place l ) ) { = left ( sq_add left l ) } {}
-                = k + k 1
-            }
-            = av ( av_make ? | == aown OW_O == left 0 OW_O OW_L left ( sq_minus ( av_alias av ) pay ) ( av_held av ) F )
-        } {}
-    } {}
+    // (The payload of an `in` parameter's option or result handed back as
+    // the value of the `??` over it, or by a binding given that value
+    // whole, is lent, as `^ x` inside the arm is: the function answers per
+    // call, and the caller keeps its option - D4c, AGORA-995. Before, it
+    // was taken as by a `sink`, h408-h415, agora #887.)
     : i gone ? != before 0 ( st_av st ov ) 0
     ? & & & != ( st_defers st ) 0 != before 0 != gone 0 == ( av_own gone ) OW_M {
         // the `;` blocks run after the result is made and before it leaves
@@ -53531,6 +53488,10 @@ unsafe @ __src_has_raw_ptr s text → b {
             // Owned on some paths, lent on others (`{ ( string_from d ) } { h0 }`):
             // whether it owns is its flag, which a store or return consults.
             ( __sb syms ptr `dyn` )
+            // (…a `:` binding of a join: gen_ret hands it back per call where
+            // it lends only what the caller lent, D4c - not a payload binding
+            // given `dyn` by its match, whose arms own what they hold.)
+            ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jbind` ) `1` )
             // (…and how deep what it lends on the other paths lives: handed by
             // name to a binding of an outer block, those paths are copied in
             // there, as the join's own are when it is assigned there directly
@@ -111567,6 +111528,18 @@ unsafe @ __jpb_note i cg s up → v {
     ^ r
 }
 
+// Is every value the cursor `up` is over a parameter this function only
+// borrows (registered, but not one it declares or is inferred to take
+// over: __param_owned_slot)? Then what it holds is the caller's.
+@ __alias_borrowed_params_only i syms s up → b {
+    : ~ s al ( nurl_sym_get2 syms up `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s w ( str_first_word al ) = al ( str_skip_word al )
+        ? | == 0 ( nurl_sym_len2 syms w `__pname` ) ( __param_owned_slot syms w ) { ^ F } {}
+    }
+    ^ T
+}
+
 @ mem_arm_hown0 i syms i cg s ty i tt0 s v0 s retid i jdepth → s {
     // A payload of an enum this function owns, as the value of a join
     // that is taken: this path takes it out of the enum, which is moved on
@@ -111604,6 +111577,20 @@ unsafe @ __jpb_note i cg s up → v {
         // (…or a `sink` parameter: this function's own, it moves out too —
         // `^ ?? o { T v → v F → dflt }` dropped `dflt` under the caller.)
         : i hjd ( __jpb_jdepth syms up jdepth )
+        // (…but a cursor over parameters this function only borrows — the
+        // payload of an `in` parameter's option, `^ ?? o { T x → x F → …
+        // }` — as the value of the join handed back, or bound to be handed
+        // back, lends them back, as `^ x` in the arm and `^ ? c . p f …`
+        // do: the function answers per call by the cursor's own flag, and
+        // the caller keeps its argument (D4c, AGORA-995). Moved out, the
+        // parameter was an inferred `sink` and the caller's option moved
+        // into the call. Not in a closure, whose results are its callers'
+        // own.)
+        ? & & & & != 0 ( nurl_str_len up ) == jdepth 0 == 0 g_bck_closure_depth != 0 ( nurl_sym_len2 syms up `__alias` ) ( __alias_borrowed_params_only syms up ) {
+            : s pr ( mem_udrop_flag_get syms cg up )
+            ( mem_udrop_flag_set syms cg up `0` )
+            ^ pr
+        } {}
         ? & != 0 ( nurl_str_len up ) | > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) hjd ( __param_owned_slot syms up ) {
             // (A binding whose flag is a call's own answer hands over what
             // it holds by identity, __own_by_identity: a source of its own

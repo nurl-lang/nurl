@@ -1,7 +1,8 @@
 // join_of_two_parameter_elements_returned_while_the_caller_clears_one: agora #335 — a `?` join of two parameters' elements bound and returned, which the return copies wherever the binding owns nothing: the caller holds an owned copy, so clearing one argument while holding it is safe, and was refused (formal's v2c).
 // Closed: a take through a binding's `vec_get` slot empties the slot only where no `=` around a loop can have re-pointed the binding (a mutable binding bound outside a loop around the use is copied there instead, __vget_live), and a payload read out of a binding is copied only where that binding owns nothing on the path (__payload_owner_flag; agora #335).
 // main: refused ('s' borrows from 'qs', which ended … passed to 'vec_clear'); accepted and clean before #1465.
-// map: §7.6 | A2 | runs-clean | - | agora #335: a returned join of parameter elements is a copy, not a lend
+// Since AGORA-995 (D4c, the owner's decision #4173: a part of an `in` parameter handed back is lent, in every spelling) the bound join lends the element, per call, as `^ ? == k 1 ( vec_at … ) ( vec_at … )` handed back directly always did: holding the result while clearing its source is refused. Before, the bound spelling alone was copied.
+// map: §2.5 | A2 | rejected | - | AGORA-995: a bound join of parameter elements handed back lends them, as the join handed back directly does
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

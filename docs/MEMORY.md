@@ -1370,7 +1370,10 @@ parameter's payload handed back* — as the value of a `??` (`^ ?? o { T s
 the caller's option holding what the function gave away (agora #146,
 h408–h415): the parameter was only kept. A parameter whose value a
 function moves on through a cursor over it is an inferred `sink` now,
-as a parameter whose field it takes is. *A field handed to a
+as a parameter whose field it takes is. (Since AGORA-995, D4c, a
+payload handed back as the value of a `??`, or by a `:` binding of one,
+is lent instead, per call, as `^ x` inside the arm always was: the
+caller keeps its option, and releasing the result is refused.) *A field handed to a
 callee that takes it* was taken from bindings that could not give it
 (agora #145, h389–h404). A function that hands a field of its by-value
 parameter to a consumer owns the parameter and drops the rest of it, but
