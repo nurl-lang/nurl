@@ -15,8 +15,18 @@ $ `stdlib/core/vec.nu`
 
 @ mm ? ? ( Vec D ) a i k → ?? ( Vec D ) { ? == k 0 { ^ a } {} ^ @ ?? ( Vec D ) { T ( mk `a fresh value long enough for the heap here` ) } }
 
+@ shx ? ? ( Vec D ) o → v { ?? o { T i → { ( sh i ) } F → { ( nurl_println `none` ) } } }
+
 @ main → i {
     : ?? ( Vec D ) x @ ?? ( Vec D ) { T ( mk `a local value long enough for the heap` ) }
     : ?? ( Vec D ) y ( mm x 1 )
+    // the lent path, through both option layers: `z` is `x`'s own value,
+    // and its scope ends before `x` is read again
+    {
+        : ?? ( Vec D ) z ( mm x 0 )
+        ( shx z )
+    }
+    ( shx y )
+    ( shx x )
     ^ 0
 }
