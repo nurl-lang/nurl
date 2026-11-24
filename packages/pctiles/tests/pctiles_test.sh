@@ -9,7 +9,9 @@
 #   - geometric errors fall downwards and are 0 at the leaves; the root
 #     refines by ADD;
 #   - the same seed gives the same tiles;
-#   - --up +z leaves the points as they are.
+#   - --up +z leaves the points as they are;
+#   - the ply viewer opens the tileset and draws its root tile (when
+#     chrome or chromium is on PATH).
 # With VALIDATORS (node_modules/3d-tiles-validator and gltf-validator) the
 # tileset and every tile also go through CesiumGS's and Khronos's
 # validators: no errors, no warnings.
@@ -88,6 +90,23 @@ if sorted(gz) != wz: fail("--up +z moved the points")
 else: print("PASS --up +z keeps the points as they are")
 sys.exit(1 if bad else 0)
 PY
+# the ply viewer opens the tileset (?tiles=) and draws its root tile, in a
+# real browser when there is one: lit pixels, not what the page claims
+if command -v google-chrome >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1; then
+    cp deps/ply/views/viewer.html "$WORK/a/viewer.html"
+    PORT=$(( 21000 + $$ % 20000 ))
+    (cd "$WORK/a" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
+    HPID=$!
+    for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$PORT/tileset.json" && break; sleep 0.1; done
+    shot=$(sh deps/ply/tests/viewer_shot.sh "http://127.0.0.1:$PORT/viewer.html?tiles=tileset.json&probe=3" "$WORK/shot.png" 2>&1 | tail -1)
+    kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null
+    lit=$(echo "$shot" | sed -n 's/^lit \([0-9]*\)\/.*/\1/p')
+    if [ "${lit:-0}" -ge 200 ]; then echo "PASS the ply viewer opens the tileset and draws its root tile — $shot"
+    else echo "FAIL the ply viewer did not draw the tileset: $shot"; fails=$((fails + 1)); fi
+else
+    echo "SKIP the render check needs chrome or chromium on PATH"
+fi
+
 V="${VALIDATORS:-}"
 if [ -n "$V" ] && [ -d "$V/node_modules/3d-tiles-validator" ] && [ -d "$V/node_modules/gltf-validator" ]; then
     out=$(cd "$V" && npx 3d-tiles-validator -t "$WORK/a/tileset.json" 2>&1)

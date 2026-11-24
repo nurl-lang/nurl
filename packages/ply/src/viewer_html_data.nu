@@ -4,7 +4,7 @@
 // nurlc stack-overflows on string literals past ~48 KB.
 
 @ viewer_html_chunks → i {
-    ^ 2
+    ^ 3
 }
 
 @ viewer_html_chunk i k → s {
@@ -363,7 +363,7 @@ var MFS = [
    (float VEC3) and COLOR_0 (normalised u8/u16 or float, VEC3/VEC4),
    indices u8/u16/u32 or none. What the glb package writes, and what most
    exporters write for a single scanned object. */
-function parseGlb(buf) {
+function parseGlb(buf, points) {
   var dv = new DataView(buf);
   if (dv.getUint32(0, true) !== 0x46546C67) throw new Error("not a .glb file");
   if (buf.byteLength < 28) throw new Error("the .glb is cut short");
@@ -373,7 +373,10 @@ function parseGlb(buf) {
   var binOff = 20 + jlen + 8, binLen = dv.getUint32(20 + jlen, true);
   if (binOff + binLen > buf.byteLength) throw new Error("the .glb's binary chunk runs past the file");
   var prim = doc.meshes[0].primitives[0];
-  if (prim.mode !== undefined && prim.mode !== 4) throw new Error("only triangle meshes are shown");
+  /* a POINTS primitive (mode 0, a 3D Tiles point tile) when asked for one */
+  var isPts = prim.mode === 0;
+  if (isPts ? !points : (prim.mode !== undefined && prim.mode !== 4))
+    throw new Error(points ? "only point and triangle content is shown" : "only triangle meshes are shown");
   /* positions are drawn as stored: if the node holding the mesh, or any of
      its ancestors, moves it (a non-identity matrix, rotation, scale or
      translation), the file is refused rather than shown wrongly; identity
@@ -431,6 +434,7 @@ function parseGlb(buf) {
     var c = acc(prim.attributes.COLOR_0), sc = c.a.componentType === 5126 ? 255 : c.a.componentType === 5123 ? 255 / 65535 : 1;
     for (var q = 0; q < nv; q++) for (var k = 0; k < 3; k++) C[q * 4 + k] = Math.min(255, Math.round(c.arr[q * c.n + k] * sc));
   }
+  if (isPts) return { n: nv, xyz: P, rgb: C, nrm: null, idx: null };
   var I;
   if (prim.indices !== undefined) {
     var ia = acc(prim.indices).arr; I = ia instanceof Uint32Array ? ia : Uint32Array.from(ia);
@@ -684,12 +688,12 @@ function boot(data, label) {
   if (Q.has("ps")) { psize = parseFloat(Q.get("ps")); $("ps").value = psize;
                      $("psv").textContent = psize; }
   if (Q.has("trim")) { trim = parseFloat(Q.get("trim")); $("tm").value = trim * 100;
-                       $("tmv").textContent = Math.round(100 - trim * 100) + "%"; }
+` } {}
+    ? == k 1 { ^ `                       $("tmv").textContent = Math.round(100 - trim * 100) + "%"; }
   if (Q.has("roll")) ROLL = parseFloat(Q.get("roll"));
   if (Q.has("yaw")) cam.yaw = parseFloat(Q.get("yaw"));
   if (Q.has("pitch")) cam.pitch = parseFloat(Q.get("pitch"));
-` } {}
-    ? == k 1 { ^ `  if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
+  if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
   home = JSON.parse(JSON.stringify(cam));
   /* ?fly=1 starts in game mode (without the captured cursor, which only a
      click or a key can ask for): a link, or a test, can open it that way */
@@ -851,6 +855,232 @@ function boot(data, label) {
   }
   requestAnimationFrame(draw);
   window.__ready = true;
+}
+
+/* ---------- 3D Tiles ----------------------------------------------------
+   ?tiles=URL opens an OGC 3D Tiles tileset (pctiles writes them) instead of
+   one cloud: the tree is walked every frame from the eye, a tile is drawn
+   when its box is in view, and its children are wanted while its geometric
+   error would show larger than TILE_SSE pixels. Wanted tiles are fetched
+   nearest-to-needed first, a few at a time; past TILE_BUDGET points on the
+   GPU the tiles unused for longest are let go. So a cloud of any size opens
+   after its root tile, and the detail follows the camera — the orbit's or
+   the flight's.
+   The tileset is z-up and its glTF content y-up, as the format has it; the
+   view is the content's frame, so boxes are turned (x, y, z) → (x, z, -y).
+   Read: box bounding volumes, ADD and REPLACE, point (and triangle-less)
+   content. Not read yet: tile transforms, external tilesets, regions. */
+var TILE_SSE = 2.5, TILE_FETCHES = 4;
+var TILE_BUDGET = COARSE ? 3000000 : 14000000;
+function bootTiles(ts, url, label) {
+  var base = url.replace(/[^\\/?]*(\\?.*)?$/, "");
+  var tiles = [], frameNo = 0, inflight = 0, loaded = 0, ready = 0;
+  function add(t, parent) {
+    var bx = t.boundingVolume && t.boundingVolume.box;
+    if (!bx) throw new Error("only box bounding volumes are read");
+    if (t.transform) throw new Error("tile transforms are not read yet");
+    /* an oriented box's axis-aligned extent, then z-up → y-up */
+    var ex = [0, 1, 2].map(function (a) { return Math.abs(bx[3 + a]) + Math.abs(bx[6 + a]) + Math.abs(bx[9 + a]); });
+    var me = { c: [bx[0], bx[2], -bx[1]], h: [ex[0], ex[2], ex[1]], err: t.geometricError || 0,
+               uri: t.content ? (t.content.uri || t.content.url || null) : null,
+               refine: t.refine || (parent ? parent.refine : "ADD"), kids: [], parent: parent,
+               state: 0, vao: null, vbo: null, n: 0, used: 0, want: 0 };
+    if (me.uri && /\\.json$/i.test(me.uri)) throw new Error("external tilesets are not read yet");
+    tiles.push(me);
+    (t.children || []).forEach(function (ch) { me.kids.push(add(ch, me)); });
+    return me;
+  }
+  var root = add(ts.root, null);
+  UP = [0, 1, 0];
+  mid = root.c.slice();
+  diag = 2 * Math.hypot(root.h[0], root.h[1], root.h[2]) || 1;
+  lo = [mid[0] - root.h[0], mid[1] - root.h[1], mid[2] - root.h[2]];
+  span = [diag, 2 * root.h[1] || 1, 1];
+  sceneR = Math.max(diag / 2, 1e-6);
+  flySpeed = sceneR * 0.4;
+  trim = 1;
+  $("tm").closest(".ctl").hidden = true;
+  $("crop").hidden = true;
+  cam.tgt = mid.slice();
+  cam.dist = sceneR * 1.6;
+  if (Q.has("ps")) { psize = parseFloat(Q.get("ps")); $("ps").value = psize; $("psv").textContent = psize; }
+  if (Q.has("yaw")) cam.yaw = parseFloat(Q.get("yaw"));
+  if (Q.has("pitch")) cam.pitch = parseFloat(Q.get("pitch"));
+  if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
+  if (Q.has("sse")) TILE_SSE = Math.max(0.25, parseFloat(Q.get("sse")));
+  if (Q.has("budget")) TILE_BUDGET = Math.max(10000, parseInt(Q.get("budget"), 10));
+  home = JSON.parse(JSON.stringify(cam));
+  if (Q.get("fly") === "1") flyEnter();
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("link: " + gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  var U = {};
+  ["uMVP", "uSize", "uMode", "uLo", "uSpan", "uCentre", "uMaxR", "uBoxOn"].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.043, 0.051, 0.063, 1);
+
+  function upload(t, d) {
+    var inter = new ArrayBuffer(d.n * 16), fv = new Float32Array(inter), bv = new Uint8Array(inter);
+    for (var k = 0; k < d.n; k++) {
+      fv[k * 4] = d.xyz[k * 3]; fv[k * 4 + 1] = d.xyz[k * 3 + 1]; fv[k * 4 + 2] = d.xyz[k * 3 + 2];
+      bv[k * 16 + 12] = d.rgb[k * 4]; bv[k * 16 + 13] = d.rgb[k * 4 + 1]; bv[k * 16 + 14] = d.rgb[k * 4 + 2];
+    }
+    t.vao = gl.createVertexArray(); gl.bindVertexArray(t.vao);
+    t.vbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, t.vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, inter, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 16, 12);
+    t.n = d.n; t.state = 2; loaded += d.n; ready++;
+  }
+  function free(t) {
+    gl.deleteBuffer(t.vbo); gl.deleteVertexArray(t.vao);
+    t.vbo = t.vao = null; loaded -= t.n; t.n = 0; t.state = 0; ready--;
+  }
+  function fetchTile(t) {
+    t.state = 1; inflight++;
+    fetch(base + t.uri, { credentials: "same-origin" }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.arrayBuffer();
+    }).then(function (buf) {
+      var d = parseGlb(buf, true);
+      if (d.idx) throw new Error("a mesh tile");
+      return d;
+    }).then(function (d) {
+      inflight--;
+      upload(t, d);
+      if (t === root && !window.__ready) {
+        $("status").hidden = true; window.__ready = true;
+        /* ?probe=N: N frames of the root tile, drawn here, then the lit
+           pixels reported (see probeOut) — what a headless test asks */
+        if (PROBE > 0) { for (var f = 0; f < PROBE; f++) frame(performance.now()); total = loaded; probeOut(); }
+      }
+    }, function (e) {
+      inflight--; t.state = 3;
+      if (t === root) fail("could not load the root tile", base + t.uri + ": " + (e && e.message || e));
+    });
+  }
+  /* Over the budget, the tiles unused for longest go first. If the view
+     itself wants more than the budget holds, the tiles it needs least (the
+     smallest error on screen: the finest detail) give way to ones it needs
+     more, and a tile needed less than everything loaded is not fetched. */
+  function evictUnused() {
+    if (loaded <= TILE_BUDGET) return;
+    var cand = tiles.filter(function (t) { return t.state === 2 && t !== root && t.used < frameNo; });
+    cand.sort(function (a, b) { return a.used - b.used || b.err - a.err; });
+    for (var i = 0; i < cand.length && loaded > TILE_BUDGET; i++) free(cand[i]);
+  }
+  function makeRoom(need) {
+    while (loaded >= TILE_BUDGET) {
+      var least = null;
+      for (var i = 0; i < tiles.length; i++) {
+        var t = tiles[i];
+        if (t.state === 2 && t !== root && (!least || t.s < least.s)) least = t;
+      }
+      if (!least || least.s >= need) return false;
+      free(least);
+    }
+    return true;
+  }
+  /* in view: the box's corners against the clip volume, culled only when
+     all eight are beyond one plane */
+  function inView(t, M) {
+    var out = [0, 0, 0, 0, 0, 0];
+    for (var k = 0; k < 8; k++) {
+      var x = t.c[0] + (k & 1 ? t.h[0] : -t.h[0]), y = t.c[1] + (k & 2 ? t.h[1] : -t.h[1]), z = t.c[2] + (k & 4 ? t.h[2] : -t.h[2]);
+      var cx = M[0] * x + M[4] * y + M[8] * z + M[12], cy = M[1] * x + M[5] * y + M[9] * z + M[13];
+      var cz = M[2] * x + M[6] * y + M[10] * z + M[14], cw = M[3] * x + M[7] * y + M[11] * z + M[15];
+      if (cx < -cw) out[0]++; if (cx > cw) out[1]++; if (cy < -cw) out[2]++;
+      if (cy > cw) out[3]++; if (cz < -cw) out[4]++; if (cz > cw) out[5]++;
+    }
+    return out.every(function (o) { return o < 8; });
+  }
+  /* how large the tile's geometric error shows, in pixels, from the eye */
+  function sse(t, eye) {
+    var d = Math.hypot(Math.max(0, Math.abs(eye[0] - t.c[0]) - t.h[0]),
+                       Math.max(0, Math.abs(eye[1] - t.c[1]) - t.h[1]),
+                       Math.max(0, Math.abs(eye[2] - t.c[2]) - t.h[2]));
+    if (d <= 1e-9) return Infinity;
+    return t.err * cv.height / (2 * d * Math.tan(25 * Math.PI / 180));
+  }
+
+  var last = performance.now(), frames = 0, acc = 0, drawnPts = 0, drawnTiles = 0;
+  function frame(now) {
+    resize();
+    frameNo++;
+    if (fly) flyStep(Math.min(0.25, Math.max(0, (now - last) / 1000)));
+    var eye, look, reach;
+    if (fly) {
+      eye = fly.pos.slice();
+      var fd = flyDir(fly.yaw, fly.pitch);
+      look = [eye[0] + fd[0], eye[1] + fd[1], eye[2] + fd[2]];
+      reach = sceneR;
+    } else { eye = orbitEye(); look = cam.tgt; reach = cam.dist; }
+    var away = Math.hypot(eye[0] - mid[0], eye[1] - mid[1], eye[2] - mid[2]);
+    var P = perspective(50 * Math.PI / 180, cv.width / cv.height,
+                        Math.max(reach / 5000, 1e-4), reach * 20 + diag * 4 + away);
+    var MV = mul(P, lookAt(eye, look, rolledUp(eye, look)));
+    /* walk: draw what is in view, want what would add visible detail */
+    var draw = [], want = [];
+    (function walk(t) {
+      if (!inView(t, MV)) return;
+      t.used = frameNo;
+      var s = sse(t, eye);
+      t.s = s;
+      if (t.uri && t.state === 0) { t.want = s; want.push(t); }
+      var deeper = t.kids.length > 0 && s > TILE_SSE;
+      if (!deeper || t.refine === "ADD") { if (t.state === 2) draw.push(t); }
+      else if (t.state === 2 && !t.kids.every(function (k) { return k.state === 2 || !k.uri || !inView(k, MV); })) draw.push(t);
+      if (deeper) t.kids.forEach(walk);
+    })(root);
+    /* a tile out of view counts as needed not at all */
+    tiles.forEach(function (t) { if (t.used < frameNo) t.s = -1; });
+    evictUnused();
+    want.sort(function (a, b) { return b.want - a.want; });
+    for (var w = 0; w < want.length && inflight < TILE_FETCHES; w++) {
+      if (!makeRoom(want[w].want)) break;
+      fetchTile(want[w]);
+    }
+    gl.useProgram(prog);
+    gl.uniformMatrix4fv(U.uMVP, false, MV);
+    gl.uniform1f(U.uSize, psize * Math.min(window.devicePixelRatio || 1, 2));
+    gl.uniform1i(U.uMode, mode);
+    gl.uniform3fv(U.uLo, lo);
+    gl.uniform3fv(U.uSpan, [reach * 2, span[1], 1]);
+    gl.uniform3fv(U.uCentre, mid);
+    gl.uniform1f(U.uMaxR, 0);
+    gl.uniform1i(U.uBoxOn, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    drawnPts = 0; drawnTiles = draw.length;
+    for (var i = 0; i < draw.length; i++) {
+      if (draw[i].state !== 2) continue;  /* let go of above, to make room */
+      var n = Math.max(1, Math.round(draw[i].n * density));
+      gl.bindVertexArray(draw[i].vao);
+      gl.drawArrays(gl.POINTS, 0, n);
+      drawnPts += n;
+    }
+    window.__tiles = { total: tiles.length, ready: ready, loaded: loaded, drawn: drawnPts, drawnTiles: drawnTiles, inflight: inflight, wanted: want.length };
+    frames++; acc += now - last; last = now;
+    if (acc > 500) {
+      $("fps").textContent = frames >= 10 ? (frames * 1000 / acc).toFixed(0) : "-";
+      $("n").textContent = loaded.toLocaleString();
+      $("nd").textContent = drawnPts.toLocaleString();
+      $("src").textContent = label + "  ·  " + drawnTiles + " of " + ready + " tiles drawn, " + tiles.length + " in all";
+      frames = 0; acc = 0;
+    }
+  }
+  function draw(now) { frame(now); requestAnimationFrame(draw); }
+  $("hud").hidden = false; $("help").hidden = false;
+  $("hud").querySelector("h1").textContent = "tiles";
+  /* probing fetches only the root and draws it once it is in */
+  if (PROBE > 0) { TILE_FETCHES = 1; fetchTile(root); return; }
+  $("nl").textContent = "on the GPU"; $("ndl").textContent = "drawn";
+  $("src").textContent = label;
+  $("stat").textContent = "loading the root tile...";
+  requestAnimationFrame(draw);
 }
 
 /* Count what the GPU actually put on screen, and hand the frame back as a
@@ -1133,6 +1363,17 @@ window.addEventListener("keydown", function (e) {
 (function () {
   if (!gl) return fail("this browser has no WebGL2",
                        "the viewer draws the cloud on the GPU and needs it");
+  var tilesUrl = Q.get("tiles");
+  if (tilesUrl) {
+    fetch(tilesUrl, { credentials: "same-origin" }).then(function (r) {
+      if (!r.ok) throw new Error("server said " + r.status);
+      return r.json();
+    }).then(function (ts) {
+      if (!ts || !ts.root) throw new Error("no root tile");
+      bootTiles(ts, new URL(tilesUrl, location.href).href, tilesUrl.replace(/^.*\\/(?=[^\\/]+\\/[^\\/]+$)/, ""));
+    }).catch(function (e) { fail("could not open the tileset", tilesUrl + ": " + (e && e.message || e)); });
+    return;
+  }
   var glbUrl = Q.get("glb");
   /* glTF is +Y up */
   if (glbUrl) { UP = [0, 1, 0]; $("hud").querySelector("h1").textContent = "3-D object"; }
@@ -1143,7 +1384,8 @@ window.addEventListener("keydown", function (e) {
   xhr.onprogress = function (e) {
     var mb = (e.loaded / 1048576).toFixed(1);
     $("statsub").textContent = e.lengthComputable
-      ? mb + " of " + (e.total / 1048576).toFixed(1) + " MB"
+` } {}
+    ? == k 2 { ^ `      ? mb + " of " + (e.total / 1048576).toFixed(1) + " MB"
       : mb + " MB";
     if (e.lengthComputable) $("barf").style.width = (100 * e.loaded / e.total) + "%";
   };
