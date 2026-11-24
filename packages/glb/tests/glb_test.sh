@@ -24,7 +24,7 @@ fi
 cat "$WORK/run.out"
 fails=$(grep -c '^FAIL' "$WORK/run.out")
 
-python3 - "$WORK/cube.glb" "$WORK/tri.glb" "$WORK/scaled.glb" <<'PY' || fails=$((fails + 1))
+python3 - "$WORK/cube.glb" "$WORK/tri.glb" "$WORK/scaled.glb" "$WORK/points.glb" <<'PY' || fails=$((fails + 1))
 import json, math, struct, sys
 CT = {5121: ("B", 1), 5125: ("I", 4), 5126: ("f", 4)}
 NC = {"SCALAR": 1, "VEC3": 3, "VEC4": 4}
@@ -62,6 +62,17 @@ for f in sys.argv[1:]:
     pa, P = read(prim["attributes"]["POSITION"])
     for ax in range(3):
         if abs(min(p[ax] for p in P) - pa["min"][ax]) > 1e-6 or abs(max(p[ax] for p in P) - pa["max"][ax]) > 1e-6: fail(name, "min/max")
+    if name == "points.glb":
+        # a POINTS primitive: no indices, the colours as given, an unlit material
+        _, C = read(prim["attributes"]["COLOR_0"])
+        mat = doc["materials"][prim["material"]]
+        ok = (prim.get("mode") == 0 and "indices" not in prim and len(P) == 1000
+              and "KHR_materials_unlit" in mat.get("extensions", {})
+              and "KHR_materials_unlit" in doc.get("extensionsUsed", [])
+              and all(c == (int(p[0]) * 25, int(p[1]) * 25, int(p[2]) * 25, 255) for p, c in zip(P, C)))
+        if not ok: fail(name, "not a 1000-point POINTS primitive with its colours and an unlit material")
+        else: print("PASS", name, "1000 points, mode 0, no indices, colours as given, unlit")
+        continue
     _, I = read(prim["indices"])
     I = [i[0] for i in I]
     if len(I) % 3 or max(I) >= len(P): fail(name, "indices")
@@ -93,7 +104,7 @@ for (const f of process.argv.slice(2)) {
 }
 process.exit(bad ? 1 : 0);
 JS
-    (cd "$GLTF_VALIDATOR" && node .glb-check.mjs "$WORK/cube.glb" "$WORK/tri.glb" "$WORK/scaled.glb") || fails=$((fails + 1))
+    (cd "$GLTF_VALIDATOR" && node .glb-check.mjs "$WORK/cube.glb" "$WORK/tri.glb" "$WORK/scaled.glb" "$WORK/points.glb") || fails=$((fails + 1))
     rm -f "$GLTF_VALIDATOR/.glb-check.mjs"
 else
     echo "SKIP Khronos validator (set GLTF_VALIDATOR to a dir with node_modules/gltf-validator)"

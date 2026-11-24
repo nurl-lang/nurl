@@ -15,6 +15,14 @@
 //   ( glb_bytes m generator )                → !( Vec u ) String
 //   ( glb_write m path generator )           → !v String
 //
+// A point cloud is the same GlbMesh with vertices and no triangles, written
+// as a POINTS primitive (mode 0, no indices) under an unlit material
+// (KHR_materials_unlit): points carry no normals to light, so their colour
+// shows as it is — what 3D Tiles point content and a viewer want.
+//
+//   ( glb_points_bytes m generator )         → !( Vec u ) String
+//   ( glb_points_write m path generator )    → !v String
+//
 // Normals and colours are all-or-nothing: either every vertex has one or
 // the attribute is left out (a mesh with some is refused, not guessed).
 // Normals are written unit length (glTF requires it; scaled first, so any
@@ -117,11 +125,17 @@ $ `stdlib/ext/json.nu`
 }
 
 // The whole file in memory. F says what is wrong with the mesh.
-@ glb_bytes GlbMesh m s generator → !( Vec u ) String {
+@ glb_bytes GlbMesh m s generator → !( Vec u ) String { ^ ( __glb_encode m generator F ) }
+
+// The vertices as a point cloud (mode 0); a mesh with triangles is refused.
+@ glb_points_bytes GlbMesh m s generator → !( Vec u ) String { ^ ( __glb_encode m generator T ) }
+
+@ __glb_encode GlbMesh m s generator b points → !( Vec u ) String {
     : i nv ( glb_vertex_count m )
     : i nt ( glb_tri_count m )
     ? == nv 0 { ^ @ !( Vec u ) String { F ( string_from `glb: the mesh has no vertices` ) } } {}
-    ? == nt 0 { ^ @ !( Vec u ) String { F ( string_from `glb: the mesh has no triangles` ) } } {}
+    ? & points > nt 0 { ^ @ !( Vec u ) String { F ( string_from `glb: a point cloud has no triangles (glb_bytes writes a mesh)` ) } } {}
+    ? & ! points == nt 0 { ^ @ !( Vec u ) String { F ( string_from `glb: the mesh has no triangles` ) } } {}
     : i nn / ( vec_len [f] . m nrm ) 3
     : i nc / ( vec_len [u] . m col ) 4
     ? & != nn 0 != nn nv { ^ @ !( Vec u ) String { F ( string_from `glb: some vertices have a normal and some do not` ) } } {}
@@ -229,14 +243,15 @@ $ `stdlib/ext/json.nu`
         : b _c3 ( json_obj_set attrs `COLOR_0` ( json_int nview ) )
         = nview + nview 1
     } {}
-    : b _i1 ( json_arr_push views ( __glb_view idx_off * nt 12 34963 ) )
-    : b _i2 ( json_arr_push accs ( __glb_accessor nview 5125 * nt 3 `SCALAR` F ) )
-
     : Json prim ( json_obj_new )
     : b _q1 ( json_obj_set prim `attributes` attrs )
-    : b _q2 ( json_obj_set prim `indices` ( json_int nview ) )
+    ? points {} {
+        : b _i1 ( json_arr_push views ( __glb_view idx_off * nt 12 34963 ) )
+        : b _i2 ( json_arr_push accs ( __glb_accessor nview 5125 * nt 3 `SCALAR` F ) )
+        : b _q2 ( json_obj_set prim `indices` ( json_int nview ) )
+    }
     : b _q3 ( json_obj_set prim `material` ( json_int 0 ) )
-    : b _q4 ( json_obj_set prim `mode` ( json_int 4 ) )
+    : b _q4 ( json_obj_set prim `mode` ( json_int ? points 0 4 ) )
     : Json prims ( json_arr_new )
     : b _q5 ( json_arr_push prims prim )
     : Json mesh ( json_obj_new )
@@ -254,6 +269,11 @@ $ `stdlib/ext/json.nu`
     : Json mat ( json_obj_new )
     : b _m1 ( json_obj_set mat `pbrMetallicRoughness` pbr )
     : b _m2 ( json_obj_set mat `doubleSided` ( json_bool T ) )
+    ? points {
+        : Json ext ( json_obj_new )
+        : b _e1 ( json_obj_set ext `KHR_materials_unlit` ( json_obj_new ) )
+        : b _e2 ( json_obj_set mat `extensions` ext )
+    } {}
     : Json mats ( json_arr_new )
     : b _m3 ( json_arr_push mats mat )
 
@@ -285,6 +305,11 @@ $ `stdlib/ext/json.nu`
     : b _t7 ( json_obj_set root `buffers` bufs )
     : b _t8 ( json_obj_set root `bufferViews` views )
     : b _t9 ( json_obj_set root `accessors` accs )
+    ? points {
+        : Json used ( json_arr_new )
+        : b _u1 ( json_arr_push used ( json_str_lit `KHR_materials_unlit` ) )
+        : b _u2 ( json_obj_set root `extensionsUsed` used )
+    } {}
     : String js ( json_stringify root )
     : ( Vec u ) jb ( bytes_from_str ( string_data js ) )
     : i jlen ( vec_len [u] jb )
@@ -305,8 +330,12 @@ $ `stdlib/ext/json.nu`
     ^ @ !( Vec u ) String { T out }
 }
 
-@ glb_write GlbMesh m s path s generator → !v String {
-    ?? ( glb_bytes m generator ) {
+@ glb_write GlbMesh m s path s generator → !v String { ^ ( __glb_write_as m path generator F ) }
+
+@ glb_points_write GlbMesh m s path s generator → !v String { ^ ( __glb_write_as m path generator T ) }
+
+@ __glb_write_as GlbMesh m s path s generator b points → !v String {
+    ?? ( __glb_encode m generator points ) {
         F e → { ^ @ !v String { F e } }
         T bytes → {
             ?? ( write_file_bytes path bytes ) {

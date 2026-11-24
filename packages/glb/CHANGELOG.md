@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0] — 2026-11-24
+
+### Added
+
+- `glb_points_bytes` and `glb_points_write` write a mesh's vertices as a point
+  cloud: one POINTS primitive (mode 0) with no indices, POSITION with min/max,
+  optional COLOR_0, under an unlit material (`KHR_materials_unlit`, listed in
+  `extensionsUsed`). A mesh with triangles is refused, as is an empty one.
+  Khronos's validator reports no errors and no warnings.
+
 ## [0.1.0] — 2026-11-23
 
 ### Added

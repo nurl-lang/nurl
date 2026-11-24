@@ -129,5 +129,25 @@ $ `../src/glb.nu`
     ?? ( glb_bytes huge `` ) { T _ → { ( nurl_print `FAIL a non-finite position was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
     : GlbMesh empty ( glb_mesh_new )
     ?? ( glb_bytes empty `` ) { T _ → { ( nurl_print `FAIL an empty mesh was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
+    // a point cloud: a 10 x 10 x 10 lattice, coloured by position
+    : ~ GlbMesh pc ( glb_mesh_new )
+    : ~ i q 0
+    ~ < q 1000 {
+        : i qx % q 10
+        : i qy % / q 10 10
+        : i qz / q 100
+        : i _p ( glb_vertex pc # f qx # f qy # f qz )
+        ( glb_color pc * qx 25 * qy 25 * qz 25 255 )
+        = q + q 1
+    }
+    : String pcp ( path_join dir `points.glb` )
+    ?? ( glb_points_write pc ( string_data pcp ) `glb test points` ) {
+        T _ → { ( nurl_print `wrote points.glb (1000 points)\n` ) }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) = rc 1 }
+    }
+    // a point cloud has no triangles, and has points
+    ?? ( glb_points_bytes t `` ) { T _ → { ( nurl_print `FAIL a mesh was written as points\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
+    : GlbMesh nopts ( glb_mesh_new )
+    ?? ( glb_points_bytes nopts `` ) { T _ → { ( nurl_print `FAIL an empty point cloud was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
     ^ rc
 }
