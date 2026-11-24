@@ -4992,11 +4992,15 @@ unsafe @ note_unsafe_item s pos s what → v {
 // could be named from another file inside any generic). Called with the
 // lexer still on the name, so the diagnostic points at it.
 @ __vis_check_targ i lex s ta → v {
-    ? ( __vis_targ_exempt ta ) { ^ } {}
+    // (a name with no recorded file - a builtin, a type parameter - is never
+    // private: one hash lookup settles most type arguments)
+    : s sf ( nurl_sym_get2 g_vis_syms ta `__src_file` )
+    ? == 0 ( nurl_str_len sf ) { ^ } {}
     // (Text the type's own file wrote - a `pub` struct's field `( Shared
     // Impl )`, read again while an importer is the current file - names it
     // where it is visible: judged where it is written, AGORA-860.)
-    ? ( seq ( nurl_sym_get2 g_vis_syms ta `__src_file` ) ( nurl_lex_filename lex ) ) { ^ } {}
+    ? ( seq sf ( nurl_lex_filename lex ) ) { ^ } {}
+    ? ( __vis_targ_exempt ta ) { ^ } {}
     : s lt ( llvm_type ta )
     ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37 { ( vis_check_xref lex ta `type` ) } {}
 }
