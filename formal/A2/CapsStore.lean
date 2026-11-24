@@ -5,10 +5,13 @@ import A2.Steps
 /-! A2 — AGORA-969 (AGORA-963 step 3, the store half): **the store part of
 the closure-capture clause, kept by the store operations a step makes.**
 
-`HeldCapsInp` (CapClause.lean) asks, of every held anchor's root `w` that is
-not lent out, that no package in the store captures `w` other than `.inp`.
-Its store part is `CapsInpAt m w`, and `HeldCapsInp` is restated through it
-(`heldCapsInp_iff`). The lemmas here keep `CapsInpAt` across `Mem.set` of a
+`HeldCapsInp` (CapClause.lean) asks, of every held anchor's root `w`, that no
+package in a live slot captures `w` other than `.inp`, and that no live handle
+reaches such a package. That is `LiveCaps m Γ w`, with no `F` exclusion, as
+`heldCapsInp_iff` restates it. The store-wide `CapsInpAt m w` below is a
+separate, stronger contract: it also asks of dead slots that no live handle
+reaches, so a store can fail `CapsInpAt` while meeting `LiveCaps`. The lemmas
+here keep `CapsInpAt` across `Mem.set` of a
 value whose packages capture `w` only `.inp`, `Mem.remove`, a store with the
 same slots (`of_st`, `withBlk`), `BindParams` and `Release`, as
 `MemCodes.set` / `remove` / `of_st` / `withBlk` / `BindParams.codes` /

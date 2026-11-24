@@ -68,10 +68,16 @@ theorem Stmt.under_off {p : Var} : ∀ {s : Stmt}, p ∉ s.spine → s.under p =
   cases s <;> simp_all [Stmt.under, Stmt.spine] <;> (try intro h; exact absurd h.symm hp.1)
 
 /-- **The frame-relative closure-capture clause** (AGORA-937 B4):
-    1. at each borrowed parameter's held anchor, the frame clause at the
-       parameter's frame list `Z p`;
-    2. the running statement, under the parameter's `rbind`, names nothing in
-       that list;
+    1. the frame clause at the parameter's frame list `Z p` (`FrameCaps`), at
+       every root the parameter watches (`Watch`). These are the roots of its
+       held anchors, and every name `w ∈ Z p`, even one the parameter holds
+       no anchor on. The second set is what keeps a call through a package
+       from killing a name of an older frame's list: the package, outside the
+       list, captures every listed name `.inp`, so none of its `inout`
+       captures is listed;
+    2. the running statement under the parameter's `rbind` names nothing in
+       that list: `reach` reads the killable names of `s.under p`, not of all
+       of `s`;
     3. each frame list names only bindings made already;
     4. each running catch frame's remembered store meets the clause, for the
        parameters older than it. -/

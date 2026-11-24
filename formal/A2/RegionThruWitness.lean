@@ -82,7 +82,9 @@ theorem call_region_ok :
     subst hr
     exact ⟨_, sig_region, rfl⟩
 
-/-! ### A real memory root is still refused -/
+/-! ### A real memory root does not meet the regions-only branch
+
+(Route U's `CallThruOK` is the other branch, `HeldViewThruWitness.call_ok`.) -/
 
 def Ew : Entry := ⟨.vec .int, .own, true, [], [], false, false, false, false⟩
 def Evv2 : Entry := ⟨vsi, .own, true, [], [⟨2, .view⟩], false, false, false, false⟩

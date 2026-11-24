@@ -920,20 +920,9 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
     have hrbF : ∀ p E, (callS Γ F fn [] m.nv x).canon (sigCtx fn) p = some E → E.mode = .rootb →
         p < m.nv ∧ Γ p = some E := by
       intro p E hp' hrb
-      rcases h.ctx_cases p with ⟨rfl, hc'⟩ | ⟨rfl, hc'⟩ | ⟨k', t, hk', rfl, hc'⟩ | ⟨k', t, hk', rfl, hc'⟩ |
-          ⟨k', b', t, hk', rfl, hc'⟩ | ⟨hy', hyx, hc'⟩ | ⟨hc', v, hv, rfl⟩ <;> rw [hc'] at hp' <;> (try cases hp')
-      · exact absurd hrb (resMode_ne' fn)
-      · exact absurd hrb (resMode_ne' fn)
+      rcases h.rootb_cases p E hp' hrb with h0 | ⟨k', t, hk', -, -⟩
+      · exact h0
       · rw [hp] at hk'; simp at hk'
-      · cases hrb
-      · cases hrb
-      · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp'
-        rw [clean_mode] at hrb
-        obtain ⟨E0, h0, hm⟩ := h.postdm.2 _ E1' h1'
-        have := h.post_rootb h0 (hm ▸ hrb)
-        rw [h1'] at this; cases this
-        rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)]
-        exact ⟨h.domlt _ _ h0, h0⟩
     have hbody : (fn.body.rename (callRen fn.params [] m.nv)).spine = [] := h.body_spine
     have hspR : ∀ p E, Γ p = some E → p ∉ (recStmt fn m.nv x m0 k).spine := by
       intro p E hp' hm'

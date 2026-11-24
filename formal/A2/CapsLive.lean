@@ -6,8 +6,12 @@ namespace A2
 bindings (`CapsLive`, formal/A2/THRU_STAGE3_DESIGN.md). A live binding's
 value names its packages' captures in what the binding holds (`MInv.held`,
 `NamesIn`), so where no live binding holds a mutating name on `w`, no
-package in a live slot captures `w` but read-only. A dead slot is never read
-by a typed statement, so it needs no such fact. -/
+package in a live slot captures `w` but read-only. An ordinary typed read of
+an operand needs a live binding, so it reads no dead slot. A dead slot may
+still own a value, though: after a join, a `letd` entry may be dead while its
+slot owns one, and `Step.scopeDEnd` reads that value to run its destructor,
+whatever `Entry.live` says. The clause here is about what typed operands
+read, not about what such cleanup reads. -/
 
 /-- No live binding holds a name dependency on `w` that may change it. -/
 def NoMutLive (Γ : Ctx) (w : Var) : Prop :=

@@ -11,11 +11,17 @@ passes, yet the change lands in memory `vv`'s slices view: the caller's `w`.
 
 nurlc accepted the call with `s2`, a view of `w`'s element, beside `vv`, and the
 call with the caller reading `s2` after it. Both read freed memory (AGORA-933,
-fixed in github#2100). A2 refuses both: `CallT`'s `ThruFn` premise allows no
-argument that holds views of anything but a region (AGORA-937), and the
-caller's `w` is none (`call_refused`, `call_alone_refused`). The second refusal is stricter than nurlc's fix,
-which accepts `( f vv )` and ends the caller's views of `w` after it. Lifting it
-to the same shape is AGORA-932. -/
+fixed in github#2100). A2 refuses `( f vv s2 )` (`call_refused`): `s2`
+reaches `w` inside its elements, which route U's `CallThruOK` does not
+allow. A2 also refuses `( f1 vv )` while `s2` is live (`call_alone_refused`):
+the callee's change inside `w`'s elements would end `s2`.
+
+nurlc's fix accepts the one-argument call and ends the caller's views of `w`
+at the call. In A2, `s2` must be dead before the call: with `s2` ended,
+`( f1 vv )` types by route U (AGORA-937 B4, `call_ok` in `K2`). `thruPre`
+below shows that weakening, which ends `s2` and keeps `vv` and `w`. The
+accepted call does not end `s2` itself: it leaves the context as it found it
+(`post_K2`). -/
 
 namespace A2.HeldViewThruWitness
 

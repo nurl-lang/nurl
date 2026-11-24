@@ -4456,7 +4456,10 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
     (`CallT`'s `ThruFn` premise, `CallH.thru`), and a region stands for what
     its argument holds views of. So the body's own calls, which may pass
     views of the regions to through-changing code, pass none where the call
-    places them (`RSetup.callR_canon`). -/
+    places them (`RSetup.callR_canon`). This needs `callR Γ args = []`. A
+    call made where no binding is a region and that meets the regions-only
+    branch has it, but a route-U call (`CallThruOK`) may pass views of real
+    memory, and then `callR` is not empty. -/
 theorem σ_nil_of_thru (h : CallH P Γ F x fn args base) (hR : callR Γ args = []) (v : Var) :
     (callS Γ F fn args base x).σ v = [] :=
   RSetup.σ_nil_of_R h.sOK hR v

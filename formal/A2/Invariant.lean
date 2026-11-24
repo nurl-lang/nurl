@@ -11,7 +11,12 @@ import A2.Typing
     lies inside the buffer it names.  The views stored inside a value are
     valid through what it holds (`held`).
   * A borrowed parameter's dependencies are frozen at the point of
-    execution, so nothing that runs can change what it reaches.
+    execution, so nothing that runs can change what it reaches. There is
+    one exception, AGORA-937 route U: a held anchor outside `F`, as
+    `StmtT.rbind`'s `AnchoredS` allows. It is a lent `Vec`'s view of memory
+    the parameter holds, at a root that the running statement does not kill.
+    The proof keeps the anchor while what runs changes the root strictly
+    inside its elements.
 -/
 
 namespace A2
