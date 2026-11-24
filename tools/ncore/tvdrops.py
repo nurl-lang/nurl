@@ -55,6 +55,11 @@ aggregate carries, are not merged. A function with no ownership operation
 at all (no drop flag, release, clone, journal entry or `sink` call) is
 validated without its paths being followed.
 
+Types are read by balancing brackets: a slot of a literal aggregate type
+(`alloca { i1, %String }`) is the frame's, and owns where its type is one a
+`__dropif_T` loads or a `__dropifv_T` takes. A line the checks read whose
+types do not parse is reported unsupported, never skipped.
+
 A function whose drops depend on an answer the analysis does not follow
 (the per-call ownership answers: `__nurl_clear_if`, `__nurl_hown*`, a flag
 loaded from memory it does not own, a flag computed) is reported
@@ -101,17 +106,11 @@ STORE_FLAG = re.compile(r"^\s*store i1 (true|false|1|0), i1\* (%[\w.]+)")
 STORE_FLAG_PTR = re.compile(r"^\s*store i1 (true|false|1|0), ptr (%[\w.]+)")
 STORE_I1_VAR = re.compile(r"^\s*store i1 (%[\w.]+), (?:i1\*|ptr) (%[\w.]+)")
 LOAD_FLAG = re.compile(r"^\s*(%[\w.]+) = load i1, (?:i1\*|ptr) (%[\w.]+)")
-DROPIF = re.compile(r"call void @__dropif(?:v)?_[\w.]+\(i1 (%[\w.]+|true|false|1|0), (?:ptr|[^,]+\*) (%[\w.]+)\)")
-# a release of a value a register holds (not a slot): `__dropifv_T(i1 f, T %r)`
-DROPIFV = re.compile(r"call void @__dropifv_[\w.]+\(i1 (%[\w.]+|true|false|1|0), .+ (%[\w.]+)\)\s*$")
 BR_COND = re.compile(r"^\s*br i1 ([^,]+), label %([\w.]+), label %([\w.]+)")
 BR = re.compile(r"^\s*br label %([\w.]+)")
 RET = re.compile(r"^\s*ret\b")
-LOAD_VAL = re.compile(r"^\s*(%[\w.]+) = load ([^,]+), (?:ptr|[^,]+\*) (%[\w.]+)")
-CLONEIF = re.compile(r"^\s*(%[\w.]+) = call [^@]*@__nurl_cloneif_[\w.]+\(i1 ([^,]+), [^,]* (%[\w.]+)\)")
 RET_VAL = re.compile(r"^\s*ret \S.* (%[\w.]+)\s*$")
 SWITCH = re.compile(r"^\s*switch\b")
-STORE_ANY = re.compile(r"^\s*store .*, (?:ptr|[^,]+\*) (%[\w.]+)(?:, align \d+)?$")
 JPUSH2 = re.compile(r"call void @nurl_journal_push_drop2\(ptr (%[\w.]+), ptr (%[\w.]+|null), ptr @[\w.]+\)")
 JFORGET_SLOT = re.compile(r"call void @nurl_journal_forget_slot\(ptr (%[\w.]+)\)")
 JRAW = ("@nurl_journal_push(", "@nurl_journal_push_drop(", "@nurl_journal_push_slice(",
@@ -125,17 +124,227 @@ UNTRACKED = ("__nurl_clear_if", "__nurl_hown", "__nurl_set_if", "invoke ", "indi
 # a per-call ownership answer whose key is a constant of the module (a
 # callee that answers statically): followed, not reported
 CLEARIF = re.compile(r"call void @__nurl_clear_if\(ptr (@[\w.]+), ptr (%[\w.]+)\)")
-CLONEIFK = re.compile(r"^\s*(%[\w.]+) = call [^@]*@__nurl_cloneifk_[\w.]+\(ptr (@[\w.]+), i1 ([^,]+), [^,]* (%[\w.]+)\)")
 CONST_I1 = re.compile(r"^(@[\w.]+) = private constant i1 (true|false)", re.M)
 CONSTS = {}   # @key → its constant answer
 SINKS = {}    # D0c (--sums): llvm function → (arity, indices of sink=/keeps= parameters)
 PARAMS = {}   # llvm function → its parameters' names, in order
 PTYPES = {}   # llvm function → {parameter: its LLVM type}
 FORGETS = set()   # D0c (--sums): llvm functions whose core IR calls `mem_forget`
+UNREAD = set()    # llvm functions whose parameter list is not read whole
+OWNING_T = set()  # the LLVM types of what owns, as a `__dropif_T` loads it or a `__dropifv_T` takes it
 
 
 class Unsupported(Exception):
     pass
+
+
+# LLVM types are read by a small tokenizer that balances `{}`, `[]`, `<>`
+# and `()`, not by regular expressions: an aggregate type (`{ i1, %String }`,
+# a slice `{ i64*, i64 }`, a closure `{ void (i8*)*, i8* }`) has commas and
+# spaces of its own. A line of a kind the checks read (an `alloca`, a
+# `load`, a `store`, a release, a clone) that does not parse is reported
+# unsupported (`unparsed`), never skipped.
+OPEN, CLOSE = "{[<(", "}]>)"
+
+
+def balanced(s, i):
+    """The end of the bracketed group opening at s[i], or None."""
+    depth = 0
+    for k in range(i, len(s)):
+        if s[k] in OPEN:
+            depth += 1
+        elif s[k] in CLOSE:
+            depth -= 1
+            if depth == 0:
+                return k + 1
+    return None
+
+
+def take_type(s, i=0):
+    """The LLVM type that starts at s[i] (spaces skipped): (type, end), or
+    None. A base (`i64`, `ptr`, `%Name`, `{ … }`, `[N x T]`, `<{ … }>`), then
+    `*`s and function parameter lists (`void (i8*)*`)."""
+    while i < len(s) and s[i] == " ":
+        i += 1
+    st = i
+    if i < len(s) and s[i] in OPEN:
+        j = balanced(s, i)
+        if j is None:
+            return None
+    else:
+        m = re.compile(r'%"[^"]*"|%[\w.$-]+|[a-z][\w]*').match(s, i)
+        if not m or m.group(0) in ("true", "false", "null", "undef", "zeroinitializer", "poison"):
+            return None
+        j = m.end()
+    while True:
+        if j < len(s) and s[j] == "*":
+            j += 1
+            continue
+        k = j
+        while k < len(s) and s[k] == " ":
+            k += 1
+        if k < len(s) and s[k] == "(" and not s.startswith("(", st):
+            # (a function type: its parameter list; not a call's arguments,
+            # which never follow a type here)
+            e = balanced(s, k)
+            if e is None or e >= len(s) or s[e] != "*":
+                break
+            j = e
+            continue
+        break
+    return norm_type(s[st:j]), j
+
+
+def norm_type(t):
+    return re.sub(r"\s+", " ", t.strip())
+
+
+class M:
+    """A parsed line's parts, read as a regex match's groups."""
+    def __init__(self, *g):
+        self.g = g
+
+    def group(self, i):
+        return self.g[i - 1]
+
+
+def operand(a, ptr=False):
+    """An operand's text (`T v`): (type, value), or None. The value is a
+    register, a global, or a constant (a constant expression whole); a
+    pointer operand's is its first word (an atomic access's ordering
+    follows it)."""
+    tt = take_type(a)
+    if not tt:
+        return None
+    v = a[tt[1]:].strip()
+    if not v:
+        return None
+    if ptr:
+        v = v.split()[0]
+        return (tt[0], v) if re.fullmatch(r'[%@](?:[\w.$-]+|"[^"]*")', v) else None
+    return tt[0], v
+
+
+def parse_alloca(l):
+    """`%r = alloca T[, …]`: (register, type), or None."""
+    m = re.match(r"^\s*(%[\w.]+) = alloca (.*)$", l)
+    if not m:
+        return None
+    tt = take_type(m.group(2))
+    if not tt:
+        return ()
+    rest = m.group(2)[tt[1]:].strip()
+    if rest and not re.fullmatch(r"(?:, align \d+)?", rest):
+        # (a count, an address space: a slot of no one type)
+        return M(m.group(1), None)
+    return M(m.group(1), tt[0])
+
+
+def parse_load(l):
+    """`%r = load T, P %p[, …]`: M(register, type, pointer), or None; () for
+    a load not parsed."""
+    m = re.match(r"^\s*(%[\w.]+) = load (?:volatile |atomic )?(.*)$", l)
+    if not m:
+        return None
+    ops = split_top(m.group(2))
+    if len(ops) < 2:
+        return ()
+    t, p = take_type(ops[0]), operand(ops[1].strip(), True)
+    if not t or not p or ops[0][t[1]:].strip():
+        return ()
+    return M(m.group(1), t[0], p[1])
+
+
+def parse_store(l):
+    """`store T v, P %p[, …]`: M(value, pointer, value type), or None; ()
+    for a store not parsed. The value is its word (a register or a
+    constant)."""
+    m = re.match(r"^\s*store (?:volatile |atomic )?(.*)$", l)
+    if not m:
+        return None
+    ops = split_top(m.group(1))
+    if len(ops) < 2:
+        return ()
+    v, p = operand(ops[0].strip()), operand(ops[1].strip(), True)
+    if not v or not p:
+        return ()
+    return M(v[1], p[1], v[0])
+
+
+def parse_call_raw(l):
+    """A call's callee and its arguments' texts, or None."""
+    m = CALL_KW.search(l)
+    if not m:
+        return None
+    pc = parse_call(l)
+    if not pc or pc[0] is None:
+        return None
+    i = l.index(pc[0] + "(", m.end()) + len(pc[0])
+    e = balanced(l, i)
+    if e is None:
+        return None
+    inner = l[i + 1:e - 1]
+    return pc[0], ([a.strip() for a in split_top(inner)] if inner.strip() else []), l[e:].strip()
+
+
+def word(a):
+    return a.split()[-1] if a.split() else ""
+
+
+def dropif(l):
+    """`__dropif_T(i1 f, ptr %slot)`: M(flag, slot), or None; () where the
+    call is one, not parsed."""
+    c = parse_call_raw(l)
+    if not c or not c[0].startswith("@__dropif_"):
+        return None
+    if len(c[1]) != 2 or not c[1][0].startswith("i1 ") or not re.fullmatch(r"%[\w.]+", word(c[1][1])):
+        return ()
+    return M(word(c[1][0]), word(c[1][1]))
+
+
+def dropifv(l):
+    """`__dropifv_T(i1 f, T %r)`: M(flag, value), or None; ()."""
+    c = parse_call_raw(l)
+    if not c or not c[0].startswith("@__dropifv_"):
+        return None
+    if len(c[1]) != 2 or not c[1][0].startswith("i1 ") or not operand(c[1][1]):
+        return ()
+    return M(word(c[1][0]), word(c[1][1]))
+
+
+def cloneif(l, keyed):
+    """`%r = __nurl_cloneif_T(i1 c, T %v)`: M(result, c, value); keyed,
+    `__nurl_cloneifk_T(ptr @k, i1 c, T %v)`: M(result, @k, c, value). None,
+    or () where the call is one, not parsed."""
+    c = parse_call_raw(l)
+    pre = "@__nurl_cloneifk_" if keyed else "@__nurl_cloneif_"
+    if not c or not c[0].startswith(pre):
+        return None
+    mr = re.match(r"^\s*(%[\w.]+) = ", l)
+    a = c[1]
+    if keyed:
+        if not mr or len(a) != 3 or not re.fullmatch(r"ptr @[\w.]+", a[0]) or not a[1].startswith("i1 ") \
+                or not operand(a[2]):
+            return ()
+        return M(mr.group(1), word(a[0]), word(a[1]), word(a[2]))
+    if not mr or len(a) != 2 or not a[0].startswith("i1 ") or not operand(a[1]):
+        return ()
+    return M(mr.group(1), word(a[0]), word(a[1]))
+
+
+def params_of(inner):
+    """A `define`'s parameter list: [(type, name)]; a parameter not read has
+    type None."""
+    out = []
+    for a in split_top(inner) if inner.strip() else []:
+        a = a.strip()
+        if a == "...":
+            continue
+        tt = take_type(a)
+        w = a.split()
+        n = w[-1] if w and re.fullmatch(r"%[\w.]+", w[-1]) else None
+        out.append((tt[0] if tt else None, n))
+    return out
 
 
 def parse_call(l):
@@ -218,13 +427,22 @@ def split_top(s):
 def store_parts(l):
     """A `store` line's value and pointer registers (either None where it is
     not a register), the types read by their brackets; None for no store."""
-    m = re.match(r"^\s*store (.*)$", l)
-    if not m:
+    ms = parse_store(l)
+    if not ms:
         return None
-    ops = split_top(m.group(1))
-    if len(ops) < 2:
-        return None
-    return arg_value(ops[0]), arg_value(ops[1])
+    return store_reg(ms), store_reg(M(ms.group(2)))
+
+
+def store_reg(ms):
+    # (a parsed store's value, where it is a register)
+    return ms.group(1) if re.fullmatch(r"%[\w.]+", ms.group(1)) else None
+
+
+def owns_type(t, owning):
+    """t is a type that owns: a named type the module has a `__dropif` for,
+    or the type a `__dropif` / `__dropifv` reads (a literal aggregate, as an
+    option `{ i1, %String }` is written where its slot is made)."""
+    return t is not None and (t.startswith("%") and t[1:] in owning or t in OWNING_T)
 
 
 def may_panic_set(core_text, nurlc, llvm_text=""):
@@ -307,9 +525,13 @@ def functions(text):
         m = DEF.match(raw)
         if m:
             cur, blocks = m.group(1), [("entry", [])]
-            inner = raw[raw.index("(", m.end() - 1) + 1:raw.rindex(")")]
-            PARAMS[cur] = re.findall(r"(%[\w.]+)(?=\s*(?:,|$))", inner)
-            PTYPES[cur] = dict((n, t.strip()) for t, n in re.findall(r"(?:^|,)\s*([^,]*?)\s+(%[\w.]+)(?=\s*(?:,|$))", inner))
+            o = raw.index("(", m.end() - 1)
+            e = balanced(raw, o)
+            ps = params_of(raw[o + 1:e - 1]) if e else [(None, None)]
+            PARAMS[cur] = [n for _, n in ps if n]
+            PTYPES[cur] = {n: t for t, n in ps if n}
+            if e is None or any(t is None or n is None for t, n in ps):
+                UNREAD.add(cur)
             continue
         if cur is None:
             continue
@@ -367,6 +589,17 @@ def check_function(name, blocks, owning, journal=False):
                 raise Unsupported(f"{name}: a drop decided at run time ({l.strip()[:60]})")
             if SWITCH.match(l):
                 raise Unsupported(f"{name}: a switch")
+            # (fail-closed: a line of a kind the checks read, whose types
+            # do not parse, is not skipped)
+            if any(f(l) == () for f in (parse_alloca, parse_load, parse_store, dropif, dropifv,
+                                         lambda x: cloneif(x, False), lambda x: cloneif(x, True))):
+                raise Unsupported(f"{name}: a line whose types are not read ({l.strip()[:60]})")
+            if re.search(r"@(?:__dropifv?_|__nurl_cloneifk?_)", l) and not (
+                    dropif(l) or dropifv(l) or cloneif(l, False) or cloneif(l, True)):
+                # (a release or a clone not read as a call of one)
+                raise Unsupported(f"{name}: a release or clone not read ({l.strip()[:60]})")
+    if name in UNREAD:
+        raise Unsupported(f"{name}: a parameter list whose types are not read")
     # The slots of this function's own frame (an `alloca`), and which of
     # them own (their type has a `__dropif`): found from the types, not from
     # the drops being checked. A slot reached through a pointer (a capture
@@ -374,10 +607,10 @@ def check_function(name, blocks, owning, journal=False):
     local, own_slots = set(), set()
     for _, lines in blocks:
         for l in lines:
-            mm = re.match(r"^\s*(%[\w.]+) = alloca ([^,]+?)(?:, align \d+)?$", l)
+            mm = parse_alloca(l)
             if mm:
                 local.add(mm.group(1))
-                if mm.group(2).strip().lstrip("%") in owning:
+                if owns_type(mm.group(2), owning):
                     own_slots.add(mm.group(1))
     loads, pairs, jonly = {}, {}, set()
     for _, lines in blocks:
@@ -387,7 +620,7 @@ def check_function(name, blocks, owning, journal=False):
                 loads[m.group(1)] = m.group(2)
     for _, lines in blocks:
         for l in lines:
-            m = DROPIF.search(l)
+            m = dropif(l)
             if m:
                 fv, slot = m.group(1), m.group(2)
                 if fv in ("true", "1") and slot in local:
@@ -422,9 +655,9 @@ def check_function(name, blocks, owning, journal=False):
     stored = set()
     for _, lines in blocks:
         for l in lines:
-            m = STORE_ANY.match(l)
+            m = parse_store(l)
             if m:
-                stored.add(m.group(1))
+                stored.add(m.group(2))
     # (a slot that only ever holds a parameter the function borrows, one the
     # core IR's summary does not make a `sink` or `keeps`, owns nothing: its
     # value is the caller's, and the function releases none of it)
@@ -432,13 +665,18 @@ def check_function(name, blocks, owning, journal=False):
     borrowed, lent = set(), set()
     if name in SINKS and SINKS[name][0] == len(params):
         lent = {p for i, p in enumerate(params) if i not in SINKS[name][1]}
-        for sl in own_slots - set(slot_flag):
-            vals = [mv.group(1) for _, lines in blocks for l in lines
-                    if (mm := STORE_ANY.match(l)) and mm.group(1) == sl
-                    for mv in [re.match(r"^\s*store \S+ (%[\w.]+), ", l)] if mv] 
-            nst = sum(1 for _, lines in blocks for l in lines if (mm := STORE_ANY.match(l)) and mm.group(1) == sl)
-            if vals and len(vals) == nst and all(v in lent for v in vals):
-                borrowed.add(sl)
+        # (or only ever what was loaded from such a slot: a result
+        # temporary of a function that lends one of its parameters back)
+        src = {ml.group(1): ml.group(3) for _, lines in blocks for l in lines if (ml := parse_load(l))}
+        changed = True
+        while changed:
+            changed = False
+            for sl in own_slots - set(slot_flag) - borrowed:
+                sts = [mm for _, lines in blocks for l in lines if (mm := parse_store(l)) and mm.group(2) == sl]
+                vals = [store_reg(mm) for mm in sts if store_reg(mm)]
+                if vals and len(vals) == len(sts) and all(v in lent or src.get(v) in borrowed for v in vals):
+                    borrowed.add(sl)
+                    changed = True
     for sl in (own_slots & stored) - borrowed:
         if sl not in slot_flag:
             raise Unsupported(f"{name}: an owning slot {sl} with no drop flag")
@@ -516,8 +754,8 @@ def check_function(name, blocks, owning, journal=False):
             r = ptr_root(arg_value(ops[1]), seen_) if len(ops) > 1 else None
         elif (mg := re.match(r"(?:bitcast|addrspacecast) .* (%[\w.]+) to ", d)):
             r = ptr_root(mg.group(1), seen_)
-        elif (mg := re.match(r"load [^,]+, (?:ptr|[^,]+\*) (%[\w.]+)", d)):
-            a = mg.group(1)
+        elif (mg := parse_load(p + " = " + d)):
+            a = mg.group(3)
             if a in local:
                 # (a pointer the frame keeps in a slot of its own: where
                 # every pointer stored into that slot points)
@@ -860,7 +1098,7 @@ def check_function(name, blocks, owning, journal=False):
                             pend[u] = ("in", a)
                 regid[mi.group(1)] = a
                 continue
-            elif not LOAD_VAL.match(l):
+            elif not parse_load(l):
                 used = [r for r in re.findall(r"%[\w.]+", l.split("=", 1)[-1] if " = " in l else l)
                         if r in regid and r not in loads and owed(regid[r])]
                 if used:
@@ -880,7 +1118,7 @@ def check_function(name, blocks, owning, journal=False):
                     jr.pop(m.group(1), None)
                     continue
                 pc = parse_call(l)
-                if pc and can_panic(pc[0]) and not DROPIF.search(l):
+                if pc and can_panic(pc[0]) and not dropif(l):
                     # a call that may panic (an indirect one too): what a
                     # drain would release must be what the frame owns, each
                     # once, under the slot's own drop flag
@@ -923,7 +1161,7 @@ def check_function(name, blocks, owning, journal=False):
                 regv[m.group(1)] = flag_v.get(m.group(2))
                 regid[m.group(1)] = val.get(m.group(2))
                 continue
-            m = LOAD_VAL.match(l)
+            m = parse_load(l)
             if m and m.group(3) in slot_flag:
                 f = slot_flag[m.group(3)]
                 if (val.get(f) is not None and val[f] in released and m.group(3) not in jonly
@@ -948,7 +1186,7 @@ def check_function(name, blocks, owning, journal=False):
                     cleared(m.group(2))
                     flag_v[m.group(2)] = False
                 continue
-            m = CLONEIFK.match(l)
+            m = cloneif(l, True)
             if m:
                 # a clone exactly when the key and the flag are both set; the
                 # value itself otherwise
@@ -969,7 +1207,7 @@ def check_function(name, blocks, owning, journal=False):
                 else:
                     maybe.add(m.group(1))
                 continue
-            m = CLONEIF.match(l)
+            m = cloneif(l, False)
             if m:
                 # a clone where the flag is set, the value itself otherwise;
                 # where this path does not know which, the result is the
@@ -1036,16 +1274,17 @@ def check_function(name, blocks, owning, journal=False):
                 else:
                     flag_v.pop(m.group(2), None)
                 continue
-            m = STORE_ANY.match(l)
+            ms = parse_store(l)
+            m = M(ms.group(2)) if ms else None
             if m and m.group(1) in borrowed:
                 # (a slot that only holds a borrowed parameter: it holds that
                 # parameter's identity, for the loads from it)
-                mv = re.match(r"^\s*store \S+ (%[\w.]+), ", l)
+                mv = M(store_reg(ms)) if store_reg(ms) else None
                 val["b:" + m.group(1)] = regid.get(mv.group(1)) if mv else None
                 continue
             if m and m.group(1) in slot_flag:
                 f = slot_flag[m.group(1)]
-                mv = re.match(r"^\s*store \S+ (%[\w.]+), ", l)
+                mv = M(store_reg(ms)) if store_reg(ms) else None
                 if mv and val.get(f) is not None and regid.get(mv.group(1)) == val[f]:
                     # the value the slot holds, stored back (`= e { … e }`)
                     continue
@@ -1071,7 +1310,7 @@ def check_function(name, blocks, owning, journal=False):
                     flag_v[f] = True
                 continue
             pc = parse_call(l)
-            if pc and pc[0] and pc[0][1:] in SINKS and pc[0].startswith("@") and not DROPIF.search(l):
+            if pc and pc[0] and pc[0][1:] in SINKS and pc[0].startswith("@") and not dropif(l):
                 callee = pc[0][1:]
                 ar, idx = SINKS[callee]
                 args = pc[1]
@@ -1090,8 +1329,8 @@ def check_function(name, blocks, owning, journal=False):
                     if vid in released:
                         return f"mismatch: {name} a released value handed to a `sink` of {callee}: {'>'.join(path)}"
                     given.add(vid)
-            m = DROPIFV.search(l)
-            if m and not DROPIF.search(l):
+            m = dropifv(l)
+            if m:
                 # a release of the value a register holds, as its flag says
                 vid = regid.get(m.group(2)) if m.group(2) not in loads else None
                 fv = m.group(1)
@@ -1114,7 +1353,7 @@ def check_function(name, blocks, owning, journal=False):
                         return f"mismatch: {name} {m.group(2)} released after a `sink` parameter took it: {'>'.join(path)}"
                     released.add(vid)
                 continue
-            m = DROPIF.search(l)
+            m = dropif(l)
             if m:
                 if m.group(1) in ("false", "0"):
                     continue
@@ -1200,7 +1439,7 @@ def check_function(name, blocks, owning, journal=False):
     # ownership on)
     regid0 = {}
     for p in params:
-        if PTYPES.get(name, {}).get(p, "").lstrip("%") not in owning:
+        if not owns_type(PTYPES.get(name, {}).get(p), owning):
             continue
         regid0[p] = next(fresh)
         if p in lent:
@@ -1217,6 +1456,23 @@ def main():
             if len(w) == 3:
                 PROTECT.setdefault(w[0], {})[w[1]] = w[2]
     owning = set(re.findall(r"@__dropifv?_([\w.]+)\(", text))
+    # (and the types they read: a slot or a parameter of a literal aggregate
+    # type, `{ i1, %String }`, owns as the named type it is the body of does)
+    named = {}
+    for mt in re.finditer(r"^(%[\w.$-]+) = type (.*)$", text, re.M):
+        tt = take_type(mt.group(2))
+        if tt:
+            named[mt.group(1)] = tt[0]
+    for fn, blocks in fns.items():
+        t = None
+        if fn.startswith("__dropifv_") and len(PTYPES.get(fn, {})) == 2:
+            t = PTYPES[fn].get(PARAMS[fn][1])
+        elif fn.startswith("__dropif_"):
+            t = next((ml.group(2) for _, ls in blocks for l in ls if (ml := parse_load(l))), None)
+        if t:
+            OWNING_T.add(t)
+            if t in named:
+                OWNING_T.add(named[t])
     CONSTS.update((k, v == "true") for k, v in CONST_I1.findall(text))
     if "--sums" in sys.argv:
         # D0c: each function's `sink` / `keeps` parameters, from the core IR

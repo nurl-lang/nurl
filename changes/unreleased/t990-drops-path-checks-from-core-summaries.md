@@ -171,6 +171,35 @@
     `--journal` loses the same kinds, less two of the btree functions that
     were unsupported there already, plus one aggregate held at a panic by
     a registration of the value it carries.
+- **The drop validator checks slots of literal aggregate types.** A slot
+  such as `alloca { i1, %String }` (an option, a slice, a result
+  temporary) used to be taken for another frame's, because the type has
+  commas, so its releases were skipped and the function could validate
+  unchecked. LLVM types are now read by a tokenizer that balances `{}`,
+  `[]`, `<>` and `()`, in allocas, loads, stores, releases, clones and
+  parameter lists. Such a slot owns where its type is one a `__dropif_T`
+  loads or a `__dropifv_T` takes. A line of those kinds whose types do not
+  parse, or a parameter list not read whole, is reported unsupported.
+  - `selftest.sh` gains three mutations on a new program with an option
+    slot: a leak, a double release, and a release after a `sink` took the
+    value. The validator before this change accepted all three. Each is a
+    mismatch now.
+  - A slot that only ever holds what was loaded from a slot holding a
+    borrowed parameter is borrowed too, so it owns nothing. That covers the
+    result temporary of a function that lends a parameter back.
+  - On the 1983-program corpus, the default run goes from 98185 validated,
+    7757 unsupported, 0 mismatches to 98065 / 7877 / 0. `--journal` goes
+    from 97852 / 8090 / 0 to 97733 / 8209 / 0, with 479 journal-checked
+    before and 481 now. 193 functions move to unsupported and 73 to
+    validated. Of those moving to unsupported, 116 have a slot of an
+    owning aggregate type with no drop flag. These are mostly result
+    temporaries (options, `recover`'s result) and 44 slices
+    `{ T*, i64 }`, whose LLVM type is the same as an owned slice's. The
+    other 77 have an option slot's flag set from a run-time answer
+    (`__nurl_ret_own`, 76 of them). The 73 now validated have their option
+    slots checked: they were unsupported before because a release of a slot
+    the validator did not take for the frame's was read as a flag it could
+    not follow.
 - **`tools/ncore/tv.sh` stops when a step fails.** If `nurlc --emit-core`,
   `nurlc --g` or `tvir.py` fails, it exits nonzero instead of validating
   with an empty file. It also forwards its arguments without word

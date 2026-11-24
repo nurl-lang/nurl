@@ -407,4 +407,27 @@ awk "$lf"'{m=1} m && /^}/{m=0}
     print }' "$TMP/l.ll" > "$TMP/ljoin.ll"
 grep -q "^kj:" "$TMP/ljoin.ll" || { echo "FAIL: the aggregate-join edit did not apply"; fail=1; }
 cmut a_value_moved_twice_on_one_side_of_a_join_taken_for_the_other "$TMP/ljoin.ll" "$TMP/l.core"
+# a slot of a literal aggregate type (`alloca { i1, %String }`, an option):
+# f moves v into eat's `sink` on one branch. Such a slot's releases are
+# checked as a named type's: each edit below validated before, when the
+# slot was taken for another frame's
+P="$D/option_owner_assigned_on_one_branch.nu"
+"$NURLC" "$P" > "$TMP/p.ll" || exit 1
+"$NURLC" --emit-core "$P" > "$TMP/p.core" || exit 1
+grep -q "= alloca { i1, %String }" "$TMP/p.ll" || { echo "FAIL: f's option slot is not in the LLVM"; fail=1; }
+vok __nurl_fn.f "$TMP/p.ll" --sums "$TMP/p.core" || { echo "FAIL: the option program does not validate"; fail=1; }
+vok __nurl_fn.eat "$TMP/p.ll" --sums "$TMP/p.core" || { echo "FAIL: the option program's eat does not validate"; fail=1; }
+pf='/define i64 @__nurl_fn.f\(/'
+# v's flag cleared and v handed nowhere (eat's call taken out): a leak
+awk "$pf"'{m=1} m && /^}/{m=0} { if (m && /= call i64 @__nurl_fn.eat\(/) { print "  " $1 " = add i64 0, 0"; next } print }' "$TMP/p.ll" > "$TMP/pleak.ll"
+cmp -s "$TMP/p.ll" "$TMP/pleak.ll" && { echo "FAIL: the option leak edit did not apply"; fail=1; }
+cmut an_option_slot_cleared_with_its_value_handed_nowhere "$TMP/pleak.ll" "$TMP/p.core"
+# v released twice at the end
+awk "$pf"'{m=1} m && /^}/{m=0} { print; if (m && /call void @__dropif___opt.String\(i1 %r[0-9]+, ptr %r[0-9]+\)/ && !c++) print }' "$TMP/p.ll" > "$TMP/ptwice.ll"
+cmp -s "$TMP/p.ll" "$TMP/ptwice.ll" && { echo "FAIL: the option double-release edit did not apply"; fail=1; }
+cmut an_option_slot_released_twice "$TMP/ptwice.ll" "$TMP/p.core"
+# v's flag kept set where eat takes it: the frame releases what eat took
+awk "$pf"'{m=1} m && /^}/{m=0} { if (m && /^then_1:/) t = 1; if (t && m && /store i1 0, i1\*/ && !c++) next; print }' "$TMP/p.ll" > "$TMP/pgiven.ll"
+cmp -s "$TMP/p.ll" "$TMP/pgiven.ll" && { echo "FAIL: the option sink edit did not apply"; fail=1; }
+cmut an_option_moved_into_a_sink_released_instead "$TMP/pgiven.ll" "$TMP/p.core"
 exit $fail
