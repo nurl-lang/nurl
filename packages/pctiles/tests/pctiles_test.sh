@@ -108,13 +108,19 @@ else
 fi
 
 V="${VALIDATORS:-}"
+# absolute, so a relative VALIDATORS still names the same directory from
+# wherever a step runs (the Cesium link below lives in the web root)
+[ -n "$V" ] && [ -d "$V" ] && V="$(cd "$V" && pwd)"
 if [ -n "$V" ] && [ -d "$V/node_modules/3d-tiles-validator" ] && [ -d "$V/node_modules/gltf-validator" ]; then
     out=$(cd "$V" && npx 3d-tiles-validator -t "$WORK/a/tileset.json" 2>&1)
     e=$(echo "$out" | sed -n 's/.*"numErrors": \([0-9]*\).*/\1/p' | head -1)
     wn=$(echo "$out" | sed -n 's/.*"numWarnings": \([0-9]*\).*/\1/p' | head -1)
     if [ "$e" = 0 ] && [ "$wn" = 0 ]; then echo "PASS CesiumGS 3d-tiles-validator: 0 errors, 0 warnings"
     else echo "FAIL CesiumGS 3d-tiles-validator: ${e:-?} errors, ${wn:-?} warnings"; fails=$((fails + 1)); fi
-    cat > "$V/.pctiles-glb-check.mjs" <<'JS'
+    # a file of this run's own: runs sharing VALIDATORS must not remove each
+    # other's (it sits there so node finds gltf-validator)
+    H=$(mktemp -p "$V" .pctiles-glb-check.XXXXXX --suffix=.mjs)
+    cat > "$H" <<'JS'
 import { validateBytes } from "gltf-validator";
 import { readFileSync, readdirSync } from "node:fs";
 const d = process.argv[2]; let bad = 0, n = 0;
@@ -125,8 +131,8 @@ for (const f of readdirSync(d).filter((x) => x.endsWith(".glb"))) {
 console.log((bad ? "FAIL" : "PASS") + " Khronos validator: " + n + " tiles, " + bad + " with errors or warnings");
 process.exit(bad ? 1 : 0);
 JS
-    (cd "$V" && node .pctiles-glb-check.mjs "$WORK/a") || fails=$((fails + 1))
-    rm -f "$V/.pctiles-glb-check.mjs"
+    (cd "$V" && node "$H" "$WORK/a") || fails=$((fails + 1))
+    rm -f "$H"
 else
     echo "SKIP the validators (set VALIDATORS to a dir with node_modules/3d-tiles-validator and gltf-validator)"
 fi

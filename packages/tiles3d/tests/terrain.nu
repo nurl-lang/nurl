@@ -135,6 +135,22 @@ $ `../../glb/src/glb.nu`
     : i _i ( ts_tile low -1 0.0 0.0 0.0 1.0 1.0 1.0 0.5 )
     ( ts_refine low 0 TS_ADD )
     = rc + rc ( __refused low `a tileset error below the root's` )
+    // a transform: a translation is fine, a projective one is not
+    : ~ Tileset tr ( ts_new 1.0 )
+    : i _k ( ts_tile tr -1 0.0 0.0 0.0 1.0 1.0 1.0 0.5 )
+    ( ts_refine tr 0 TS_ADD )
+    : ( Vec f ) m__v ( vec_new [f] )
+    = k 0
+    ~ < k 16 { ( vec_push [f] m__v ? == 0 % k 5 1.0 0.0 ) = k + k 1 }
+    : b _t ( vec_set [f] m__v 12 10.0 )
+    ( ts_transform tr 0 ( slice_from_vec [f] m__v ) )
+    ?? ( ts_json tr ) {
+        T _ → { ( nurl_print `accepted: a translation transform\n` ) }
+        F e → { ( nurl_print `FAIL a translation transform refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) = rc 1 }
+    }
+    : b _p ( vec_set [f] m__v 3 1.0 )
+    ( ts_transform tr 0 ( slice_from_vec [f] m__v ) )
+    = rc + rc ( __refused tr `a projective transform` )
     : ~ Tileset neg ( ts_new 1.0 )
     : i _j ( ts_tile neg -1 0.0 0.0 0.0 1.0 -1.0 1.0 0.5 )
     ( ts_refine neg 0 TS_ADD )

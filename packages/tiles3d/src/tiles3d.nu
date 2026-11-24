@@ -30,6 +30,7 @@
 //   - no tile's geometric error is above its parent's, and the tileset's
 //     own error is at least the root's;
 //   - every number is finite, errors and half sizes are not negative;
+//   - a transform is affine (bottom row 0 0 0 1);
 //   - a content uri is not empty.
 //
 // Frames: a tileset is z-up. glTF content is y-up, and clients turn it to
@@ -218,6 +219,10 @@ $ `stdlib/ext/json.nu`
             ~ < a 16 {
                 ? ( __ts_fin ( slice_at [f] xs + * k 16 a ) ) {} { ^ @ !String String { F ( __ts_err `a transform number is not finite` k ) } }
                 = a + a 1
+            }
+            // affine: the bottom row (column-major elements 3, 7, 11, 15) is 0 0 0 1
+            ? & & & == ( slice_at [f] xs + * k 16 3 ) 0.0 == ( slice_at [f] xs + * k 16 7 ) 0.0 == ( slice_at [f] xs + * k 16 11 ) 0.0 == ( slice_at [f] xs + * k 16 15 ) 1.0 {} {
+                ^ @ !String String { F ( __ts_err `a transform is not affine (its bottom row must be 0 0 0 1)` k ) }
             }
         } {}
         = k + k 1

@@ -195,15 +195,20 @@ $ `stdlib/std/floatbits.nu`
     ~ < q np { = have | have << 1 ( slice_at [i] pr q ) = q + q 1 }
     ? != & have 14 14 { ^ ( __ply_err `the vertices have no x, y and z` path ) } {}
     : b col == & have 112 112
+    // the body must hold what the header declares, checked before anything
+    // is reserved for it: a cut file that claims a billion vertices is an
+    // error, not a billion-vertex allocation. Binary: the exact stride; ascii:
+    // at least two bytes a value (a digit and a separator).
+    : ~ i stride 0
+    = q 0
+    ~ < q np { = stride + stride ( __ply_size ( slice_at [i] pt q ) ) = q + q 1 }
+    : i per ? == fmt 2 stride * 2 np
+    ? > nv / - nb body per { ^ ( __ply_err `the body is shorter than the header says` path ) } {}
     : ( Vec f ) xyz ( vec_with_cap [f] * nv 3 )
     : ( Vec u ) rgb ( vec_with_cap [u] ? col * nv 3 0 )
     : ( Vec f ) vals__v ( vec_zeroed [f] np )
     : ( Slice f ) vals ( slice_from_vec [f] vals__v )
     ? == fmt 2 {
-        : ~ i stride 0
-        = q 0
-        ~ < q np { = stride + stride ( __ply_size ( slice_at [i] pt q ) ) = q + q 1 }
-        ? > + body * nv stride nb { ^ ( __ply_err `the body is shorter than the header says` path ) } {}
         : ~ i off body
         : ~ i v 0
         ~ < v nv {
@@ -218,14 +223,20 @@ $ `stdlib/std/floatbits.nu`
             = v + v 1
         }
     } {
-        // ascii: whitespace-separated numbers, one vertex a line
+        // ascii: one vertex a line, its values separated by spaces or tabs;
+        // a line with fewer or more values than the header has properties
+        // is refused (reading on into the next line would misplace every
+        // vertex after it)
         : ~ i pos body
         : ~ i v 0
         ~ < v nv {
+            // blank lines between vertices are allowed
+            ~ & < pos nb | | | == 32 # i ( slice_at [u] p pos ) == 10 # i ( slice_at [u] p pos ) == 13 # i ( slice_at [u] p pos ) == 9 # i ( slice_at [u] p pos ) { = pos + pos 1 }
+            ? >= pos nb { ^ ( __ply_err `the body is shorter than the header says` path ) } {}
             = q 0
             ~ < q np {
-                ~ & < pos nb | | | == 32 # i ( slice_at [u] p pos ) == 10 # i ( slice_at [u] p pos ) == 13 # i ( slice_at [u] p pos ) == 9 # i ( slice_at [u] p pos ) { = pos + pos 1 }
-                ? >= pos nb { ^ ( __ply_err `the body is shorter than the header says` path ) } {}
+                ~ & < pos nb | | == 32 # i ( slice_at [u] p pos ) == 13 # i ( slice_at [u] p pos ) == 9 # i ( slice_at [u] p pos ) { = pos + pos 1 }
+                ? | >= pos nb == 10 # i ( slice_at [u] p pos ) { ^ ( __ply_err `a vertex line has fewer values than the header has properties` path ) } {}
                 : ~ String tok ( string_new )
                 ~ & < pos nb & & & != 32 # i ( slice_at [u] p pos ) != 10 # i ( slice_at [u] p pos ) != 13 # i ( slice_at [u] p pos ) != 9 # i ( slice_at [u] p pos ) {
                     ( string_push_char tok # i ( slice_at [u] p pos ) )
@@ -234,6 +245,8 @@ $ `stdlib/std/floatbits.nu`
                 ( slice_put [f] vals q ( nurl_str_to_float ( string_data tok ) ) )
                 = q + q 1
             }
+            ~ & < pos nb | | == 32 # i ( slice_at [u] p pos ) == 13 # i ( slice_at [u] p pos ) == 9 # i ( slice_at [u] p pos ) { = pos + pos 1 }
+            ? & < pos nb != 10 # i ( slice_at [u] p pos ) { ^ ( __ply_err `a vertex line has more values than the header has properties` path ) } {}
             ( __ply_take vals pr pt np xyz rgb col )
             = v + v 1
         }

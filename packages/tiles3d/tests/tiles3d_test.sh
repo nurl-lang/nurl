@@ -32,8 +32,8 @@ fi
 cat "$WORK/run.out"
 fails=$(grep -c '^FAIL' "$WORK/run.out")
 refused=$(grep -c '^refused: ' "$WORK/run.out")
-if [ "$refused" = 7 ]; then echo "PASS 7 broken tilesets refused, each with its reason"
-else echo "FAIL $refused of 7 broken tilesets refused"; fails=$((fails + 1)); fi
+if [ "$refused" = 8 ]; then echo "PASS 8 broken tilesets refused, each with its reason"
+else echo "FAIL $refused of 8 broken tilesets refused"; fails=$((fails + 1)); fi
 
 python3 - "$WORK/ts" <<'PY' || fails=$((fails + 1))
 import json, os, struct, sys
@@ -85,13 +85,19 @@ sys.exit(1 if bad else 0)
 PY
 
 V="${VALIDATORS:-}"
+# absolute, so a relative VALIDATORS still names the same directory from
+# wherever a step runs (the Cesium link below lives in the web root)
+[ -n "$V" ] && [ -d "$V" ] && V="$(cd "$V" && pwd)"
 if [ -n "$V" ] && [ -d "$V/node_modules/3d-tiles-validator" ] && [ -d "$V/node_modules/gltf-validator" ]; then
     out=$(cd "$V" && npx 3d-tiles-validator -t "$WORK/ts/tileset.json" 2>&1)
     e=$(echo "$out" | sed -n 's/.*"numErrors": \([0-9]*\).*/\1/p' | head -1)
     w=$(echo "$out" | sed -n 's/.*"numWarnings": \([0-9]*\).*/\1/p' | head -1)
     if [ "$e" = 0 ] && [ "$w" = 0 ]; then echo "PASS CesiumGS 3d-tiles-validator: 0 errors, 0 warnings"
     else echo "FAIL CesiumGS 3d-tiles-validator: ${e:-?} errors, ${w:-?} warnings"; echo "$out" | tail -20; fails=$((fails + 1)); fi
-    cat > "$V/.tiles3d-glb-check.mjs" <<'JS'
+    # a file of this run's own: runs sharing VALIDATORS must not remove each
+    # other's (it sits there so node finds gltf-validator)
+    H=$(mktemp -p "$V" .tiles3d-glb-check.XXXXXX --suffix=.mjs)
+    cat > "$H" <<'JS'
 import { validateBytes } from "gltf-validator";
 import { readFileSync } from "node:fs";
 let bad = 0, n = 0;
@@ -103,8 +109,8 @@ for (const f of process.argv.slice(2)) {
 if (!bad) console.log("PASS Khronos validator: " + n + " tile contents, 0 errors, 0 warnings");
 process.exit(bad ? 1 : 0);
 JS
-    (cd "$V" && node .tiles3d-glb-check.mjs "$WORK"/ts/*.glb) || fails=$((fails + 1))
-    rm -f "$V/.tiles3d-glb-check.mjs"
+    (cd "$V" && node "$H" "$WORK"/ts/*.glb) || fails=$((fails + 1))
+    rm -f "$H"
 else
     echo "SKIP the validators (set VALIDATORS to a dir with node_modules/3d-tiles-validator and gltf-validator)"
 fi

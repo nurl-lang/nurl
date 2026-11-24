@@ -11,6 +11,8 @@ $ `stdlib/std/rng.nu`
 $ `stdlib/std/sort.nu`
 $ `../src/octree.nu`
 
+@ __fin f x → b { ^ & == 0 ( nurl_is_nan x ) == 0 ( nurl_is_inf x ) }
+
 @ __say b ok s what → i {
     ? ok { ( nurl_print `PASS ` ) } { ( nurl_print `FAIL ` ) }
     ( nurl_print what ) ( nurl_print `\n` )
@@ -71,9 +73,10 @@ $ `../src/octree.nu`
                 // float64 rounding of the centre, relative to the coordinates
                 : f tol + * h 1.0e-9 * 1.0e-14 + 1.0 ( float_abs v )
                 ? > - ( float_abs - v ( oc_center t k a ) ) h tol { = inside F } {}
-                : ~ i c # i ( float_floor / - v - ( oc_center t k a ) h sp )
-                ? < c 0 { = c 0 } {}
-                ? >= c grid { = c - grid 1 } {}
+                // the build's own cell rule, from (v - centre) / half
+                : f u + * 0.5 / - v ( oc_center t k a ) h 0.5
+                : ~ i c 0
+                ? >= u 1.0 { = c - grid 1 } { ? > u 0.0 { = c # i ( float_floor * u # f grid ) } {} }
                 = cell + * cell grid c
                 = a + a 1
             }
@@ -222,6 +225,20 @@ $ `../src/octree.nu`
     : Octree tf ( oc_build far 100 8 1 )
     = bad + bad ( __check tf far 3000 100 8 `3000 points within a millimetre, 6700 km out` )
     = bad + bad ( __say > ( oc_count tf ) 1 `  ...still divided into nodes` )
+    // at float64's limit: 1e308 + 1e308 is infinite, the build must not add them
+    : ( Vec f ) x__v ( vec_new [f] )
+    = k 0
+    ~ < k 400 {
+        : f sgn ? == 0 % k 2 1.0 -1.0
+        ( vec_push [f] x__v * sgn * 1.0e308 ( rng_u01 g ) ) ( vec_push [f] x__v * -1.0e308 ( rng_u01 g ) ) ( vec_push [f] x__v * 1.0e308 ( rng_u01 g ) )
+        = k + k 1
+    }
+    ( vec_push [f] x__v 1.7e308 ) ( vec_push [f] x__v -1.7e308 ) ( vec_push [f] x__v 1.0 )
+    ( vec_push [f] x__v -1.7e308 ) ( vec_push [f] x__v 1.7e308 ) ( vec_push [f] x__v -1.0 )
+    : ( Slice f ) xs ( slice_from_vec [f] x__v )
+    : Octree tx ( oc_build xs 50 8 1 )
+    = bad + bad ( __check tx xs 402 50 8 `402 points out to 1.7e308` )
+    = bad + bad ( __say & ( __fin ( oc_center tx 0 0 ) ) ( __fin ( oc_half tx 0 ) ) `  ...the root's cube is finite` )
     : ( Vec f ) e__v ( vec_new [f] )
     : Octree te ( oc_build ( slice_from_vec [f] e__v ) 10 8 1 )
     = bad + bad ( __say == ( oc_count te ) 0 `no points, no nodes` )

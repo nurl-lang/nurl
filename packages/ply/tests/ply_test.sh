@@ -146,6 +146,12 @@ open(d + "/bad_be.ply", "wb").write(head("binary_big_endian", [("float", "x"), (
 open(d + "/bad_list.ply", "wb").write(head("ascii", [("float", "x"), ("float", "y"), ("float", "z"), ("list uchar int", "idx")], 1) + b"end_header\n1 2 3 1 0\n")
 open(d + "/bad_noz.ply", "wb").write(head("ascii", [("float", "x"), ("float", "y")], 1) + b"end_header\n1 2\n")
 open(d + "/bad_order.ply", "wb").write(b"ply\nformat ascii 1.0\nelement face 0\nproperty list uchar int vertex_indices\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n1 2 3\n")
+# a vertex line short of a value, with a face after it: CodeRabbit's case
+open(d + "/bad_ascii_few.ply", "wb").write(b"ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n1 2 3\n4 5\n3 0 1 0\n")
+open(d + "/bad_ascii_many.ply", "wb").write(head("ascii", [("float", "x"), ("float", "y"), ("float", "z")], 1) + b"end_header\n1 2 3 4\n")
+# a header that claims a trillion vertices over 12 bytes: refused before any
+# allocation (the test would run out of memory otherwise)
+open(d + "/bad_huge.ply", "wb").write(head("binary_little_endian", [("float", "x"), ("float", "y"), ("float", "z")], 10**12) + b"end_header\n" + struct.pack("<fff", 1, 2, 3))
 open(d + "/bad_short.ply", "wb").write(head("binary_little_endian", [("float", "x"), ("float", "y"), ("float", "z")], 5) + b"end_header\n" + struct.pack("<fff", 1, 2, 3))
 PYEOF
     "$WORK/readcheck" "$WORK/bin.ply" "$WORK/asc.ply" "$WORK"/hand_*.ply "$WORK"/bad_*.ply > "$WORK/read.out" 2>&1
@@ -180,10 +186,10 @@ c255 = lambda v: max(0, min(255, int(v * 255 + 0.5)))
 check("hand_double.ply", 2, 1, 1.5 - 2.25 + 3.125 - 7 + 0 + 1e6, c255(0) + c255(.5) + c255(1) + c255(1) + c255(.25) + c255(.1), (1.5, -2.25, 3.125))
 check("hand_ascii.ply", 3, 1, -3 + 4 + 5 + 100 - 200 + 300 - 32768, 60 + 6 + 765, (-3, 4, 5))
 check("hand_plain.ply", 2, 0, 21, 0, (1, 2, 3))
-for name, why in [("bad_be.ply", "binary_little_endian"), ("bad_list.ply", "list property"), ("bad_noz.ply", "no x, y and z"), ("bad_order.ply", "must come first"), ("bad_short.ply", "shorter than the header")]:
+for name, why in [("bad_be.ply", "binary_little_endian"), ("bad_list.ply", "list property"), ("bad_noz.ply", "no x, y and z"), ("bad_order.ply", "must come first"), ("bad_short.ply", "shorter than the header"), ("bad_ascii_few.ply", "fewer values"), ("bad_ascii_many.ply", "more values"), ("bad_huge.ply", "shorter than the header")]:
     if why not in got.get(name, ""): bad.append("%s should be refused for '%s': %s" % (name, why, got.get(name)))
 if bad: print("\n".join(bad)); sys.exit(1)
-print("our binary and ascii files read back (%d points); doubles, float colours, shorts, CRLF, extra properties and faces after the vertices read; 5 broken files refused with the reason" % n)
+print("our binary and ascii files read back (%d points); doubles, float colours, shorts, CRLF, extra properties and faces after the vertices read; 8 broken files refused with the reason (a short or long vertex line, a trillion-vertex header among them)" % n)
 PYEOF
 ) && ok "$out" || bad "reader: $out"
 fi

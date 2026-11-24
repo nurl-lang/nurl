@@ -81,11 +81,20 @@ $ `stdlib/std/rng.nu`
 
 @ __oc_max f a f b → f { ^ ? > a b a b }
 
-@ __oc_cell f v f lo f size i grid → i {
-    : i c # i ( float_floor * / - v lo size # f grid )
-    ? < c 0 { ^ 0 } {}
-    ? >= c grid { ^ - grid 1 } {}
-    ^ c
+// infinity, the bounds' starting point: any finite value replaces it
+@ __oc_inf → f { ^ / 1.0 0.0 }
+
+// The cell of v along one axis of a cube (centre c, half size h), from
+// (v - c) / h: v lies within h of c, so nothing here can overflow even for
+// coordinates near float64's limit.
+@ __oc_cell f v f c f h i grid → i {
+    : f u + * 0.5 / - v c h 0.5
+    ? | != 0 ( nurl_is_nan u ) < u 0.0 { ^ 0 } {}
+    ? >= u 1.0 { ^ - grid 1 } {}
+    : i cell # i ( float_floor * u # f grid )
+    ? < cell 0 { ^ 0 } {}
+    ? >= cell grid { ^ - grid 1 } {}
+    ^ cell
 }
 
 @ __oc_node inout Octree t i parent i level f cx f cy f cz f h → i {
@@ -94,9 +103,9 @@ $ `stdlib/std/rng.nu`
     ( vec_push [i] . t parent parent ) ( vec_push [i] . t level level )
     ( vec_push [f] . t cube cx ) ( vec_push [f] . t cube cy ) ( vec_push [f] . t cube cz ) ( vec_push [f] . t cube h )
     : ~ i a 0
-    ~ < a 3 { ( vec_push [f] . t tight 1.0e308 ) = a + a 1 }
+    ~ < a 3 { ( vec_push [f] . t tight ( __oc_inf ) ) = a + a 1 }
     = a 0
-    ~ < a 3 { ( vec_push [f] . t tight -1.0e308 ) = a + a 1 }
+    ~ < a 3 { ( vec_push [f] . t tight - 0.0 ( __oc_inf ) ) = a + a 1 }
     ^ k
 }
 
@@ -108,12 +117,12 @@ $ `stdlib/std/rng.nu`
     : i np / ( slice_len [f] xyz ) 3
     // the candidates: the finite points, shuffled
     : ( Vec i ) cand__v ( vec_with_cap [i] np )
-    : ~ f lx 1.0e308
-    : ~ f ly 1.0e308
-    : ~ f lz 1.0e308
-    : ~ f hx -1.0e308
-    : ~ f hy -1.0e308
-    : ~ f hz -1.0e308
+    : ~ f lx ( __oc_inf )
+    : ~ f ly ( __oc_inf )
+    : ~ f lz ( __oc_inf )
+    : ~ f hx - 0.0 ( __oc_inf )
+    : ~ f hy - 0.0 ( __oc_inf )
+    : ~ f hz - 0.0 ( __oc_inf )
     : ~ i p 0
     ~ < p np {
         : f x ( slice_at [f] xyz * p 3 )
@@ -144,14 +153,16 @@ $ `stdlib/std/rng.nu`
     }
     // the root: a cube around everything, a hair larger so no point sits
     // exactly on its far faces
-    : f ex ( __oc_max - hx lx ( __oc_max - hy ly - hz lz ) )
+    // half extents and centres from halves, so neither overflows for
+    // coordinates near float64's limit (1e308 + 1e308 is infinite)
+    : f ex ( __oc_max - * 0.5 hx * 0.5 lx ( __oc_max - * 0.5 hy * 0.5 ly - * 0.5 hz * 0.5 lz ) )
     // the smallest cube is one the coordinates can still tell apart: far
     // from the origin (georeferenced data) a micrometre nears float64's
     // resolution
     : f mag ( __oc_max ( __oc_max ( float_abs lx ) ( float_abs hx ) ) ( __oc_max ( __oc_max ( float_abs ly ) ( float_abs hy ) ) ( __oc_max ( float_abs lz ) ( float_abs hz ) ) ) )
     : f hmin ( __oc_max 0.000001 * mag 0.000000000001 )
-    : f h0 ( __oc_max * ex 0.5000001 hmin )
-    : i _root ( __oc_node t -1 0 * 0.5 + lx hx * 0.5 + ly hy * 0.5 + lz hz h0 )
+    : f h0 ( __oc_max * ex 1.0000002 hmin )
+    : i _root ( __oc_node t -1 0 + * 0.5 lx * 0.5 hx + * 0.5 ly * 0.5 hy + * 0.5 lz * 0.5 hz h0 )
     // per node: its candidates' range in `cand`; children get sub-ranges
     : ( Vec i ) cs__v ( vec_new [i] )
     : ( Vec i ) cc__v ( vec_new [i] )
@@ -178,16 +189,12 @@ $ `stdlib/std/rng.nu`
         : ~ i nrest 0
         // a leaf: few enough points, deep enough, or a cube too small to
         // halve at these coordinates (one point copied many times ends here)
-        : b tiny <= h * 0.000000000001 + + + ( float_abs cx ) ( float_abs cy ) ( float_abs cz ) 1.0
+        : b tiny <= h * 0.000000000001 + ( __oc_max ( float_abs cx ) ( __oc_max ( float_abs cy ) ( float_abs cz ) ) ) 1.0
         ? | | <= cn cap >= lev OC_MAX_DEPTH tiny {
             : ~ i j 0
             ~ < j cn { ( vec_push [i] . t order ( slice_at [i] cand + c0 j ) ) = j + j 1 }
             = kept cn
         } {
-            : f lo0 - cx h
-            : f lo1 - cy h
-            : f lo2 - cz h
-            : f size * 2.0 h
             : i mark + k 1
             : ~ i j 0
             ~ < j cn {
@@ -195,7 +202,7 @@ $ `stdlib/std/rng.nu`
                 : f x ( slice_at [f] xyz * pi 3 )
                 : f y ( slice_at [f] xyz + * pi 3 1 )
                 : f z ( slice_at [f] xyz + * pi 3 2 )
-                : i cell + ( __oc_cell x lo0 size g ) * g + ( __oc_cell y lo1 size g ) * g ( __oc_cell z lo2 size g )
+                : i cell + ( __oc_cell x cx h g ) * g + ( __oc_cell y cy h g ) * g ( __oc_cell z cz h g )
                 ? != ( slice_at [i] stamp cell ) mark {
                     ( slice_put [i] stamp cell mark )
                     ( vec_push [i] . t order pi )
