@@ -258,4 +258,18 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
         | exact (hM.rdCapsInp w (by assumption)).2
         | exact (hM.rdCapsInp w (by assumption)).1.lend)
 
+
+/-- Ending bindings keeps the clause: it speaks of the live ones only. -/
+theorem LiveCaps.of_back {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ') :
+    LiveCaps m Γ' w := fun v E o V hv hl hs => by
+  obtain ⟨E0, h0, hl0⟩ := hb v E hv hl
+  exact h v E0 o V h0 hl0 hs
+
+/-- ... and so does a store with the same slots. -/
+theorem LiveCaps.of_st {m m' : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hst : m'.st = m.st) :
+    LiveCaps m' Γ w := fun v E o V hv hl hs => by
+  rw [hst] at hs
+  obtain ⟨h1, h2, h3⟩ := h v E o V hv hl hs
+  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx), fun d o' l hd x t n hx => h3 d o' l hd x t n (hst ▸ hx)⟩
+
 end A2
