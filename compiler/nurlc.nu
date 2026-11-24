@@ -3258,6 +3258,10 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 // noted where a known `sink` takes it (__empties_note), and closed at
 // module end over the same call edges as g_fn_replaces (resolve_replaces).
 : ~ i g_fn_empties 0
+// …and how many entries it has been given: while none, a closure's
+// replayed rows skip the question, with no copy of the row's callee
+// (AGORA-996).
+: ~ i g_fn_empties_n 0
 : ~ s g_repl_edges ``
 // The calls that hand a parameter on (f's parameter k is the callee's
 // argument j) are mutation edges of the provenance store (g_rpg_edge),
@@ -65756,6 +65760,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         ? == BCK_BORROWED_SHARED ( bck_st_raw st aid ) { = st ( bck_st_set st aid BCK_MAYBE_OWNED ) } {}
                     } {}
                 } {}
+                // (A closure that runs here and hands a capture to an `inout`
+                // handle parameter its callee may hand on to a `sink`: the
+                // capture is moved on some paths, as for the call written
+                // here — `__bck_empties_mark`, after this row's own checks.
+                // A `pendlend` row changes a value lent out of the capture,
+                // which leaves the binding as it is. AGORA-996.)
+                ? & != 0 g_fn_empties_n ( bck_field_is rec 0 `pendeff` ) { = st ( __bck_empties_mark st rec ( bck_field rec 5 ) ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -81915,6 +81926,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
     : s ec ( nurl_sym_get g_fn_empties fn )
     ? ( str_contains_word ec ks ) { ^ v } {}
     ( nurl_sym_def g_fn_empties fn ? == 0 ( nurl_str_len ec ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 ec ` ` ks ) )
+    = g_fn_empties_n + g_fn_empties_n 1
 }
 
 // This function replaces something `name` owns, and `name` is one of its
@@ -95156,6 +95168,7 @@ unsafe @ resolve_replaces → v {
                 : s ec ( nurl_sym_get g_fn_empties fn )
                 ? & emp ! ( str_contains_word ec k ) {
                     ( nurl_sym_def g_fn_empties fn ? == 0 ( nurl_str_len ec ) ( nurl_str_cat k `` ) ( nurl_str_cat3 ec ` ` k ) )
+                    = g_fn_empties_n + g_fn_empties_n 1
                     = changed T
                 } {}
             } {}
