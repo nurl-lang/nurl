@@ -2937,6 +2937,19 @@ theorem ExitAt.typed {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt
         q1, q2, q3, FreshOK.exitScope h6 x⟩
   | _ => intro n e Γ0 V he; cases he
 
+/-- A weaker context's borrowed parameters are the context's, with the same
+    (fixed) entries. -/
+theorem Weaker.rootb_eq {Γ Γ' : Ctx} (hw : Weaker Γ Γ') :
+    ∀ p E', Γ' p = some E' → E'.mode = .rootb → Γ p = some E' := fun p E' hp hm => by
+  obtain ⟨E, hE, hwe⟩ := hw.get' hp
+  have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+  rw [hwe.fixed (Or.inl hm')]; exact hE
+
+theorem Weaker.rootb_fwd {Γ Γ' : Ctx} (hw : Weaker Γ Γ') :
+    ∀ p E, Γ p = some E → E.mode = .rootb → ∃ E', Γ' p = some E' ∧ E'.mode = .rootb := fun p E hp hm => by
+  obtain ⟨E', h', hwe⟩ := hw.get hp
+  exact ⟨E', h', by rw [hwe.mode]; exact hm⟩
+
 /-- Preservation: every step of a well-typed configuration, given the call
     cases and what source typing keeps. -/
 theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) (hhand : HandCase P)
@@ -2957,14 +2970,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk Z hz
   | sub hw hsub ho ih =>
     intro m m' s' hcd hi hst Z hz
-    obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hsub hcd (hi.weaker hw) hst
-    exact ⟨Γ', ht'.weakenOut hi'.wf hi'.names ho, hi', hnv, hk.weaker hw, hfz⟩
+    -- (a weaker context's borrowed parameters are the context's, fixed entries)
+    obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ih hsub hcd (hi.weaker hw) hst Z (hz.of_rootb hw.rootb_eq)
+    exact ⟨Γ', ht'.weakenOut hi'.wf hi'.names ho, hi', hnv, hk.weaker hw, hfz, Z', hz', hzk.back hw.rootb_fwd⟩
   | seq hbsrc ha hb iha ihb =>
     intro m m' s' hcd hi hst Z hz
     cases hst with
     | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | seqSkip =>
-      refine ⟨_, ?_, ?_, Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hbsrc), fun _ _ => rfl⟩
+      refine ⟨_, ?_, ?_, Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hbsrc), fun _ _ => rfl,
+        Z, hz.restmt (fun p _ h => by simp [Stmt.spine] at h) (fun v hv => by simp [Stmt.killVars, hv])
+          (fun c hc => by rw [Stmt.catchFrames_src hbsrc] at hc; cases hc), ZKeep.refl _ _⟩
       · rcases skip_inv ha with rfl | hw
         · exact hb
         · exact hb.weakenIn hw

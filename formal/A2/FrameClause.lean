@@ -246,4 +246,36 @@ def ZKeep (Γ : Ctx) (Z Z' : Var → List Var) : Prop :=
 
 theorem ZKeep.refl (Γ : Ctx) (Z : Var → List Var) : ZKeep Γ Z Z := fun _ _ _ _ => rfl
 
+
+/-- `HeldZ` in a context whose borrowed parameters are old ones (a weaker
+    context, a cleaned one). -/
+theorem HeldZ.of_rootb {m : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s : Stmt} (hz : HeldZ m Γ Z s)
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) : HeldZ m Γ' Z s where
+  caps p E hp hm := hz.caps p E (hrb p E hp hm) hm
+  reach p E hp hm := hz.reach p E (hrb p E hp hm) hm
+  bound p E hp hm := hz.bound p E (hrb p E hp hm) hm
+  frames x m0 hx p E hp hm := hz.frames x m0 hx p E (hrb p E hp hm) hm
+
+/-- ... and the frame lists kept, read back. -/
+theorem ZKeep.back {Γ Γ0 : Ctx} {Z Z' : Var → List Var} (h : ZKeep Γ0 Z Z')
+    (hrb : ∀ p E, Γ p = some E → E.mode = .rootb → ∃ E', Γ0 p = some E' ∧ E'.mode = .rootb) :
+    ZKeep Γ Z Z' := fun p E hp hm => by
+  obtain ⟨E', h', hm'⟩ := hrb p E hp hm
+  exact h p E' h' hm'
+
+/-- `HeldZ` at a statement with the same killable names, spine and catch
+    frames (or fewer). -/
+theorem HeldZ.restmt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s s' : Stmt} (hz : HeldZ m Γ Z s)
+    (hspo : ∀ p, p ∉ s'.spine → p ∉ s.spine) (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars)
+    (hcf : ∀ c ∈ s'.catchFrames, c ∈ s.catchFrames) : HeldZ m Γ Z s' where
+  caps := hz.caps
+  reach p E hp hm hps v hv := hz.reach p E hp hm (hspo p hps) v (hkv v hv)
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (hcf _ hx)
+
+
+/-- A source statement runs no catch frame. -/
+theorem Stmt.catchFrames_src {s : Stmt} (hs : s.src = true) : s.catchFrames = [] := by
+  induction s <;> simp_all [Stmt.src, Stmt.catchFrames]
+
 end A2
