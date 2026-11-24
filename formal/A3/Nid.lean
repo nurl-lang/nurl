@@ -124,8 +124,8 @@ theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
     pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut,
     dtorIn := hi.dtorIn
     -- (the slots kept; the blocks' payloads hold no names)
-    heldCaps := fun p E hp hm hps d hd hb' hh hF =>
-      ⟨(hi.heldCaps p E hp hm hps d hd hb' hh hF).1, hM.blkCapsInp _⟩ }
+    heldCaps := fun p E hp hm hps d hd hb' hh =>
+      (hi.heldCaps p E hp hm hps d hd hb' hh).of_st rfl }
 
 theorem ThreadOK.move {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : Nat → Bool} {n : Nat}
     {B : Nat → Option Blk} {TK : Nat → Bool} (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)

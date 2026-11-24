@@ -197,14 +197,14 @@ theorem StmtT.catchR_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {m0 : M
     StmtT P ξ Γ F (.catchR x m0' s') Δ := by
   generalize hs : Stmt.catchR x m0 s = s0 at ht
   induction ht with
-  | catchR hx hb hmi hra hk hds _ =>
+  | catchR hx hb hmi hra hk hds hC _ =>
     cases hs
     have hst' : (m0'.set x ⟨false, some (.int 1)⟩).st = (m0.set x ⟨false, some (.int 1)⟩).st := by
       simp only [Mem.set, hst]
     have hmi' : MInv (m0'.set x ⟨false, some (.int 1)⟩) _ :=
       hmi.of_st hst' (heapOK_grow hmi.heap hst' hal (by simp only [Mem.set, hnid]; exact Nat.le_refl _) hblk)
         (by simp only [Mem.set, hnv]; exact Nat.le_refl _) hblk
-    refine .catchR hx ?_ hmi' hra (by rw [hsp]; exact hk) (by rw [hsp]; exact hds)
+    refine .catchR hx ?_ hmi' hra (by rw [hsp]; exact hk) (by rw [hsp]; exact hds) (hC.of_st hst')
     rw [hnv]; exact hrep hb
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs

@@ -1838,7 +1838,7 @@ theorem CapsInpAt.of_st {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st 
   ⟨fun x o V hx => h.1 x o V (hst ▸ hx), fun k bl V hk hp => h.2 k bl V (hb ▸ hk) hp⟩
 
 theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {s : Stmt} (h : HeldCapsInp m Γ s)
-    (hst : m'.st = m.st) (_hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ s :=
+    (hst : m'.st = m.st) : HeldCapsInp m' Γ s :=
   fun p E hp hm hps d hd hb' hh => (h p E hp hm hps d hd hb' hh).of_st hst
 
 theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {s s' : Stmt} (h : HeldCapsInp m Γ s)

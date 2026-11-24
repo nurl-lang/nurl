@@ -373,11 +373,11 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.catchR x m0 s = S at ht hi
     induction ht with
-    | catchR hxF hs hM hanch hKO hDS _ =>
+    | catchR hxF hs hM hanch hKO hDS hC _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       exact StmtT.catchR hxF (ih hsp hkv hhole _ _ _ _ hs hi.catchIn) hM hanch (by rw [hsp']; exact hKO)
-        (by rw [hsp']; exact hDS)
+        (by rw [hsp']; exact hDS) hC
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @scopeD x f s r K h ih =>
