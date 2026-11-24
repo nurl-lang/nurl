@@ -4629,7 +4629,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.views⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.revive x), hfin, ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl,
+        fun w _ hw =>
+            -- `x`, revived, holds no function: a value with no package
+            (hw.of_shrink (m' := m) (x := x) (fun _ _ h => h)
+              (fun u E1 hux h1 hl1 => by simp only [setE, upd_ne _ _ hux] at h1; exact ⟨E1, h1, hl1⟩)
+              (fun E1 o V h1 _ hs => by
+                obtain ⟨hn, hh⟩ := hm1.own_noFn h1 (by simp [setE] at h1; subst h1; exact hos)
+                  (by simp [setE] at h1; subst h1; exact hhf) hs
+                exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl⟩
       · exact
         { toMInv := hm'
           nvS := fun w hw => by
@@ -4691,15 +4699,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
                 exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl) }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
-        exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl,
-        fun w _ hw =>
-            -- `x`, revived, holds no function: a value with no package
-            (hw.of_shrink (m' := m) (x := x) (fun _ _ h => h)
-              (fun u E1 hux h1 hl1 => by simp only [setE, upd_ne _ _ hux] at h1; exact ⟨E1, h1, hl1⟩)
-              (fun E1 o V h1 _ hs => by
-                obtain ⟨hn, hh⟩ := hm1.own_noFn h1 (by simp [setE] at h1; subst h1; exact hos)
-                  (by simp [setE] at h1; subst h1; exact hhf) hs
-                exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl⟩
+        exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
       · intro w E' hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         simp only [setE, upd_ne _ _ hwx] at hw
@@ -4841,7 +4841,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.views⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.reviveD x), hfin, Inv.scopeD_iff.mpr ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl,
+        fun w _ hw =>
+            -- `x`, revived, holds no function: a value with no package
+            (hw.of_shrink (m' := m) (x := x) (fun _ _ h => h)
+              (fun u E1 hux h1 hl1 => by simp only [setE, upd_ne _ _ hux] at h1; exact ⟨E1, h1, hl1⟩)
+              (fun E1 o V h1 _ hs => by
+                obtain ⟨hn, hh⟩ := hm1.own_noFn h1 (by simp [setE] at h1; subst h1; exact hos)
+                  (by simp [setE] at h1; subst h1; exact hhf) hs
+                exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl⟩
       · exact
         { toMInv := hm'
           nvS := fun w hw => by
@@ -4905,15 +4913,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
                 exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl) }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
-        exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl,
-        fun w _ hw =>
-            -- `x`, revived, holds no function: a value with no package
-            (hw.of_shrink (m' := m) (x := x) (fun _ _ h => h)
-              (fun u E1 hux h1 hl1 => by simp only [setE, upd_ne _ _ hux] at h1; exact ⟨E1, h1, hl1⟩)
-              (fun E1 o V h1 _ hs => by
-                obtain ⟨hn, hh⟩ := hm1.own_noFn h1 (by simp [setE] at h1; subst h1; exact hos)
-                  (by simp [setE] at h1; subst h1; exact hhf) hs
-                exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl⟩
+        exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
       · intro w E' hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         simp only [setE, upd_ne _ _ hwx] at hw
@@ -4929,7 +4929,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         rcases skip_inv hs with rfl | hw
         · exact h0
         · exact h0.weakenOut hiS.wf hiS.names (Or.inr (hw.exitScope x hpx.2.2))
-      refine ⟨Γ, hsc, hiS, Nat.le_refl _, ⟨?_, ?_, DKeep.refl Γ _⟩, fun _ _ => rfl⟩
+      refine ⟨Γ, hsc, hiS, Nat.le_refl _, ⟨?_, ?_, DKeep.refl Γ _⟩, fun _ _ => rfl, CapsKeep.refl _ _ _⟩
       · intro w E hw hws
         exact ⟨by simpa [Stmt.spine] using hws, E, hw, rfl, rfl, fun _ => rfl⟩
       · intro w E' hw hws
@@ -5079,7 +5079,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
     | frozenSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
-        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
+        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl, CapsKeep.refl _ _ _⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
@@ -5157,7 +5157,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hik.respine he.spine he.vars (he.catchOK hik.catchOK) (he.pinOK hik.pinIn) (he.dtorPinOK hik.dtorIn) he.killVars,
         Nat.le_refl _, ⟨fun v E hv hvs => ⟨by rw [he.spine]; exact hvs, E, hv, rfl, rfl, fun _ => rfl⟩,
         fun v E' hv hvs => ⟨by show v ∉ k.spine; rw [← he.spine]; exact hvs, E', hv⟩, DKeep.refl _ _⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl, CapsKeep.refl _ _ _⟩
   | @loop ξ Γ Δ F k hsrc hb hwf hnw hdom hmode hdk hds hfΔ _ =>
     intro m m' s' hcd hi hst
     cases hst with
@@ -5284,7 +5284,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               (hck.mono fun v hv => by simp [Stmt.killVars, hv]) }
     | catchSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
-        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
+        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl, CapsKeep.refl _ _ _⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
