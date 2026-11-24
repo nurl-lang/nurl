@@ -1417,4 +1417,44 @@ theorem LiveBack.callPost {Γ : Ctx} {fn : Fn} {args : List Var}
     (ha : ∀ a ∈ args, ∃ E, Γ a = some E ∧ E.live = true) : LiveBack Γ (A2.callPost Γ fn args) :=
   (LiveBack.callPostAux (LiveBack.refl Γ) ha).trans (LiveBack.killNames _ _)
 
+
+/-- **A hand-over keeps the clause**: the live package `c` moves out, a part
+    of it (its environment, with no handle) into the fresh owned slot `y`,
+    `x` bound empty; every other live binding was live before. -/
+theorem LiveCaps.hand {m : Mem} {Γ Γ' : Ctx} {w c x y : Var} {E : Entry} {V env : Val} {o : Bool}
+    (h : LiveCaps m Γ w) (hc : Γ c = some E) (hl : E.live = true) (hs : m.st c = some ⟨true, some V⟩)
+    (henv : Sub env V) (hnh : ∀ c', Sub (.href c') env → False)
+    (hb : ∀ u E1, u ≠ c → u ≠ y → u ≠ x → Γ' u = some E1 → E1.live = true →
+      ∃ E0, Γ u = some E0 ∧ E0.live = true)
+    (hcy : c ≠ y) (hcx : c ≠ x) (hxy : x ≠ y) :
+    LiveCaps (((m.set c ⟨true, none⟩).set y ⟨true, some env⟩).set x ⟨o, none⟩) Γ' w := by
+  have hV : ValCapsInp V w := (h c E true V hc hl hs).1
+  -- a slot-located node after: an old one, or in the environment (clean)
+  have htg : ∀ x' t n, (((m.set c ⟨true, none⟩).set y ⟨true, some env⟩).set x ⟨o, none⟩).st x' =
+      some ⟨true, some t⟩ → Sub n t → m.st x' = some ⟨true, some t⟩ ∨ ValCapsInp n w := by
+    intro x' t n hx' hsn
+    by_cases e1 : x' = x
+    · subst e1; simp [Mem.set, upd] at hx'
+    by_cases e2 : x' = y
+    · subst e2; simp [Mem.set, upd, e1] at hx'; subst hx'
+      exact Or.inr (hV.sub (Sub.trans hsn henv))
+    by_cases e3 : x' = c
+    · subst e3; simp [Mem.set, upd, e1, e2] at hx'
+    · simp [Mem.set, upd, e1, e2, e3] at hx'; exact Or.inl hx'
+  intro v E1 o1 V1 hv hl1 hs1
+  by_cases e1 : v = x
+  · subst e1; simp [Mem.set, upd] at hs1
+  by_cases e2 : v = y
+  · subst e2; simp [Mem.set, upd, e1] at hs1; obtain ⟨-, rfl⟩ := hs1
+    exact ⟨hV.sub henv, fun c' hc' => (hnh c' hc').elim⟩
+  by_cases e3 : v = c
+  · subst e3; simp [Mem.set, upd, e1, e2] at hs1
+  simp [Mem.set, upd, e1, e2, e3] at hs1
+  obtain ⟨E0, h0, hl0⟩ := hb v E1 e3 e2 e1 hv hl1
+  obtain ⟨h1, h2⟩ := h v E0 o1 V1 h0 hl0 hs1
+  refine ⟨h1, fun c' hc' x' t n hx' hsn hnd => ?_⟩
+  rcases htg x' t n hx' hsn with hx'' | hn
+  · exact h2 c' hc' x' t n hx'' hsn hnd
+  · exact hn
+
 end A2
