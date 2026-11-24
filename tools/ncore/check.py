@@ -2763,6 +2763,12 @@ class FnCheck:
             ty = self.fn.vars[vid].ty
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
                 continue
+            # (…nor a binding of another type than the place it reads - an
+            # option a call wrapped the place's value in, `wrap s → ? String`:
+            # codegen hands the old value to no one and frees it under the
+            # payload, agora #1000)
+            if any(self.ty_of_place(a) != ty for a in av.alias):
+                continue
             keep = {l for l in av.loans if self.loans.get(l, (None,))[0] not in av.alias}
             if first is None or av.own == "O":
                 # (the first binding that read it: one value has one owner)
