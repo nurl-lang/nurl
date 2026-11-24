@@ -3924,11 +3924,20 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
             simp only [setE, upd_ne _ _ hpx] at hp
             exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
-            obtain ⟨hT, hN⟩ := SlotsCaps.nodeOf hcw.1 hno
-            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := o)
-              (fun V e => by
-                cases e; exact hr.capsInp hT (hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)))
-              (x := y) (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+            have hN := hcw.nodeOf hx hl hno
+            have hbE : LiveBack Γ (setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
+              (LiveBack.killThruV _ _ _ _).setLive hx hl _
+            have hsT : ∀ z, Sub z es[n] → Sub z T := fun z hz =>
+              Sub.trans (Sub.child (List.getElem_mem hn) hz) hno.sub
+            have h1 := hcw.editNodeH (m' := m.set o ⟨true, some T'⟩) hbE hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz])
+              (fun hN => hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)
+              (fun e he => Or.inl (List.mem_of_mem_eraseIdx he))
+              (fun c' hc => hm.slot_no_href (x := o) (T := T') (by simp [Mem.set, upd, Ne.symm hyo]) hc)
+            rw [← hΓ1] at h1
+            exact h1.setClean (fun u E1 hu h1 hl1 => by simp only [setE, upd_ne _ _ hu] at h1; exact ⟨E1, h1, hl1⟩)
+              (hN.sub (Sub.child (List.getElem_mem hn) (Sub.refl _)))
+              (fun c' hc => hi.toMInv.slot_no_href hno.2.2.1 (hsT _ hc)))) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hyo, hmx'] at h))
