@@ -3698,14 +3698,53 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
             simp only [setE, upd_ne _ _ hpx] at hp
             exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
-            have hN := SlotsCaps.slot hcw.1 hT
-            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := y)
-              (fun V e => by
-                cases e; exact hN.node_sub fun e he => by
-                  rcases List.mem_append.mp he with he | he
-                  · exact List.mem_of_mem_take he
-                  · exact List.mem_of_mem_drop he)) (x := x)
-              (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+            obtain ⟨Ey', hy', hly'⟩ : ∃ Ey', Γ y = some Ey' ∧ Ey'.live = true := by
+              cases hr with | pop h1 h2 => exact LiveBack.kill Γ _ _ _ y _ h1 h2
+            have hN : ValCapsInp (.node t c d es) w := hcw.val hy' hly' hT
+            have hsubT : ∀ u o V', ((m.set y ⟨true, some (.node t c d (es.take n ++ es.drop (n + 1)))⟩).set x
+                ⟨es[n].owns, some es[n]⟩).st u = some ⟨o, some V'⟩ → u ≠ x → u ≠ y → m.st u = some ⟨o, some V'⟩ :=
+              fun u o V' hs hux huy => by simpa [Mem.set, upd, hux, huy] using hs
+            have hel : ∀ e ∈ es.take n ++ es.drop (n + 1), e ∈ es := fun e he => by
+              rcases List.mem_append.mp he with he | he
+              · exact List.mem_of_mem_take he
+              · exact List.mem_of_mem_drop he
+            -- every node in a changed slot is clean, and none holds a handle
+            have hcl : ∀ u o V', ((m.set y ⟨true, some (.node t c d (es.take n ++ es.drop (n + 1)))⟩).set x
+                ⟨es[n].owns, some es[n]⟩).st u = some ⟨o, some V'⟩ → (u = x ∨ u = y) →
+                (∀ z, Sub z V' → ValCapsInp z w) ∧ ∀ c', Sub (.href c') V' → False := by
+              intro u o V' hs hu
+              rcases hu with rfl | rfl
+              · simp [Mem.set, upd] at hs; obtain ⟨-, rfl⟩ := hs
+                have hsT : ∀ z, Sub z es[n] → Sub z (.node t c d es) := fun z hz =>
+                  Sub.child (List.getElem_mem hn) hz
+                exact ⟨fun z hz => hN.sub (hsT z hz), fun c' hc => hi.toMInv.slot_no_href hT (hsT _ hc)⟩
+              · simp [Mem.set, upd, hxy.symm] at hs; obtain ⟨-, rfl⟩ := hs
+                refine ⟨fun z hz => ?_, fun c' hc => ?_⟩
+                · cases hz with
+                  | refl => exact hN.node_sub hel
+                  | child hm hz => exact hN.sub (Sub.child (hel _ hm) hz)
+                · cases hc with
+                  | child hm hz => exact hi.toMInv.slot_no_href hT (Sub.child (hel _ hm) hz)
+            refine hcw.of_changeR (fun u E1 hu hl1 heq => ?_) (fun u E1 o V' hu hl1 hs hch => ?_)
+              (fun u t' n' hx' hch hs' ty c' d' es' hn' => Or.inl ?_)
+            · by_cases hux : u = x
+              · subst hux; simp [Mem.set, upd, hmx] at heq
+              · simp only [setE, upd_ne _ _ hux] at hu; exact ((LiveBack.kill Γ _ _ _).trans hr.liveBack) u E1 hu hl1
+            · have hu' : u = x ∨ u = y := by
+                by_cases hux : u = x
+                · exact Or.inl hux
+                by_cases huy : u = y
+                · exact Or.inr huy
+                exact absurd (by simp [Mem.set, upd, hux, huy]) hch
+              obtain ⟨h1, h2⟩ := hcl u o V' hs hu'
+              exact ⟨h1 _ (Sub.refl _), h2⟩
+            · have hu' : u = x ∨ u = y := by
+                by_cases hux : u = x
+                · exact Or.inl hux
+                by_cases huy : u = y
+                · exact Or.inr huy
+                exact absurd (by simp [Mem.set, upd, hux, huy]) hch
+              exact (hcl u true t' hx' hu').1 n' hs')) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hxy, hmx] at h))
