@@ -1328,3 +1328,24 @@ Live-only was needed only for the caller's dead closures that a through call kil
 `preserve` gets: `∀ Z, HeldZ m Γ Z s → ∃ Z', HeldZ m' Γ' Z' s' ∧ ∀ p E, Γ p = some E → E.mode = .rootb → Z' p = Z p`.
 
 Proved (wip/t937-b4-z, 9961c3798): `FrameCaps` (`set`, `remove`, `mono`, `reads`), `frameCapsSt`, `readsCapsVal` / `readsCapsTgt` / `readsSt_back`, and `frameCapsSet`.
+
+**Frame-clause library, proved (wip/t937-b4-z, f97d17c5d; `FrameClause.lean`, `CapsLive.lean`):**
+- `HeldZ`, with `CapInoutH.not_heldZ` and `Step.held_not_killVarsZ`;
+- `HeldZ.leaf`;
+- the memory-only change lemmas (`FrameCaps.of_changeR` / `repl` / `editNode` / `of_shrink` / `unpair`);
+- `frameCapsSet`;
+- `MInv.goodOf`: the clause one binding at a time;
+- `NamesFree.noMut`;
+- `BindParams.frameCaps`.
+
+**Finding:** the call needs no `NoMutLive` from `CallThruOK`. `NamesFree` alone keeps every argument free of a mutating name on a root another argument depends on with no bound (`NamesFree.noMut`). With `MInv.goodOf` this makes every argument clean for the new parameters' anchors, frozen and changed roots alike. `BindParams.frameCaps` then gives the clause on the new frame at `z`, and on old frames at `Z q`, since the arguments are outside `Z q` (`reach`). So `CallThruOK`'s "closure-typed bindings live" may not be needed by the clause at all. Check this when dropping the Rename scaffold.
+
+**Integration, next:**
+1. Remove `Inv.heldCaps`, which is false as it stands (`HeldCapsInp`), with `Inv.mk₀` / `ofLeaf`'s clause argument.
+2. `preserve` takes `HeldZ m Γ Z s` and returns `∃ Z', HeldZ m' Γ' Z' s'`, with `Z'` agreeing on old borrowed parameters. So do the `…Case` statements.
+3. The leaves via `HeldZ.leaf`, with `hc` from the FrameCaps lemmas. Their `hD` comes from `reach` (`r.vars ⊆ killVars`).
+4. The wrappers: `frozenIn` / `catchIn` / `rbindIn` keep `Z`; the anchor proofs use `held_not_killVarsZ`.
+5. `CallInv`: `Z' := Z[params ↦ z]`; `caps` via `BindParams.frameCaps`; `reach` for the callee body, whose variables are `≥ base` or `inout` arguments, outside `z`.
+6. `recCase` opens a catch frame: the `frames` entry from `caps` at that moment.
+7. `catchP`: the post store's slots are the snapshot's, so `caps` comes from `frames`.
+8. Soundness's initial state: an empty store, so every part holds.
