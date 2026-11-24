@@ -191,7 +191,7 @@ theorem LiveCaps.val {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {v : V
 theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
     {v : Val} {o : Bool} {w : Var}
     (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ) (h : LiveCaps m Γ w)
-    (hw : w ∉ r.vars) : ValCapsInp v w := by
+    (hw : w ∉ r.vars ∨ w ∈ F) : ValCapsInp v w := by
   have lf : ∀ {u : Val}, (∀ fs te ms e cs, u ≠ .pkg fs te ms e cs) → (∀ e, ¬ Child e u) → ValCapsInp u w :=
     fun a b => ValCapsInp.leaf a b
   induction hr generalizing v o m1
@@ -252,14 +252,20 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
       obtain ⟨_, hs1⟩ := h1.slot
       refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
       cases hc with | inr => exact h.val hy hl hs1
-  case pack hy hl _ _ _ _ =>
+  case pack hy hl _ _ hcs _ =>
     cases he with
     | pack h1 =>
       obtain ⟨_, hs1⟩ := h1.slot
       refine ValCapsInp.of_children (fun fs te ms e cs he => ?_) (fun e hc => ?_)
       · cases he
         intro q hq hqw
-        exact absurd (by simp only [Rhs.vars, List.mem_cons, List.mem_map]; exact Or.inr ⟨q, hq, hqw⟩) hw
+        rcases hw with hw | hwF
+        · exact absurd (by simp only [Rhs.vars, List.mem_cons, List.mem_map]; exact Or.inr ⟨q, hq, hqw⟩) hw
+        -- (a frame variable is captured `inout` by no package: `CapsOK`)
+        · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcs.2 q hq
+          rcases hmode with ⟨h, _⟩ | ⟨_, _, _, _, _, _, hnF, _⟩
+          · exact h
+          · exact absurd (hqw ▸ hwF) hnF
       · cases hc with | pkg => exact h.val hy hl hs1
   case arcNew => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
   case lockNew => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
@@ -877,7 +883,7 @@ theorem RhsT.st_back {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry
 theorem RhsT.liveCapsSet {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
     {v : Val} {o : Bool} {w : Var}
     (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ) (h : LiveCaps m Γ w)
-    (hw : w ∉ r.vars) {x : Var} {o' : Bool} {Γ' : Ctx}
+    (hw : w ∉ r.vars ∨ w ∈ F) {x : Var} {o' : Bool} {Γ' : Ctx}
     (hb : ∀ u E1, u ≠ x → Γ' u = some E1 → E1.live = true → ∃ E0, Γ1 u = some E0 ∧ E0.live = true) :
     LiveCaps (m1.set x ⟨o', some v⟩) Γ' w := by
   refine (hr.liveCapsSt he h).setG hb (fun V e => ?_)

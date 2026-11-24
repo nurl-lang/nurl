@@ -344,8 +344,8 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
     rw [hwe.fixed (Or.inl hm')]
     -- (a weaker context ends bindings at most: `EntryWeaker.live`)
-    intro hps d hd hb hh hF
-    exact (hi.heldCaps p E hE hm' hps d hd hb hh hF).of_back fun v E1 hv1 hl1 => by
+    intro hps d hd hb hh
+    exact (hi.heldCaps p E hE hm' hps d hd hb hh).of_back fun v E1 hv1 hl1 => by
       obtain ⟨E0, h0, hw0⟩ := hw.get' hv1
       exact ⟨E0, h0, (hw0.live hl1).1⟩
 

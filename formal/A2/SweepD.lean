@@ -300,7 +300,7 @@ theorem Inv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} {F : List Var} {s 
     dtorIn := hi.dtorIn
     -- (the marking sweep keeps the slots, and some blocks, as they were or
     -- marked `dead` with their payload)
-    heldCaps := fun p E hp hm hps d hd hb hh hF => (hi.heldCaps p E hp hm hps d hd hb hh hF).of_st rfl }
+    heldCaps := fun p E hp hm hps d hd hb hh => (hi.heldCaps p E hp hm hps d hd hb hh).of_st rfl }
 
 /-- The packages in memory are the slots' and the blocks', which the marking
     sweep keeps or marks (a marked block owns what it owned and its holders

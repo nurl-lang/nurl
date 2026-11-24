@@ -39,11 +39,11 @@ theorem capPos {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre :
   obtain ⟨q, hq, h1, h2⟩ := capPos_any hlen hi hv hp
   exact ⟨q, hq, h1, by rw [h2]⟩
 
-theorem CapInoutH.not_held {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
-    (hcl : HeldCapsInp m Γ F s) (hcodes : MemCodes P m)
+theorem CapInoutH.not_held {P : Prog} {m : Mem} {Γ : Ctx} {s : Stmt}
+    (hcl : HeldCapsInp m Γ s) (hcodes : MemCodes P m)
     (hlive : ∀ c ∈ s.headCallc, ∃ Ec, Γ c = some Ec ∧ Ec.live = true)
     {p : Var} {E : Entry} {d : Dep} (hp : Γ p = some E) (hm : E.mode = .rootb) (hps : p ∉ s.spine)
-    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) (hF : d.root ∉ F) :
+    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) :
     ¬ CapInoutH P m s d.root := by
   rintro ⟨c, hcs, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩
   obtain ⟨Ec, hEc, hlc⟩ := hlive c hcs
@@ -60,19 +60,19 @@ theorem CapInoutH.not_held {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {s : S
   have hlen' : sig.params.tail.length = zs.length := by
     simp only [List.length_cons, List.length_append, List.length_map] at hl; omega
   obtain ⟨q, hq, hq1, hq2⟩ := capPos hlen' hi hai hpi
-  have := ((hcl p E hp hm hps d hd hb hh hF) c Ec o _ hEc hlc hc).1 fs te ms env cs (Sub.refl _) q hq hq1
+  have := ((hcl p E hp hm hps d hd hb hh) c Ec o _ hEc hlc hc).1 fs te ms env cs (Sub.refl _) q hq hq1
   rw [hq2] at this; cases this
 
-theorem Step.held_not_killVars {P : Prog} {m m' : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt}
-    (hstep : Step P m s (.ok m' s')) (hcl : HeldCapsInp m Γ F s) (hcodes : MemCodes P m)
+theorem Step.held_not_killVars {P : Prog} {m m' : Mem} {Γ : Ctx} {s s' : Stmt}
+    (hstep : Step P m s (.ok m' s')) (hcl : HeldCapsInp m Γ s) (hcodes : MemCodes P m)
     (hlive : ∀ c ∈ s.headCallc, ∃ Ec, Γ c = some Ec ∧ Ec.live = true)
     {p : Var} {E : Entry} {d : Dep} (hp : Γ p = some E) (hm : E.mode = .rootb) (hps : p ∉ s.spine)
-    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) (hF : d.root ∉ F)
+    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d)
     (hkv : d.root ∉ s.killVars) (hlt : d.root < m.nv) : d.root ∉ s'.killVars := by
   intro hin
   rcases hstep.killVars_subH m' s' rfl d.root hin with h | h | h
   · exact hkv h
   · exact absurd h (Nat.not_le.mpr hlt)
-  · exact CapInoutH.not_held hcl hcodes hlive hp hm hps hd hb hh hF h
+  · exact CapInoutH.not_held hcl hcodes hlive hp hm hps hd hb hh h
 
 end A2

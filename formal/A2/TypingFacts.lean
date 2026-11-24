@@ -528,13 +528,11 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
           (by simp [Stmt.spine, hdk])
     dtorIn := hi.dtorIn.2
     -- (the bound parameter's anchors are lent out: it has no held one outside `F`)
-    heldCaps := fun q E hq hmq hqs d hd hb hh hF => by
+    heldCaps := fun q E hq hmq hqs d hd hb hh => by
       by_cases hqp : q = p
       · subst hqp; rw [hp] at hq; cases hq
-        rcases hroots d hd hb with hF' | _
-        · exact absurd hF' hF
-        · sorry -- WIP scaffold (AGORA-937 B4, never merged): a running `rbind`'s held anchor (HeldCapsInp skips the spine)
-      · exact hi.heldCaps q E hq hmq (by simp [Stmt.spine, hqp, hqs]) d hd hb hh hF }
+        sorry -- WIP scaffold (AGORA-937 B4, never merged): a running `rbind`'s held anchor
+      · exact hi.heldCaps q E hq hmq (by simp [Stmt.spine, hqp, hqs]) d hd hb hh }
 
 theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k))
     (hz : ∀ v ∈ z', v ∈ z) : Inv m Γ (F ++ z') k :=
@@ -554,7 +552,7 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : I
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
     dtorIn := hi.dtorIn
-    heldCaps := (hi.heldCaps.mono fun _ h => List.mem_append_left _ h).respine fun v hv => by
+    heldCaps := hi.heldCaps.respine fun v hv => by
       simpa [Stmt.spine] using hv }
 
 
@@ -613,7 +611,7 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
     dtorIn := hi.dtorIn
-    heldCaps := (hi.heldCaps.mono fun _ h => List.mem_append_left _ h).respine fun v hv => by
+    heldCaps := hi.heldCaps.respine fun v hv => by
       simpa [Stmt.spine] using hv }
 
 /-! ### A2-drop.2: typing gives no `letd` binding a new view

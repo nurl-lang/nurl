@@ -27,27 +27,27 @@ theorem CapsInpAt.pay {m : Mem} {w : Var} (h : CapsInpAt m w) {k : Nat} {bl : Bl
 
 /-- `HeldCapsInp` is its premises on the held anchor and `LiveCaps` of its
     root. -/
-theorem heldCapsInp_iff {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} :
-    HeldCapsInp m Γ F s ↔
+theorem heldCapsInp_iff {m : Mem} {Γ : Ctx} {s : Stmt} :
+    HeldCapsInp m Γ s ↔
       ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-      ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → LiveCaps m Γ d.root :=
+      ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → LiveCaps m Γ d.root :=
   Iff.rfl
 
 /-- `HeldCapsInp` from `LiveCaps` of every root it asks about. -/
-theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
-    (h : HeldCapsInp m Γ F s) (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ w) : HeldCapsInp m' Γ F s :=
-  fun p E hp hm hps d hd hb hh hF => hc _ (h p E hp hm hps d hd hb hh hF)
+theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {s : Stmt}
+    (h : HeldCapsInp m Γ s) (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ w) : HeldCapsInp m' Γ s :=
+  fun p E hp hm hps d hd hb hh => hc _ (h p E hp hm hps d hd hb hh)
 
 /-- ... carried to a step's result where the borrowed parameters outside the
     new running scopes are old ones, outside the old scopes, and the store
     keeps every root's clause. -/
-theorem HeldCapsInp.step_of {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt}
-    (h : HeldCapsInp m Γ F s)
+theorem HeldCapsInp.step_of {m m' : Mem} {Γ Γ' : Ctx} {s s' : Stmt}
+    (h : HeldCapsInp m Γ s)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
-    (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ' w) : HeldCapsInp m' Γ' F s' :=
-  fun p E hp hm hps d hd hb hh hF => by
+    (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ' w) : HeldCapsInp m' Γ' s' :=
+  fun p E hp hm hps d hd hb hh => by
     obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
-    exact hc _ (h p E h0 hm hps0 d hd hb hh hF)
+    exact hc _ (h p E h0 hm hps0 d hd hb hh)
 
 /-! ### The store operations -/
 

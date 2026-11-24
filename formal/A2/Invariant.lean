@@ -1822,12 +1822,14 @@ theorem LiveCaps.remove {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w)
   exact ⟨h1, fun c hc x' t n hx' => h2 c hc x' t n (hrm _ _ hx')⟩
 
 /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
-    root, not lent out, is captured by no package in the store but
-    read-only (`.inp`), so no call through a package hands it to an
-    `inout` parameter of the code (`CapInout.not_held`, `CapClause.lean`). -/
-def HeldCapsInp (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop :=
+    root is captured by no live binding's package but read-only (`.inp`),
+    so no call through a package hands it to an `inout` parameter of the
+    code (`CapInout.not_held`, `CapClause.lean`). AGORA-937 B4: a root in
+    the frame too (`F`), which no package captures `inout` (`CapsOK`): a
+    wrapper that grows the frame (`frozen`, `catchR`) keeps the clause. -/
+def HeldCapsInp (m : Mem) (Γ : Ctx) (s : Stmt) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → LiveCaps m Γ d.root
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → LiveCaps m Γ d.root
 
 /-- ... read off the slots, the blocks, the borrowed parameters and the
     running scopes. -/
@@ -1835,22 +1837,18 @@ theorem CapsInpAt.of_st {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st 
     (hb : m'.blk = m.blk := by rfl) : CapsInpAt m' w :=
   ⟨fun x o V hx => h.1 x o V (hst ▸ hx), fun k bl V hk hp => h.2 k bl V (hb ▸ hk) hp⟩
 
-theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hst : m'.st = m.st) (_hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ F s :=
-  fun p E hp hm hps d hd hb' hh hF => (h p E hp hm hps d hd hb' hh hF).of_st hst
+theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {s : Stmt} (h : HeldCapsInp m Γ s)
+    (hst : m'.st = m.st) (_hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ s :=
+  fun p E hp hm hps d hd hb' hh => (h p E hp hm hps d hd hb' hh).of_st hst
 
-theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (h : HeldCapsInp m Γ F s)
-    (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ F s' :=
+theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {s s' : Stmt} (h : HeldCapsInp m Γ s)
+    (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ s' :=
   fun p E hp hm hps => h p E hp hm fun h' => hps (hsp _ h')
 
-theorem HeldCapsInp.of_rootb {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
+theorem HeldCapsInp.of_rootb {m : Mem} {Γ Γ' : Ctx} {s : Stmt} (h : HeldCapsInp m Γ s)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) (hlb : LiveBack Γ Γ') :
-    HeldCapsInp m Γ' F s :=
-  fun p E hp hm hps d hd hb hh hF => (h p E (hrb p E hp hm) hm hps d hd hb hh hF).of_back hlb
-
-theorem HeldCapsInp.mono {m : Mem} {Γ : Ctx} {F F' : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hF : ∀ v ∈ F, v ∈ F') : HeldCapsInp m Γ F' s :=
-  fun p E hp hm hps d hd hb hh hF' => h p E hp hm hps d hd hb hh fun h' => hF' (hF _ h')
+    HeldCapsInp m Γ' s :=
+  fun p E hp hm hps d hd hb hh => (h p E (hrb p E hp hm) hm hps d hd hb hh).of_back hlb
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -1876,10 +1874,10 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
                 d.kind.isName = false → d.root ∉ s.spine
   dtorIn    : DtorPinOK Γ s
   /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. -/
-  heldCaps  : HeldCapsInp m Γ F s
+  heldCaps  : HeldCapsInp m Γ s
 
 /-- The invariant from its fields, the closure-capture clause first. -/
-theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCapsInp m Γ F s)
+theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCapsInp m Γ s)
     (toMInv : MInv m Γ) (nvS : ∀ v ∈ s.vars, v < m.nv) (nvF : ∀ v ∈ F, v < m.nv)
     (anch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.killVars)
     (spineNd : s.spine.Nodup) (spineDom : ∀ v ∈ s.spine, ∃ E, Γ v = some E) (catchOK : CatchOK m s)
@@ -2407,7 +2405,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
       -- (AGORA-937 B4: the frame's end, whose slots are the frame's start's,
       -- keeps the closure-capture clause at a held root: the frame starts so)
-      HeldCapsInp (m0.set x ⟨false, some (.int 1)⟩) Δ F .skip →
+      HeldCapsInp (m0.set x ⟨false, some (.int 1)⟩) Δ .skip →
       StmtT P ξ Γ F (.catchR x m0 s) Δ
   /-- A2-drop: a binding that runs a destructor at its end: of a destructor
       type (armed when the type holds views, A2-drop.2), or of a `Vec` of

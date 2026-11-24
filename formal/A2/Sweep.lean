@@ -590,7 +590,7 @@ theorem Inv.sweepR {R : Val → Prop} {m : Mem} (hR : ∀ v, m.vals v → R v) {
     dtorOut := hi.dtorOut
     dtorIn := hi.dtorIn
     -- (the sweep keeps the slots, and some of the blocks as they were)
-    heldCaps := fun p E hp hm hps d hd hb hh hF => (hi.heldCaps p E hp hm hps d hd hb hh hF).of_st rfl }
+    heldCaps := fun p E hp hm hps d hd hb hh => (hi.heldCaps p E hp hm hps d hd hb hh).of_st rfl }
 
 theorem Inv.sweep {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : Inv m.sweep Γ F s :=
   hi.sweepR fun _ h => h
