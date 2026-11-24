@@ -6668,6 +6668,8 @@ unsafe @ __arg_param_lend_root i syms → s {
     : s f ( mem_udrop_flag_get syms cg up )
     : s hd ( __and_i1 cg ( __and_i1 cg lent lo ) f )
     ( mem_udrop_flag_set syms cg up ( __and_i1 cg f ( __not_i1 cg hd ) ) )
+    // (…which call and argument: `__rhand_key__`, __park_nc_local_lend.)
+    ( nurl_sym_def syms `__rhand_key__` ( nurl_str_cat3 cn ` ` hix ) )
     ^ hd
 }
 
@@ -10567,7 +10569,18 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         : ~ s __aws ``
         ~ != 0 ( nurl_str_len __awr ) {
             : s __aw ( str_first_word __awr ) = __awr ( str_skip_word __awr )
-            ? ( str_contains_word __aws __aw ) { ( __record_param_idx syms `__fn_retpart__` __aw ) } { ( __record_param_idx syms `__fn_retlend__` __aw ) }
+            ? ( str_contains_word __aws __aw ) {
+                ( __record_param_idx syms `__fn_retpart__` __aw )
+                // (…and, should this function take it over on another path,
+                // the result would own one value twice: refused at module
+                // end then, resolve_nc_local_lends.)
+                : i __awti ( nurl_sym_word_index syms `__fn_param_names__` __aw )
+                ? >= __awti 0 {
+                    : i __twn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `twicelit_n` ) )
+                    ( nurl_sym_def g_pending_impl `twicelit_n` ( nurl_str_int + __twn 1 ) )
+                    ( nurl_sym_def g_pending_impl ( nurl_str_cat `twicelit#` ( nurl_str_int __twn ) ) ( nurl_str_cat4 ( nurl_sym_get syms `__fn_self_name__` ) ` ` ( nurl_str_int __awti ) ( nurl_str_cat4 ` ` ( nurl_str_int bck_line ) ` ` ( nurl_str_cat3 __aw ` ` ( nurl_lex_filename lex ) ) ) ) )
+                } {}
+            } { ( __record_param_idx syms `__fn_retlend__` __aw ) }
             = __aws ( nurl_str_cat3 __aws ` ` __aw )
         }
     } {}
@@ -10578,6 +10591,31 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // caller never freed it — agora #553.)
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` ) = hbit ? __al_keep ( nurl_str_cat hbit `` ) ? ret_pl_copied ( nurl_str_cat ret_pl_own `` ) ( nurl_str_cat `false` `` ) }
     {}
+    // A literal lent out of parameters it holds whole and nothing else
+    // (`^ @ K { p }`, `^ @ ?T { T p }`) hands back the caller's values — or,
+    // where this function takes a parameter over on another path (a `sink`,
+    // inferred: `( vec_free [i] p )`), its own: the caller handed it in.
+    // Owned on this path exactly when it takes all of them over, its
+    // module-end sink constants, and they leave in the result: their flags
+    // are cleared, as `^ . p f` answers (ret_pfield). Answered "lent", the
+    // caller dropped nothing of what it had handed in, agora AGORA-995.
+    ? & & & & __al_un ! __al_keep ! ret_pl_copied == 0 ( nurl_sym_len syms `__agg_lends_part__` ) == 0 ( nurl_sym_len syms `__agg_lends_call__` ) {
+        : ~ s __awo ``
+        : ~ s __awr2 ( nurl_sym_get syms `__agg_whole__` )
+        : s __awself ( nurl_sym_get syms `__fn_self_name__` )
+        ~ != 0 ( nurl_str_len __awr2 ) {
+            : s __aw2 ( str_first_word __awr2 ) = __awr2 ( str_skip_word __awr2 )
+            : i __awi ( nurl_sym_word_index syms `__fn_param_names__` __aw2 )
+            ? >= __awi 0 {
+                : s __aws ( nurl_cg_reg cg )
+                ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag __awself __awself __awi ) ) ) __aws )
+                = __awo ? == 0 ( nurl_str_len __awo ) ( nurl_str_cat __aws `` ) ( __and_i1 cg __awo __aws )
+                : s __awp ( mem_udrop_ptr_of syms __aw2 )
+                ? != 0 ( nurl_str_len __awp ) { ( mem_udrop_flag_set syms cg __awp `0` ) } {}
+            } {}
+        }
+        ? != 0 ( nurl_str_len __awo ) { = hbit __awo } {}
+    } {}
     ? __rb_read { ( nurl_sym_set_deep syms `__fn_ret_borrow_read__` `1` ) } {}
     // A value read out of a parameter's storage through a raw pointer and
     // not taken over (raw provenance) is lent by those parameters: the
@@ -108737,7 +108775,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         = an ( __lend_root_show syms ( str_first_word an ) )
         : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nclocal_n` ) )
         ( nurl_sym_def g_pending_impl `nclocal_n` ( nurl_str_int + n 1 ) )
-        ? != 0 g_nc_hand { ( nurl_sym_def g_pending_impl ( nurl_str_cat `nclhand#` ( nurl_str_int n ) ) `1` ) } {}
+        ? & != 0 g_nc_hand ( seq ( nurl_sym_get syms `__rhand_key__` ) ( nurl_str_cat3 cn ` ` ix ) ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `nclhand#` ( nurl_str_int n ) ) `1` ) } {}
         ( nurl_sym_def g_pending_impl ( nurl_str_cat `nclocal#` ( nurl_str_int n ) )
         ( nurl_str_cat4 ( nurl_str_cat4 cn ` ` gn ` ` ) ( nurl_str_cat3 ix ` ` ( str_first_word an ) )
         ( nurl_str_cat3 ` ` ( nurl_str_int g_stmt_line ) ` ` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `\t` ( llvm_to_nurl ty ) ) ) )
@@ -108895,6 +108933,23 @@ unsafe @ __sx_names_capture i syms s sx → b {
 }
 
 @ resolve_nc_local_lends i syms → v {
+    // A literal handed back naming a parameter twice whole (`^ @ K2 { p p
+    // }`) is a lend of it twice — fine while the caller keeps it; where the
+    // function takes it over on another path the result would own it twice
+    // (AGORA-995).
+    : i tn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `twicelit_n` ) )
+    : ~ i tj 0
+    ~ < tj tn {
+        : ~ s tr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `twicelit#` ( nurl_str_int tj ) ) ) `` )
+        : s tfn ( str_first_word tr ) = tr ( str_skip_word tr )
+        : s tix ( str_first_word tr ) = tr ( str_skip_word tr )
+        : s tln ( str_first_word tr ) = tr ( str_skip_word tr )
+        : s tpn ( str_first_word tr ) = tr ( str_skip_word tr )
+        ? | ( nurl_sym_has_word g_fn_sink tfn tix ) ( nurl_sym_has_word g_fn_keeps tfn tix ) {
+            ( bck_emit_error tr ( nurl_str_to_int tln ) ( nurl_str_cat4 `this hands back '` tpn `' twice in one literal, and this function takes '` ( nurl_str_cat3 tpn `' over on another path: the result would own one value twice. Copy one of them (string_clone, vec_clone, mem_dup …), or name it once.` `` ) ) )
+        } {}
+        = tj + tj 1
+    }
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nclocal_n` ) )
     : ~ i j 0
     ~ < j n {
