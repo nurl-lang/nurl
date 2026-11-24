@@ -39,6 +39,17 @@ def Stmt.catchFrames : Stmt → List (Var × Mem × Stmt)
   | .block s => s.catchFrames
   | _ => []
 
+/-- AGORA-937 B4: the roots a borrowed parameter's frame clause watches: its
+    held anchors' roots, and the names of its frame list. A package outside the
+    list capturing a listed name `inout` would let the frame's code change a
+    binding the frame freezes (a call through it names its captures, which the
+    statement does not); the clause at that name says it captures it `inp`. -/
+def Watch (E : Entry) (Zp : List Var) (w : Var) : Prop :=
+  w ∈ Zp ∨ ∃ d ∈ E.vdeps, d.kind.bound = .none ∧ HeldAnch E d ∧ d.root = w
+
+theorem Watch.anch {E : Entry} {Zp : List Var} {d : Dep} (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none)
+    (hh : HeldAnch E d) : Watch E Zp d.root := Or.inr ⟨d, hd, hb, hh, rfl⟩
+
 /-- The part of a running statement under borrowed parameter `p`'s `rbind`,
     on the spine; the statement itself where `p` is off the spine. -/
 def Stmt.under (p : Var) : Stmt → Stmt
@@ -65,22 +76,20 @@ theorem Stmt.under_off {p : Var} : ∀ {s : Stmt}, p ∉ s.spine → s.under p =
     4. each running catch frame's remembered store meets the clause, for the
        parameters older than it. -/
 structure HeldZ (m : Mem) (Γ : Ctx) (Z : Var → List Var) (s : Stmt) : Prop where
-  caps  : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d →
-            FrameCaps m (Z p) d.root
+  caps  : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ w, Watch E (Z p) w → FrameCaps m (Z p) w
   reach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (s.under p).killVars, v ∉ Z p
   bound : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ Z p, v < m.nv
   frames : ∀ x m0 b, (x, m0, b) ∈ s.catchFrames → ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ b.spine →
             p < m0.nv →
-            ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root
+            ∀ w, Watch E (Z p) w → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) w
 
 /-- **No call through a package hands a held anchor's root to an `inout`
     parameter**: the receiver is a running name, inside the anchor's frame,
     so its package captures the root read-only (the frame clause). -/
-theorem CapInoutH.not_heldZ {P : Prog} {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s : Stmt}
+theorem CapInoutH.not_watch {P : Prog} {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s : Stmt}
     (hz : HeldZ m Γ Z s) (hcodes : MemCodes P m)
-    {p : Var} {E : Entry} {d : Dep} (hp : Γ p = some E) (hm : E.mode = .rootb) (hps : p ∉ s.spine)
-    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) :
-    ¬ CapInoutH P m s d.root := by
+    {p : Var} {E : Entry} {w : Var} (hp : Γ p = some E) (hm : E.mode = .rootb) (hps : p ∉ s.spine)
+    (hW : Watch E (Z p) w) : ¬ CapInoutH P m s w := by
   rintro ⟨c, hcs, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩
   have hcZ : c ∉ Z p := hz.reach p E hp hm c (by rw [Stmt.under_off hps]; exact Stmt.headCallc_killVars s c hcs)
   have hcode := hcodes.1 c o _ fs te ms env cs hc (Sub.refl _)
@@ -96,8 +105,15 @@ theorem CapInoutH.not_heldZ {P : Prog} {m : Mem} {Γ : Ctx} {Z : Var → List Va
   have hlen' : sig.params.tail.length = zs.length := by
     simp only [List.length_cons, List.length_append, List.length_map] at hl; omega
   obtain ⟨q, hq, hq1, hq2⟩ := capPos hlen' hi hai hpi
-  have := (hz.caps p E hp hm d hd hb hh c o _ hcZ hc).1 fs te ms env cs (Sub.refl _) q hq hq1
+  have := (hz.caps p E hp hm w hW c o _ hcZ hc).1 fs te ms env cs (Sub.refl _) q hq hq1
   rw [hq2] at this; cases this
+
+theorem CapInoutH.not_heldZ {P : Prog} {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s : Stmt}
+    (hz : HeldZ m Γ Z s) (hcodes : MemCodes P m)
+    {p : Var} {E : Entry} {d : Dep} (hp : Γ p = some E) (hm : E.mode = .rootb) (hps : p ∉ s.spine)
+    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) :
+    ¬ CapInoutH P m s d.root :=
+  CapInoutH.not_watch hz hcodes hp hm hps (Watch.anch hd hb hh)
 
 theorem Step.held_not_killVarsZ {P : Prog} {m m' : Mem} {Γ : Ctx} {Z : Var → List Var} {s s' : Stmt}
     (hstep : Step P m s (.ok m' s')) (hz : HeldZ m Γ Z s) (hcodes : MemCodes P m)
@@ -247,13 +263,13 @@ theorem HeldZ.leaf {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : St
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
     (hsp' : ∀ v ∈ s'.spine, Γ v = none)
     (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v)
-    (hc : ∀ p E d, Γ p = some E → E.mode = .rootb → d ∈ E.vdeps → d.kind.bound = .none → HeldAnch E d →
-      (∀ v ∈ s.killVars, v ∉ Z p) → FrameCaps m (Z p) d.root → FrameCaps m' (Z p) d.root) :
+    (hc : ∀ p E w, Γ p = some E → E.mode = .rootb → Watch E (Z p) w →
+      (∀ v ∈ s.killVars, v ∉ Z p) → FrameCaps m (Z p) w → FrameCaps m' (Z p) w) :
     HeldZ m' Γ' Z s' where
-  caps p E hp hm d hd hb hh := by
+  caps p E hp hm w hW := by
     have h0 := hrb p E hp hm
-    exact hc p E d h0 hm hd hb hh (fun v hv => hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [hsp])]; exact hv))
-      (hz.caps p E h0 hm d hd hb hh)
+    exact hc p E w h0 hm hW (fun v hv => hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [hsp])]; exact hv))
+      (hz.caps p E h0 hm w hW)
   reach p E hp hm v hv hvZ := by
     have h0 := hrb p E hp hm
     have hps : p ∉ s'.spine := fun h => by rw [hsp' p h] at h0; cases h0
@@ -339,7 +355,7 @@ theorem FrameCaps.nodeOf {m : Mem} {D : List Var} {w x o : Var} {T : Val} {t : T
 /-- `HeldZ` across a store change that keeps the frame clause everywhere. -/
 theorem HeldZ.mapCaps {m m' : Mem} {Γ : Ctx} {Z : Var → List Var} {s : Stmt} (hz : HeldZ m Γ Z s)
     (hc : ∀ D w, FrameCaps m D w → FrameCaps m' D w) (hnv : m.nv ≤ m'.nv) : HeldZ m' Γ Z s where
-  caps p E hp hm d hd hb hh := hc _ _ (hz.caps p E hp hm d hd hb hh)
+  caps p E hp hm w hW := hc _ _ (hz.caps p E hp hm w hW)
   reach := hz.reach
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E hp hm v hv) hnv
   frames := hz.frames
@@ -350,7 +366,7 @@ theorem HeldZ.mapCaps {m m' : Mem} {Γ : Ctx} {Z : Var → List Var} {s : Stmt} 
 theorem HeldZ.toSkip {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s : Stmt} (hz : HeldZ m Γ Z s)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
     (hc : ∀ D w, FrameCaps m D w → FrameCaps m' D w) (hnv : m.nv ≤ m'.nv) : HeldZ m' Γ' Z .skip where
-  caps p E hp hm d hd hb hh := hc _ _ (hz.caps p E (hrb p E hp hm) hm d hd hb hh)
+  caps p E hp hm w hW := hc _ _ (hz.caps p E (hrb p E hp hm) hm w hW)
   reach _ _ _ _ v hv := by simp [Stmt.under, Stmt.killVars] at hv
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
   frames x m0 b h := by simp [Stmt.catchFrames] at h
@@ -509,8 +525,8 @@ theorem HeldZ.blockOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt}
 theorem HeldZ.catchROut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {m0 : Mem}
     (hz : HeldZ m Γ Z k)
     (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → x ∉ Z p)
-    (hfr : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → p < m0.nv → ∀ d ∈ E.vdeps,
-      d.kind.bound = .none → HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root) : HeldZ m Γ Z (.catchR x m0 k) where
+    (hfr : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → p < m0.nv → ∀ w, Watch E (Z p) w →
+      FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) w) : HeldZ m Γ Z (.catchR x m0 k) where
   caps := hz.caps
   reach p E hp hm v hv := by
     by_cases hpk : p ∈ k.spine
@@ -572,7 +588,7 @@ theorem HeldZ.leafR {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : S
     (hsp' : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s'.spine)
     (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v)
     (hc : ∀ D w, FrameCaps m D w → FrameCaps m' D w) : HeldZ m' Γ' Z s' where
-  caps p E hp hm d hd hb hh := hc _ _ (hz.caps p E (hrb p E hp hm) hm d hd hb hh)
+  caps p E hp hm w hW := hc _ _ (hz.caps p E (hrb p E hp hm) hm w hW)
   reach p E hp hm v hv hvZ := by
     have h0 := hrb p E hp hm
     rw [Stmt.under_off (hsp' p E h0 hm)] at hv

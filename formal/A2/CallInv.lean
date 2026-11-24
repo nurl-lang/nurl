@@ -643,8 +643,7 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
     (hi : Inv m Γ F (.letcall x f args k)) {m1 : Mem} (hb : BindParams m fn.params args m.nv 0 m1)
     {Z : Var → List Var} (hz : HeldZ m Γ Z (.letcall x f args k)) :
     HeldZ (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn))
-      (fun p => if m.nv ≤ p then (List.range m.nv).filter (fun v => !(inoutArgs fn.params args).contains v)
-        else Z p) (callStmt fn args m.nv x k) := by
+      (fun p => if m.nv ≤ p then callZ Γ fn args m.nv else Z p) (callStmt fn args m.nv x k) := by
   have hargs : ∀ a ∈ args, ∃ E, Γ a = some E ∧ E.live = true := fun a ha => by
     obtain ⟨i, hi', rfl⟩ := List.getElem_of_mem ha
     obtain ⟨Ea, hEa, hl, _⟩ := h.arg i (by rw [← h.len]; exact hi')
@@ -671,66 +670,65 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
       rw [h1'] at this; cases this
       rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)]
       exact Or.inl ⟨h.domlt _ _ h0, h0⟩
-  have hzL : ∀ v, v ∉ (List.range m.nv).filter (fun v => !(inoutArgs fn.params args).contains v) →
-      m.nv ≤ v ∨ v ∈ inoutArgs fn.params args := by
-    intro v hv
-    by_cases hvl : v < m.nv
-    · right
-      rcases Decidable.em (v ∈ inoutArgs fn.params args) with hio | hn
-      · exact hio
-      · exact absurd (List.mem_filter.mpr ⟨List.mem_range.mpr hvl, by simpa using hn⟩) hv
-    · exact Or.inl (Nat.le_of_not_lt hvl)
   refine
-    { caps := fun p E hp hm d hd hb' hh => ?_
+    { caps := fun p E hp hm w hW => ?_
       reach := fun p E hp hm v hv => ?_
       bound := fun p E hp hm v hv => ?_
       frames := fun x0 m0 b0 h0 => by rw [callStmt_catchFrames h k hk] at h0; cases h0 }
   · rcases hcases p E hp hm with ⟨hpl, h0⟩ | ⟨k', t, hk', rfl, rfl⟩
     · -- an old parameter: its frame's clause, kept (the arguments are its frame's)
-      simp only [Nat.not_le.mpr hpl, ↓reduceIte]
-      have hcw := hz.caps p E h0 hm d hd hb' hh
+      simp only [Nat.not_le.mpr hpl, ↓reduceIte] at hW ⊢
+      have hcw := hz.caps p E h0 hm w hW
       have hreach : ∀ v ∈ (Stmt.letcall x f args k).killVars, v ∉ Z p := fun v hv =>
         hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [Stmt.spine])]; exact hv)
       exact hb.frameCaps hi.toMInv hlt hargs
         (fun a ha o V hs => hcw a o V (hreach a (by simp [Stmt.killVars, ha])) hs)
         (fun v o V hv hs => hcw v o V hv hs)
-    · -- a new `in` parameter: every argument is clean for its anchor
-      simp only [show m.nv ≤ m.nv + 0 + k' by omega, ↓reduceIte]
-      have hkl : k' < fn.params.length := (List.getElem?_eq_some_iff.mp hk').1
-      have hvvm : args.getD k' 0 ∈ args := by
-        rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by rw [h.len]; exact hkl)]
-        exact List.getElem_mem _
-      -- the anchor is one the argument holds, of no integer
-      have hheld := hh.2.1
-      unfold callPe at hheld
-      rw [hk'] at hheld
-      simp only at hheld
-      by_cases hvt : (argE Γ (args.getD k' 0)).ty = .int
-      · rw [if_pos hvt] at hheld; simp at hheld
-      rw [if_neg hvt] at hheld
-      have hdv : d ∈ (argE Γ (args.getD k' 0)).vdeps := by
-        have hsub : ∀ {t : Ty} {ds : List Dep}, d ∈ typedDeps t ds → d ∈ ds := by
-          intro t ds hd'
-          unfold typedDeps at hd'
-          split at hd'
-          · rcases List.mem_append.mp hd' with h1 | h1
-            · exact (List.mem_filter.mp h1).1
-            · exact (List.mem_filter.mp h1).1
-          · exact (List.mem_filter.mp hd').1
-        exact List.mem_append_right _ (hsub hheld)
-      have hA : ∀ a ∈ args, ∀ o V, m.st a = some ⟨o, some V⟩ → LiveGood m d.root V := by
-        intro a ha o V hs
-        obtain ⟨Ea, hEa, hla⟩ := hargs a ha
-        by_cases hat : Ea.ty = .int
-        · exact hi.toMInv.goodInt hEa hla hat hs
-        · have hat' : (argE Γ a).ty ≠ .int := by simp [argE, hEa, hat]
-          have hnm := NamesFree.noMut h.nfree ha hat' hvvm hvt hdv hb'
-          simp only [argE, hEa, Option.getD_some] at hnm
-          exact hi.toMInv.goodOf hEa hla hs hnm
+    · -- a new `in` parameter: every argument is clean for its anchor, and for
+      -- every name of its frame list (one no argument may change by name)
+      simp only [show m.nv ≤ m.nv + 0 + k' by omega, ↓reduceIte] at hW ⊢
+      have hA : ∀ a ∈ args, ∀ o V, m.st a = some ⟨o, some V⟩ → LiveGood m w V := by
+        rcases hW with hwz | ⟨d, hd, hb', hh, rfl⟩
+        · intro a ha o V hs
+          obtain ⟨Ea, hEa, hla⟩ := hargs a ha
+          exact hi.toMInv.goodArg ha hEa hla hs (mem_callZ hwz).2.2
+        · have hkl : k' < fn.params.length := (List.getElem?_eq_some_iff.mp hk').1
+          have hvvm : args.getD k' 0 ∈ args := by
+            rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by rw [h.len]; exact hkl)]
+            exact List.getElem_mem _
+          -- the anchor is one the argument holds, of no integer
+          have hheld := hh.2.1
+          unfold callPe at hheld
+          rw [hk'] at hheld
+          simp only at hheld
+          by_cases hvt : (argE Γ (args.getD k' 0)).ty = .int
+          · rw [if_pos hvt] at hheld; simp at hheld
+          rw [if_neg hvt] at hheld
+          have hdv : d ∈ (argE Γ (args.getD k' 0)).vdeps := by
+            have hsub : ∀ {t : Ty} {ds : List Dep}, d ∈ typedDeps t ds → d ∈ ds := by
+              intro t ds hd'
+              unfold typedDeps at hd'
+              split at hd'
+              · rcases List.mem_append.mp hd' with h1 | h1
+                · exact (List.mem_filter.mp h1).1
+                · exact (List.mem_filter.mp h1).1
+              · exact (List.mem_filter.mp hd').1
+            exact List.mem_append_right _ (hsub hheld)
+          have hA : ∀ a ∈ args, ∀ o V, m.st a = some ⟨o, some V⟩ → LiveGood m d.root V := by
+            intro a ha o V hs
+            obtain ⟨Ea, hEa, hla⟩ := hargs a ha
+            by_cases hat : Ea.ty = .int
+            · exact hi.toMInv.goodInt hEa hla hat hs
+            · have hat' : (argE Γ a).ty ≠ .int := by simp [argE, hEa, hat]
+              have hnm := NamesFree.noMut h.nfree ha hat' hvvm hvt hdv hb'
+              simp only [argE, hEa, Option.getD_some] at hnm
+              exact hi.toMInv.goodOf hEa hla hs hnm
+          exact hA
       exact hb.frameCaps hi.toMInv hlt hargs hA (fun v o V hv hs => by
-        rcases hzL v hv with hge | hio
+        rcases not_mem_callZ hv with hge | hio | hmn
         · exact absurd (hi.toMInv.nvSt v (by rw [hs]; rfl)) (Nat.not_lt.mpr hge)
-        · exact hA v (inoutArgs_sub _ _ h.len _ hio) o V hs)
+        · exact hA v (inoutArgs_sub _ _ h.len _ hio) o V hs
+        · exact hi.toMInv.goodMut h.nfree hmn hs w)
   · rcases hcases p E hp hm with ⟨hpl, h0⟩ | ⟨k', t, hk', rfl, rfl⟩
     · simp only [Nat.not_le.mpr hpl, ↓reduceIte]
       -- an old parameter: off the frame's spine, so the whole statement; its
@@ -758,11 +756,10 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
       have hpw : m.nv + 0 + k' ∈ wrapSpine fn.params m.nv 0 := mem_wrapSpine_of hk' (fun b h => by cases h)
       intro hvz
       rcases callStmt_under fn args m.nv x k hpw v hv with hge | hio
-      · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hge (List.mem_range.mp (List.mem_filter.mp hvz).1))
-      · have := (List.mem_filter.mp hvz).2
-        simp [hio] at this
+      · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hge (mem_callZ hvz).1)
+      · exact (mem_callZ hvz).2.1 hio
   · split at hv
-    · exact Nat.lt_of_lt_of_le (List.mem_range.mp (List.mem_filter.mp hv).1) (by simp [callMem])
+    · exact Nat.lt_of_lt_of_le (mem_callZ hv).1 (by simp [callMem])
     · rename_i hpl
       rcases hcases p E hp hm with ⟨_, h0⟩ | ⟨k', _, _, rfl, _⟩
       · exact Nat.lt_of_lt_of_le (hz.bound p E h0 hm v hv) (by simp [callMem])
@@ -938,9 +935,9 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       unfold callIn resFrame
       split <;> simp [Stmt.catchFrames, catchFrames_wrap, hb']
     have hZ : HeldZ (callMem m m fn x) ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) Z (recStmt fn m.nv x m0 k) := {
-      caps := fun p E hp' hm' d hd hb' hh => by
+      caps := fun p E hp' hm' w hW => by
         obtain ⟨_, h0⟩ := hrbF p E hp' hm'
-        exact (((hz.caps p E h0 hm' d hd hb' hh).set_none x _).set_none _ _).of_st rfl
+        exact (((hz.caps p E h0 hm' w hW).set_none x _).set_none _ _).of_st rfl
       reach := fun p E hp' hm' v hv => by
         obtain ⟨_, h0⟩ := hrbF p E hp' hm'
         rw [Stmt.under_off (hspR p E h0)] at hv
@@ -958,12 +955,12 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       bound := fun p E hp' hm' v hv => by
         obtain ⟨_, h0⟩ := hrbF p E hp' hm'
         exact Nat.lt_of_lt_of_le (hz.bound p E h0 hm' v hv) (by simp [callMem])
-      frames := fun x0 m00 b0 hx0 p E hp' hm' _ _ d hd hb' hh => by
+      frames := fun x0 m00 b0 hx0 p E hp' hm' _ _ w hW => by
         simp only [recStmt, Stmt.catchFrames, hcfI, List.mem_singleton, Prod.mk.injEq] at hx0
         obtain ⟨h1, h2, -⟩ := hx0
         rw [h1, h2]
         obtain ⟨_, h0⟩ := hrbF p E hp' hm'
-        have hcw := hz.caps p E h0 hm' d hd hb' hh
+        have hcw := hz.caps p E h0 hm' w hW
         refine (hcw.set (y := x) (o := false) (v := some (.int 1)) (fun V e => ?_)).of_st
           (by show ((m.set x ⟨fn.resOwn, none⟩).set x _).st = _; rw [Mem.set_set])
         cases e

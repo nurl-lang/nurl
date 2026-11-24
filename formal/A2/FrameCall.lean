@@ -90,4 +90,78 @@ theorem MInv.goodInt {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {a : Var} {E : Entry}
     rw [ht] at hw
     exact ⟨valCapsInp_of_names (hw.names_nil_fn rfl) w, fun c hc => (hw.href_sub_false hc).elim⟩
 
+/-- A type with no view holds no closure that holds names. -/
+theorem Ty.hasFn_of_holdsView : ∀ {t : Ty}, t.holdsView = false → t.hasFn = false := by
+  intro t
+  induction t <;> simp_all [Ty.holdsView, Ty.hasFn]
+
+/-- AGORA-937 B4: **a call's frame list**: the caller's bindings, but the
+    `inout` arguments and the roots of the arguments' names that may change
+    their binding (`mutNames`): what the frame may change. -/
+def callZ (Γ : Ctx) (fn : Fn) (args : List Var) (base : Nat) : List Var :=
+  (List.range base).filter (fun v =>
+    !(inoutArgs fn.params args).contains v && !((mutNames Γ args).map (·.root)).contains v)
+
+theorem not_mem_callZ {Γ : Ctx} {fn : Fn} {args : List Var} {base : Nat} {v : Var}
+    (hv : v ∉ callZ Γ fn args base) :
+    base ≤ v ∨ v ∈ inoutArgs fn.params args ∨ v ∈ (mutNames Γ args).map (·.root) := by
+  by_cases hvl : v < base
+  · right
+    rcases Decidable.em (v ∈ inoutArgs fn.params args) with hio | hn
+    · exact Or.inl hio
+    rcases Decidable.em (v ∈ (mutNames Γ args).map (·.root)) with hmn | hn'
+    · exact Or.inr hmn
+    exact absurd (List.mem_filter.mpr ⟨List.mem_range.mpr hvl, by simp_all⟩) hv
+  · exact Or.inl (Nat.le_of_not_lt hvl)
+
+theorem mem_callZ {Γ : Ctx} {fn : Fn} {args : List Var} {base : Nat} {v : Var}
+    (hv : v ∈ callZ Γ fn args base) :
+    v < base ∧ v ∉ inoutArgs fn.params args ∧ v ∉ (mutNames Γ args).map (·.root) := by
+  obtain ⟨h1, h2⟩ := List.mem_filter.mp hv
+  refine ⟨List.mem_range.mp h1, fun h => ?_, fun h => ?_⟩ <;> simp_all
+
+/-- What an argument holds by a name that may change its binding is among
+    the call's `mutNames`. -/
+theorem mutNames_of_held {Γ : Ctx} {args : List Var} {a : Var} {d0 : Dep} (ha : a ∈ args)
+    (hat : (argE Γ a).ty ≠ .int) (hd0 : d0 ∈ (argE Γ a).held) (hb : d0.kind.bound ≠ .none) :
+    d0 ∈ mutNames Γ args := by
+  have hname : d0.kind.isName = true := by
+    cases hk : d0.kind <;> simp_all [Kind.bound, Kind.isName]
+  simp only [mutNames, List.mem_filter]
+  refine ⟨?_, by simpa using hb⟩
+  simp only [argNames, List.mem_flatMap]
+  refine ⟨a, ha, ?_⟩
+  simp only [hat, ↓reduceIte, nameDeps, List.mem_filter]
+  exact ⟨by simp [Entry.vdeps, hd0], hname⟩
+
+/-- **An argument's value meets the clause at a root outside the call's
+    `mutNames`**: it holds it by no name that may change it. -/
+theorem MInv.goodArg {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {args : List Var} {a : Var} {E : Entry}
+    {o : Bool} {V : Val} {w : Var} (ha : a ∈ args) (hE : Γ a = some E) (hl : E.live = true)
+    (hs : m.st a = some ⟨o, some V⟩) (hw : w ∉ (mutNames Γ args).map (·.root)) : LiveGood m w V := by
+  by_cases hat : E.ty = .int
+  · exact hM.goodInt hE hl hat hs
+  · refine hM.goodOf hE hl hs fun d0 hd0 hr => ?_
+    rcases Decidable.em (d0.kind.bound = .none) with h | h
+    · exact h
+    · exact absurd (List.mem_map.mpr ⟨d0, mutNames_of_held ha (by simp [argE, hE, hat])
+        (by simp [argE, hE, hd0]) h, hr⟩) hw
+
+/-- **A root of the call's `mutNames` holds clean data**: an owned `Vec`
+    of a type with no view (`NamesFree`), which holds no package and no
+    handle. -/
+theorem MInv.goodMut {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {F : List Var} {ps : List (PMode × Ty)}
+    {args : List Var} (hnf : NamesFree Γ F ps args) {v : Var} (hv : v ∈ (mutNames Γ args).map (·.root))
+    {o : Bool} {V : Val} (hs : m.st v = some ⟨o, some V⟩) (w : Var) : LiveGood m w V := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hv
+  obtain ⟨hcan, ⟨sv, hty, hsv⟩, _⟩ := hnf d hd
+  cases hE : Γ d.root with
+  | none => simp [argE, hE, intE] at hty
+  | some E =>
+    simp only [argE, hE, Option.getD_some] at hcan hty
+    have hf : E.ty.hasFn = false := by rw [hty]; exact Ty.hasFn_of_holdsView (t := .vec sv) hsv
+    obtain ⟨hn, hh⟩ := hM.own_noFn hE hcan.ownSlot hf hs
+    exact ⟨valCapsInp_of_names hn w, fun c hc => (hh c hc).elim⟩
+
+
 end A2
