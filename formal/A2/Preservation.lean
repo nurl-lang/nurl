@@ -4910,7 +4910,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hmq' : E0.mode = .rootb := by simpa [rerootE] using hmq
           rw [rerootE_rootb hanch hpF (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hpF) _ h0 hmq'
             (hpn q E0 h0 hmq')]
-          exact ⟨h0, by simp [Stmt.spine, hqp]⟩) (fun w hw => hw.remove p)
+          exact ⟨h0, by simp [Stmt.spine, hqp]⟩) (fun w hw => hw.remove (fun v E1 h hl => by
+            obtain ⟨_, E0, h0, rfl⟩ := hrel v E1 h
+            exact ⟨E0, h0, hl⟩) p)
       refine ⟨exitRoot p (Ep.path ++ Ep.held) Γ, ?_, Inv.ofLeaf hcaps hi hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove_bor hi.cover hsl) trivial, by simp,
         ⟨?_, ?_, (DKeep.refl Γ []).exitRoot _ fun v E hv hd hos hn hvp _ d hdd hnm h =>
