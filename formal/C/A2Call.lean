@@ -211,7 +211,7 @@ theorem callB2_sound {P : Prog} {D : List Var} {Γ : Ctx} {F : List Var} {f : Na
           simp only [Bool.or_eq_true] at hrg
           rcases hrg with h0 | h0
           · exact absurd ht (noThruB_sound h0)
-          · exact regionsB_sound h0)⟩, fn, hfn, rfl⟩
+          · exact Or.inl (regionsB_sound h0))⟩, fn, hfn, rfl⟩
       have ha := List.all_eq_true.mp hall i (List.mem_range.mpr hi)
       unfold argOK2 at ha
       rw [List.getElem?_eq_getElem hi] at ha

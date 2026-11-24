@@ -1739,7 +1739,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
           · rename_i hk
             simp only [Option.some.injEq] at h; subst h
             obtain ⟨t0, s0⟩ := ih (ξ := .none) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
-            exact ⟨.rbind hE hm hl (anchoredB_sound ha) hpF t0 (rbindKeptB_sound hk),
+            exact ⟨.rbind hE hm hl ((anchoredB_sound ha).toS _ _) hpF t0 (rbindKeptB_sound hk),
               supported2_exitRoot s0 p _⟩
           · cases h
         · cases h
