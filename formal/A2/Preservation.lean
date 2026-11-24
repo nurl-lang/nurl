@@ -4451,7 +4451,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
       refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hiS hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove hiS.cover hsl hd) trivial, by simp, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
-        fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
+        fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))],
+        Z, hz.toSkip (fun p E' hp hm => by
+          obtain ⟨_, E, hE, rfl⟩ := hrel p E' hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF _ _ hmn (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) hE hm]
+          exact hE) (fun _ _ hcw => (hcw.of_st rfl).remove x) (by simp), ZKeep.refl _ _⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · exact StmtT.skip.weakenOut hinv.wf hinv.names (Or.inr (hw.exitScope x hpx.2.2))
@@ -4624,7 +4629,23 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.views⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.revive x), hfin, ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the slots kept; `x` is no borrowed parameter)
+        have hxnr : ∀ p E, Γ p = some E → E.mode = .rootb → p ≠ x := fun p E hp hm h => by
+          subst h; rw [hx] at hp; cases hp; rw [hmo] at hm; cases hm
+        refine hz.leafR (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h)
+          (by simp [Stmt.catchFrames]) (Nat.le_succ _) (fun p E hp hm => ?_)
+          (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h) (fun v hv => ?_)
+          (fun _ _ hcw => hcw.of_st rfl)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.revive, hmo] at hm
+          simpa only [setE, upd_ne _ _ hpx] using hp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hv
+          rcases hv with rfl | rfl | rfl
+          · exact Or.inl (by simp [Stmt.killVars])
+          · exact Or.inr (Nat.le_refl _)
+          · exact Or.inl (by simp [Stmt.killVars])
       · exact
         { toMInv := hm'
           nvS := fun w hw => by
