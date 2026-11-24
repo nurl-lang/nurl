@@ -4045,15 +4045,17 @@ class FnCheck:
 
     def carry_bind_lent(self, vid, rv):
         """`: K k ( g x )`: a binding never given another value, of a call
-        that lends `x` back whole and nothing else on every run, is handed
-        back as the call is (`^ k` as `^ ( g x )`: nurlc's __bind_hand,
-        AGORA-995)."""
+        that lends `x` back whole and nothing else, is handed back as the
+        call is (`^ k` as `^ ( g x )`: nurlc's __bind_hand, AGORA-995) - on
+        the runs it lent, where the call answers per call."""
         if (rv is None or rv[0] != "use" or rv[1][0] != "v" or rv[1][2]
                 or self.fn.vars[vid].kind != "local" or self.fn.vars[vid].mut):
             return
         src = rv[1][1]
-        if self.call_lent_only.get(src) and src not in self.call_mixed:
+        if self.call_lent_only.get(src):
             self.bind_lent[vid] = list(self.call_lent[src])
+            if src in self.call_mixed:
+                self.call_mixed.add(vid)
 
     def share_handle_at(self, place):
         """Is the value at `place` a library handle whose copy is a share
@@ -5315,7 +5317,10 @@ class FnCheck:
                 (a,) = self.call_lent[op[1]] if op[1] in self.call_lent else self.bind_lent[op[1]]
                 cur = st.vals.get(op[1])
                 xv = st.vals.get(a[1]) if a[0] == "v" and not a[2] else None
-                if (cur is not None and cur.own == "L" and xv is not None and xv.own == "O"
+                # (a binding of a call fresh on some runs owns per call -
+                # `O` with the call's loans - and lends on the others)
+                if (cur is not None and (cur.own == "L" or (cur.own == "O" and cur.loans and op[1] in self.call_mixed))
+                        and xv is not None and xv.own == "O"
                         and self.fn.vars[a[1]].kind == "local" and (a[1], ()) in cur.alias):
                     moved = self.move_out(st, a[1], ln)
                     if op[1] in self.call_mixed:
@@ -5332,7 +5337,7 @@ class FnCheck:
                     held = (set(cur.held) - hmine) | (set(moved.held) if mine or not hmine else set())
                     for hp in {hp for hp, _ in hmine}:
                         held |= hroot(moved.held, hp)
-                    st.vals[op[1]] = AV("O" if not (cur.loans - mine) else "L", cur.loans - mine,
+                    st.vals[op[1]] = AV("O" if not (cur.loans - mine) or cur.own == "O" else "L", cur.loans - mine,
                                         cur.alias - {(a[1], ())}, frozenset(held))
             if op is not None:
                 before = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None

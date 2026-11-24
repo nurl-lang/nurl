@@ -1,0 +1,3 @@
+### Fixed
+
+- **A `?` / `??` a function falls off with is the same as `^` of it, where its value has no copy** (AGORA-866). `@ pick D x b c → D { : D l … ? c x l }`, with `D` a type with no copy, was refused ("a borrowed 'D' would have to be copied here"), while `^ ? c x l` was accepted and runs clean, though both compile to the same IR. The fall-off join now returns the way the `^` one does: the local an arm selects moves out to the caller on that path. This holds in closure bodies too. Where `^` refuses, the fall-off form still refuses: under a `;` defer, and when an arm hands back a field of a local.
