@@ -51492,10 +51492,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ? ! ( __clone_supported rlt g_root_syms ) {
         ? ( __nc_drop_ty rlt ) { ^ T } {}
         ? != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) ) { ^ T } {}
-        // (…an option of an option, which has no copy: by what its payload
-        // owns, below — agora #475. Only that: any other wrap with no copy
-        // answers as it did.)
-        ? | == 0 ( nurl_str_starts rlt `{ i1, ` ) == 0 ( nurl_str_starts ( __wrap_part_key rlt 0 ) `{ i1, ` ) { ^ F } {}
+        // (…an option or result with no copy — of an option, agora #475; of
+        // a Vec of values with no copy, AGORA-999 — by what its sides own,
+        // below: a function handing back a parameter on one path and a
+        // fresh value on another answers which, per call. Taken for one
+        // that always lends, the fresh value leaked.)
+        ? == 0 ( nurl_str_starts rlt `{ i1, ` ) { ^ F } {}
     } {}
     ? != 0 ( nurl_str_starts rlt `{ i1, ` ) {
         // (A side that is an option itself — `? ?String` — by what it owns:
