@@ -1378,3 +1378,23 @@ Proved (wip/t937-b4-z, 9961c3798): `FrameCaps` (`set`, `remove`, `mono`, `reads`
    At `cloCase`, the receiver `c` is in the domain, so its `inout` captures are outside `Z p`: `reach` holds.
 
 Both are local to `FrameCaps` / `CallH.heldZ`. `BindParams.frameCaps` gets the capture half from the arguments, and the leaf lemmas from `CapsOK` (`frameCapsSet`'s `pack` case).
+
+**Revision (2026-11-25): the `cloCase` fix, measured.** Three routes were tried or worked through. The facts behind them:
+- Caller bindings stay live in the callee's context (`Entry.clean` keeps `live`).
+- `reach` is established from the syntax of the statement: `killVars_callIn` gives only fresh names or `inout` arguments.
+- `killVars` contains `r.vars`. So every capture a closure literal makes, `inout` ones included, is a kill site, and `reach` puts it outside `Z p` with no context at all.
+
+1. **`reach` exempts owned data bindings (`v ∉ Z p ∨ OwnData Γ v`).** Tried; stashed as `t937b4 OwnData-in-reach attempt`.
+   - The library side builds. `FrameCaps.goodAt` gives `LiveGood` from `MInv.own_noFn`.
+   - Every `HeldZ` construction then has to carry `OwnData` from `Γ` to `Γ'`. Leaf steps get it from `CtxRel.ownData`, and `sub` from `Weaker.ownData`.
+   - It breaks at `seqOut` and the unwind cases. There a continuation's kill site may be a binder on the running spine, and `Keep` says nothing about spine binders. Dropped.
+2. **The frame list is the typing's (`Z p := F ++ zN`).** Not needed for closure literals (see the facts above). It would also weaken the call-time clause to "every binding outside the frozen list", which needs `NamesFree` over all caller bindings.
+3. **Chosen: `FrameCaps` also carries `InoutOff D V`.** Every package in a value outside `D` captures `inout` only names outside `D`.
+   - It needs no context.
+   - At `cloCase`, `c ∉ Z p` comes from `reach` (`c` is a kill site of `callc`), so `c`'s value gives its `inout` captures `∉ Z p`.
+   - Preservation:
+     - closure literals: captures are kill sites, so `reach` covers them;
+     - values copied from a binding: read names are kill sites, so they are outside `D` and already `InoutOff`;
+     - values reached through a handle: the same second clause as `LiveGood`, for nodes of owned trees;
+     - at a call, `BindParams` copies the arguments' values. The arguments sit outside the old frames' lists, and for the new frame the `inout` captures of a closure argument are roots of `mutNames`, which `Z'` must also leave out (with `x`).
+   - Open question: can a node of an owned tree (a `vec s`, `s.holdsView = false`) hold a package that captures `inout`? If `Ty.fn`'s `views` flag excludes this, the handle clause is vacuous for packages.
