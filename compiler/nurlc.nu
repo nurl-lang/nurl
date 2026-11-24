@@ -277,9 +277,7 @@ $ `stdlib/core/vec.nu`
 : ~ i g_argtmp_inert 0  // the argument mem_arg_temps just read is an inert literal (AGORA-995)
 : ~ i g_llh_set 0  // `__last_local_hand__` holds a record (mem_local_lend_of)
 : ~ i g_coa_set 0  // `__last_call_owns_all__` holds a callee (mem_own_lendback)
-: ~ i g_lentp_memo 0  // mem_fn_lent_params' answers per compiled callee, while bodies are compiled
-: ~ i g_lentp_memo_on 1  // …until module end, whose resolutions change them
-: ~ i g_scalarp_n 0  // how many functions have a g_fn_scalarp entry (mem_fn_lent_params asks none before the first)
+: ~ i g_scalarp_n 0  // how many functions have a `scalarp##` (mem_fn_lent_params asks none before the first)
 : ~ i g_lit_inert 0  // the literal just built holds nothing a drop releases: every field a value of a type with no drop (AGORA-995)
 : ~ i g_nc_hand 0  // the lend __park_nc_local_lend parks is handed over where it is whole (__ret_local_hand)
 : ~ i g_agg_lit_lends 0  // the literal being built keeps a field as the lend it is - no copy, the return answers per run (CORE_VF_AGGLEND, agora #907)
@@ -2619,7 +2617,6 @@ unsafe @ agg_field_count i syms s ot → i {
 // sink it is not a borrow-checker move — a handle stays readable through its
 // alias, as it always has.
 : ~ i g_fn_keeps 0
-: ~ i g_fn_scalarp 0  // fname -> its scalar parameters a lend channel names, safe code (mem_fn_lent_params skips them; AGORA-995)
 
 // Per-function SHARE-KEEP map (agora #793): indices of the parameters a
 // share of which the body puts where it outlives the call — an `rc_clone`
@@ -30456,20 +30453,7 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 // whole or in part, directly, through a callee, or as any address its
 // result may carry (the returned-parameter summary: `vec_get` hands back
 // an element read through the vector's buffer).
-@ mem_fn_lent_params i syms s fname → s {
-    // (While bodies are compiled a compiled callee's channels stand still -
-    // what changes them runs at module end, which turns this off: asked once
-    // per callee, not once per call. `=` marks an answer that is empty.)
-    ? & != 0 g_lentp_memo_on != 0 ( nurl_sym_len2 syms fname `__body_done` ) {
-        ? == 0 g_lentp_memo { = g_lentp_memo ( nurl_sym_new ) } {}
-        : s m ( nurl_sym_get g_lentp_memo fname )
-        ? != 0 ( nurl_str_len m ) { ^ ( nurl_str_slice m 1 - ( nurl_str_len m ) 1 ) } {}
-        : s r ( __fn_lent_params_of syms fname T )
-        ( nurl_sym_def g_lentp_memo fname ( nurl_str_cat `=` r ) )
-        ^ r
-    } {}
-    ^ ( __fn_lent_params_of syms fname T )
-}
+@ mem_fn_lent_params i syms s fname → s { ^ ( __fn_lent_params_of syms fname T ) }
 
 // …`scal` F: a scalar parameter counted too, as any other — what the
 // `= o ( pick o other k )` refusal asks (resolve_opt_pick_lends), whose
@@ -30477,7 +30461,7 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 // probe is refused through it).
 @ __fn_lent_params_of i syms s fname b scal → s {
     // (…not a scalar parameter of safe code, which carries no address: what
-    // it is "lent" as reaches nothing - g_fn_scalarp, AGORA-995.)
+    // it is "lent" as reaches nothing - `scalarp##`, AGORA-995.)
     // (Most callees lend nothing: every channel empty is answered before
     // anything is built.)
     : s __ra ( nurl_sym_get g_fn_ret_alias fname )
@@ -30486,7 +30470,7 @@ unsafe @ __fn_lends_arg s fname s ai → b {
     : s __rpm ( nurl_sym_get g_fn_ret_param fname )
     : s __rd ( nurl_sym_get g_pending_impl ( nurl_str_cat `retread##` fname ) )
     ? & & & & == 0 ( nurl_str_len __ra ) == 0 ( nurl_str_len __rl ) == 0 ( nurl_str_len __rp ) == 0 ( nurl_str_len __rpm ) == 0 ( nurl_str_len __rd ) { ^ ( nurl_str_cat `` `` ) } {}
-    : s __scp ? & scal != 0 g_scalarp_n ( nurl_sym_get g_fn_scalarp fname ) ``
+    : s __scp ? & scal != 0 g_scalarp_n ( nurl_sym_get g_pending_impl ( nurl_str_cat `scalarp##` fname ) ) ``
     : s own ? == 0 ( nurl_str_len __scp ) ( nurl_str_cat3 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) ) ( nurl_str_cat4 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) ( nurl_str_cat ` ` __scp ) )
     : ~ s rest ( nurl_str_cat4 __ra ` ` __rl ( nurl_str_cat4 ` ` __rp ` ` ( nurl_str_cat3 __rpm ` ` __rd ) ) )
     : ~ s out ``
@@ -99691,8 +99675,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : s __sc_ln ( __word_union ( __word_union ( nurl_sym_get syms `__fn_ret_param__` ) ( nurl_sym_get g_fn_ret_param fname ) ) ( __word_union ( nurl_sym_get syms `__fn_retpart__` ) ( nurl_sym_get syms `__fn_retlend__` ) ) )
     : s __sc_ps ? != 0 ( nurl_sym_len syms `__fn_ret_borrow_x__` ) __sc_ps0 ( __words_common __sc_ps0 __sc_ln )
     ? & != 1 g_rpg_on != 0 ( nurl_str_len __sc_ps )
-    { ? == 0 g_fn_scalarp { = g_fn_scalarp ( nurl_sym_new ) } {}
-        ( nurl_sym_def g_fn_scalarp fname __sc_ps ) = g_scalarp_n + g_scalarp_n 1 }
+    { ( nurl_sym_def g_pending_impl ( nurl_str_cat `scalarp##` fname ) __sc_ps ) = g_scalarp_n + g_scalarp_n 1 }
     {}
     // …and the views it hands back as they came (`^ p`, a view parameter):
     // its result is what that argument is (retpass, bck_sx_ev).
@@ -123698,9 +123681,6 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         // program refer to (lazy_flush).
         ( lazy_flush syms cg )
         ( emit_pending_drop_graphs syms )
-        // (…and what is lent is asked afresh from here: module end changes it.)
-        = g_lentp_memo_on 0
-        ? != 0 g_lentp_memo { ( nurl_sym_free g_lentp_memo ) = g_lentp_memo 0 } {}
         // Every body compiled: resolve the raw provenance graph, then close
         // the mutation summaries, before anything reads them.
         ( __clo_nodes_close )
@@ -124065,8 +124045,6 @@ unsafe @ main → i {
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_keeps ( nurl_sym_new )
-    // (Made at its first entry, as g_fn_rckeeps.)
-    = g_fn_scalarp 0
     = g_scalarp_n 0
     // (Made at the first share-keep a function reports, __rck_publish: most
     // modules have none, and a table is 36 KB before its first entry.)
