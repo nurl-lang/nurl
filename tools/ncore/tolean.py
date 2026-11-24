@@ -364,9 +364,13 @@ def parse(text):
             cur["body"].append(Line(raw.strip(), len(cur["body"])))
     # AGORA-994: a parameter the walk inferred consumed (`sink=` of its
     # summary: handed on to a `sink`, bck_record_inferred_sink) is one the
-    # callee takes over, as a declared `sink` is: nurlc's caller drops none
+    # callee takes over, as a declared `sink` is: nurlc's caller drops none.
+    # So is one it keeps (`keeps=`: stored on some path, g_fn_keeps): nurlc
+    # takes `sink` and `keeps` together as what the callee owns, and the
+    # callee releases it on the paths that do not store it (its drop flag)
     for fn in fns:
-        for w in SUMS.get(fn["name"], {}).get("sink", "").split():
+        sm = SUMS.get(fn["name"], {})
+        for w in (sm.get("sink", "") + " " + sm.get("keeps", "")).split():
             if w.isdigit() and int(w) < fn["np"] and not fn["flags"].get(int(w), 0) & 2:
                 fn["flags"][int(w)] = fn["flags"].get(int(w), 0) | 4
     return fns
