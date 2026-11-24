@@ -352,7 +352,7 @@ def parse(text):
             cur = None
         elif cur is not None:
             cur["body"].append(Line(raw.strip(), len(cur["body"])))
-                # AGORA-994: a parameter the walk inferred consumed (`sink=` of its
+    # AGORA-994: a parameter the walk inferred consumed (`sink=` of its
     # summary: handed on to a `sink`, bck_record_inferred_sink) is one the
     # callee takes over, as a declared `sink` is: nurlc's caller drops none
     for fn in fns:
