@@ -161,15 +161,35 @@ HTML
     (cd "$WORK/a" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
     HPID=$!
     for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$PORT/tileset.json" && break; sleep 0.1; done
-    title=$(timeout 120 google-chrome --headless=new --enable-unsafe-swiftshader --use-angle=swiftshader --no-sandbox \
-        --user-data-dir="$WORK/chrome" --virtual-time-budget=60000 --dump-dom "http://127.0.0.1:$PORT/cesium.html" 2>/dev/null \
-        | sed -n 's:.*<title>\(cesium [^<]*\)</title>.*:\1:p' | head -1)
+    # the page reports in its title once the first view's tiles are in; a
+    # DevTools client waits for that in real time (a --dump-dom under a
+    # virtual-time budget returns before Cesium's workers are done)
+    cat > "$WORK/cdp.mjs" <<'JS'
+import { spawn } from "node:child_process";
+const [url, prof] = process.argv.slice(2);
+const port = 9300 + Math.floor(Math.random() * 500);
+const chrome = spawn("google-chrome", ["--headless=new", "--enable-unsafe-swiftshader", "--use-angle=swiftshader",
+  "--no-sandbox", `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, url], { stdio: "ignore" });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let title = "";
+try {
+  for (let i = 0; i < 360 && !title.startsWith("cesium "); i++) {
+    try {
+      const pages = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+      title = (pages.find((p) => p.type === "page") || {}).title || "";
+    } catch {}
+    await sleep(250);
+  }
+} finally { chrome.kill(); }
+console.log(title);
+JS
+    title=$(timeout 120 node "$WORK/cdp.mjs" "http://127.0.0.1:$PORT/cesium.html" "$WORK/chrome" 2>"$WORK/cesium.err")
     kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null
     case "$title" in
         "cesium loaded="*" failed=0 points="*) [ "$(echo "$title" | sed 's/.*loaded=\([0-9]*\).*/\1/')" -gt 0 ] \
             && echo "PASS CesiumJS opens the tileset at its defaults — $title" \
             || { echo "FAIL CesiumJS loaded nothing — $title"; fails=$((fails + 1)); } ;;
-        *) echo "FAIL CesiumJS: ${title:-no answer}"; fails=$((fails + 1)) ;;
+        *) echo "FAIL CesiumJS: ${title:-no answer}"; grep -v "^$" "$WORK/cesium.err" | tail -3; fails=$((fails + 1)) ;;
     esac
 else
     echo "SKIP CesiumJS (VALIDATORS with node_modules/cesium, and chrome)"
