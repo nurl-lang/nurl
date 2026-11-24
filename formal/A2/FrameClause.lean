@@ -26,15 +26,15 @@ theorem Stmt.headCallc_killVars : ∀ (s : Stmt), ∀ c ∈ s.headCallc, c ∈ s
   | .loop _, c, h | .takeB .., c, h => by simp [Stmt.headCallc] at h
 
 
-/-- The running `catchR` frames on a statement's spine: each one's binding and
-    remembered store. -/
-def Stmt.catchFrames : Stmt → List (Var × Mem)
+/-- The running `catchR` frames on a statement's spine: each one's binding,
+    remembered store and body. -/
+def Stmt.catchFrames : Stmt → List (Var × Mem × Stmt)
   | .seq a _ => a.catchFrames
   | .scope _ s => s.catchFrames
   | .rbind _ s => s.catchFrames
   | .scopeD _ _ s => s.catchFrames
   | .scopeL _ _ _ s => s.catchFrames
-  | .catchR x m0 s => (x, m0) :: s.catchFrames
+  | .catchR x m0 s => (x, m0, s) :: s.catchFrames
   | .frozen _ s => s.catchFrames
   | .block s => s.catchFrames
   | _ => []
@@ -69,7 +69,8 @@ structure HeldZ (m : Mem) (Γ : Ctx) (Z : Var → List Var) (s : Stmt) : Prop wh
             FrameCaps m (Z p) d.root
   reach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (s.under p).killVars, v ∉ Z p
   bound : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ Z p, v < m.nv
-  frames : ∀ x m0, (x, m0) ∈ s.catchFrames → ∀ p E, Γ p = some E → E.mode = .rootb → p < m0.nv →
+  frames : ∀ x m0 b, (x, m0, b) ∈ s.catchFrames → ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ b.spine →
+            p < m0.nv →
             ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root
 
 /-- **No call through a package hands a held anchor's root to an `inout`
@@ -261,7 +262,7 @@ theorem HeldZ.leaf {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : St
     · exact hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [hsp])]; exact h) hvZ
     · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt h (hz.bound p E h0 hm v hvZ))
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
-  frames x m0 h := by rw [hcf] at h; cases h
+  frames x m0 b h := by rw [hcf] at h; cases h
 
 
 /-- The frame lists a step keeps: every old borrowed parameter's. -/
@@ -278,7 +279,7 @@ theorem HeldZ.of_rootb {m : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s : Stmt
   caps p E hp hm := hz.caps p E (hrb p E hp hm) hm
   reach p E hp hm := hz.reach p E (hrb p E hp hm) hm
   bound p E hp hm := hz.bound p E (hrb p E hp hm) hm
-  frames x m0 hx p E hp hm := hz.frames x m0 hx p E (hrb p E hp hm) hm
+  frames x m0 b hx p E hp hm := hz.frames x m0 b hx p E (hrb p E hp hm) hm
 
 /-- ... and the frame lists kept, read back. -/
 theorem ZKeep.back {Γ Γ0 : Ctx} {Z Z' : Var → List Var} (h : ZKeep Γ0 Z Z')
@@ -298,7 +299,7 @@ theorem HeldZ.restmt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s s' : Stmt} (
     rw [Stmt.under_off (by simp [hsp'])] at hv
     exact hz.reach p E hp hm v (by rw [Stmt.under_off (by simp [hsp])]; exact hkv v hv)
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (hcf _ hx)
+  frames x m0 b hx := hz.frames x m0 b (hcf _ hx)
 
 
 /-- A source statement runs no catch frame. -/
@@ -321,7 +322,7 @@ theorem HeldZ.seqOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {a b : Stmt} (h
       · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpa]; exact hv)
       · exact hb p E hp hm hpa v hv
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
+  frames x m0 b hx := hz.frames x m0 b (by simpa [Stmt.catchFrames] using hx)
 
 
 /-- **The node a binding of the frame reaches** (itself, or through its
@@ -352,7 +353,7 @@ theorem HeldZ.toSkip {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s : Stm
   caps p E hp hm d hd hb hh := hc _ _ (hz.caps p E (hrb p E hp hm) hm d hd hb hh)
   reach _ _ _ _ v hv := by simp [Stmt.under, Stmt.killVars] at hv
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
-  frames x m0 h := by simp [Stmt.catchFrames] at h
+  frames x m0 b h := by simp [Stmt.catchFrames] at h
 
 
 
@@ -366,7 +367,7 @@ theorem HeldZ.seqIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {a b : Stmt} (hz
     · rw [Stmt.under_off hpa] at hv
       exact hz.reach p E hp hm v (by simp [Stmt.under, hpa, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
+  frames x m0 b hx := hz.frames x m0 b (by simpa [Stmt.catchFrames] using hx)
 
 
 theorem HeldZ.scopeIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var}
@@ -378,7 +379,7 @@ theorem HeldZ.scopeIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x 
     · rw [Stmt.under_off hpk] at hv
       exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+  frames x m0 b hx := hz.frames x m0 b (by simp [Stmt.catchFrames, hx])
 
 theorem HeldZ.scopeDIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {f : Nat}
     (hz : HeldZ m Γ Z (.scopeD x f k)) : HeldZ m Γ Z k where
@@ -389,7 +390,7 @@ theorem HeldZ.scopeDIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x
     · rw [Stmt.under_off hpk] at hv
       exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+  frames x m0 b hx := hz.frames x m0 b (by simp [Stmt.catchFrames, hx])
 
 theorem HeldZ.scopeLIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {kk : Nat} {t : Ty} {x : Var}
     (hz : HeldZ m Γ Z (.scopeL kk t x k)) : HeldZ m Γ Z k where
@@ -400,7 +401,7 @@ theorem HeldZ.scopeLIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {k
     · rw [Stmt.under_off hpk] at hv
       exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+  frames x m0 b hx := hz.frames x m0 b (by simp [Stmt.catchFrames, hx])
 
 theorem HeldZ.frozenIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {z : List Var}
     (hz : HeldZ m Γ Z (.frozen z k)) : HeldZ m Γ Z k where
@@ -411,7 +412,7 @@ theorem HeldZ.frozenIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {z
     · rw [Stmt.under_off hpk] at hv
       exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+  frames x m0 b hx := hz.frames x m0 b (by simp [Stmt.catchFrames, hx])
 
 theorem HeldZ.blockIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} 
     (hz : HeldZ m Γ Z (.block k)) : HeldZ m Γ Z k where
@@ -422,7 +423,7 @@ theorem HeldZ.blockIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt}
     · rw [Stmt.under_off hpk] at hv
       exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+  frames x m0 b hx := hz.frames x m0 b (by simp [Stmt.catchFrames, hx])
 
 theorem HeldZ.catchRIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {m0 : Mem}
     (hz : HeldZ m Γ Z (.catchR x m0 k)) : HeldZ m Γ Z k where
@@ -433,7 +434,7 @@ theorem HeldZ.catchRIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x
     · rw [Stmt.under_off hpk] at hv
       exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+  frames x m0 b hx := hz.frames x m0 b (by simp [Stmt.catchFrames, hx])
 
 
 theorem HeldZ.scopeOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var}
@@ -449,7 +450,7 @@ theorem HeldZ.scopeOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x
       · exact hx p E hp hm hpk
       · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
   bound := hz.bound
-  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+  frames x0 m1 b0 hx0 := hz.frames x0 m1 b0 (by simpa [Stmt.catchFrames] using hx0)
 
 theorem HeldZ.scopeDOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {f : Nat}
     (hz : HeldZ m Γ Z k)
@@ -464,7 +465,7 @@ theorem HeldZ.scopeDOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {
       · exact hx p E hp hm hpk
       · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
   bound := hz.bound
-  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+  frames x0 m1 b0 hx0 := hz.frames x0 m1 b0 (by simpa [Stmt.catchFrames] using hx0)
 
 theorem HeldZ.scopeLOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {kk : Nat} {t : Ty} {x : Var}
     (hz : HeldZ m Γ Z k)
@@ -479,7 +480,7 @@ theorem HeldZ.scopeLOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {
       · exact hx p E hp hm hpk
       · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
   bound := hz.bound
-  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+  frames x0 m1 b0 hx0 := hz.frames x0 m1 b0 (by simpa [Stmt.catchFrames] using hx0)
 
 theorem HeldZ.frozenOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {z : List Var}
     (hz : HeldZ m Γ Z k) : HeldZ m Γ Z (.frozen z k) where
@@ -491,7 +492,7 @@ theorem HeldZ.frozenOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {
     · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars] at hv
       exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
   bound := hz.bound
-  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+  frames x0 m1 b0 hx0 := hz.frames x0 m1 b0 (by simpa [Stmt.catchFrames] using hx0)
 
 theorem HeldZ.blockOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} 
     (hz : HeldZ m Γ Z k) : HeldZ m Γ Z (.block k) where
@@ -503,13 +504,13 @@ theorem HeldZ.blockOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt}
     · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars] at hv
       exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
   bound := hz.bound
-  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+  frames x0 m1 b0 hx0 := hz.frames x0 m1 b0 (by simpa [Stmt.catchFrames] using hx0)
 
 theorem HeldZ.catchROut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {m0 : Mem}
     (hz : HeldZ m Γ Z k)
     (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → x ∉ Z p)
-    (hfr : ∀ p E, Γ p = some E → E.mode = .rootb → p < m0.nv → ∀ d ∈ E.vdeps, d.kind.bound = .none →
-      HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root) : HeldZ m Γ Z (.catchR x m0 k) where
+    (hfr : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → p < m0.nv → ∀ d ∈ E.vdeps,
+      d.kind.bound = .none → HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root) : HeldZ m Γ Z (.catchR x m0 k) where
   caps := hz.caps
   reach p E hp hm v hv := by
     by_cases hpk : p ∈ k.spine
@@ -520,11 +521,11 @@ theorem HeldZ.catchROut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {
       · exact hx p E hp hm hpk
       · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
   bound := hz.bound
-  frames x0 m1 hx0 := by
+  frames x0 m1 b0 hx0 := by
     simp only [Stmt.catchFrames, List.mem_cons] at hx0
     rcases hx0 with h | h
     · cases h; exact hfr
-    · exact hz.frames x0 m1 h
+    · exact hz.frames x0 m1 b0 h
 
 
 theorem HeldZ.rbindIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {q : Var}
@@ -540,7 +541,7 @@ theorem HeldZ.rbindIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {q 
       · rw [Stmt.under_off hpk] at hv
         exact hz.reach p E hp hm v (by simp [Stmt.under, hpq, hpk, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+  frames x m0 b hx := hz.frames x m0 b (by simp [Stmt.catchFrames, hx])
 
 theorem HeldZ.rbindOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {q : Var}
     (hz : HeldZ m Γ Z k) (hq : q ∉ k.spine)
@@ -560,7 +561,7 @@ theorem HeldZ.rbindOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {q
         · exact hx p E hp hm (Ne.symm hpq) hpk
         · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
+  frames x m0 b hx := hz.frames x m0 b (by simpa [Stmt.catchFrames] using hx)
 
 
 /-- ... where the spines, if any, bind no borrowed parameter. -/
@@ -579,7 +580,7 @@ theorem HeldZ.leafR {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : S
     · exact hz.reach p E h0 hm v (by rw [Stmt.under_off (hsp p E h0 hm)]; exact h) hvZ
     · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt h (hz.bound p E h0 hm v hvZ))
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
-  frames x m0 h := by rw [hcf] at h; cases h
+  frames x m0 b h := by rw [hcf] at h; cases h
 
 
 /-- An exit taken keeps `HeldZ`: what runs then is part of what ran. -/
@@ -638,6 +639,6 @@ theorem HeldZ.exitAt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s e : Stmt} {n
   caps := hz.caps
   reach p E hp hm v hv := hz.reach p E hp hm v (he.under_kv p v hv)
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (he.catchFrames_sub _ hx)
+  frames x m0 b hx := hz.frames x m0 b (he.catchFrames_sub _ hx)
 
 end A2

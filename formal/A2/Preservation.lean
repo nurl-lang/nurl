@@ -2732,7 +2732,7 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
       { caps := fun q E hq hmq d hd hb hh => ?_
         reach := fun q E hq hmq w hw => ?_
         bound := fun q E hq hmq w hw => ?_
-        frames := fun x0 m0 h => by simp [Stmt.catchFrames] at h }
+        frames := fun x0 m0 b0 h => by simp [Stmt.catchFrames] at h }
     · obtain ⟨_, _, h0⟩ := hrbU' q E hq hmq
       exact (hz.caps q E h0 hmq d hd hb hh).of_shrink hp.panic_st
     · obtain ⟨hqx, hqk, h0⟩ := hrbU' q E hq hmq
@@ -5189,7 +5189,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | catchIn hst' =>
       rename_i s'
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hs hcd hi.catchIn hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ih hs hcd hi.catchIn hst' Z hz.catchRIn
       have hKO' : KeepOut Γ' Δ s'.spine := by
         refine ⟨fun v E' hv hvs => ?_, fun v E' hv => ?_⟩
         · obtain ⟨hvs0, E0, h0⟩ := hk.2.1 v E' hv hvs
@@ -5211,7 +5211,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨E0, h0, hd0, hos0, _⟩ := hk.2.2 v E' hv hd hos (Or.inl hnint) hvs
         exact hds v E0 h0 hd0 hos0 hvs0
       refine ⟨Γ', StmtT.catchR hxF ht' hM hanchΔ hKO' hds', ?_, hnv, hk,
-        fun v hv => hfz v (List.mem_append_left _ hv)⟩
+        fun v hv => hfz v (List.mem_append_left _ hv), Z', hz'.catchROut
+          (fun q E hq hmq hqs => by
+            obtain ⟨h0, hqs0⟩ := hk.rootb_back hq hmq hqs
+            rw [hzk q E h0 hmq]
+            exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqs0, Stmt.killVars]))
+          (fun q E hq hmq hqs hlt d hd hb hh => by
+            obtain ⟨h0, hqs0⟩ := hk.rootb_back hq hmq hqs
+            rw [hzk q E h0 hmq]
+            exact hz.frames x m0 s (by simp [Stmt.catchFrames]) q E h0 hmq hqs0 hlt d hd hb hh), hzk⟩
       exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
@@ -5235,8 +5243,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             have hns : d.root ∉ s.spine := fun h => hnk' (Stmt.spine_sub_killVars _ _ h)
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
-            have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd hs.headCallc_live h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hnk' hlt
+            have := Step.held_not_killVarsZ hst' hz.catchRIn hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hnk' hlt
             rcases (by simpa [Stmt.killVars] using hin : d.root = x ∨ d.root ∈ _) with h | h
             · exact hnk (by simp [Stmt.killVars, h])
             · exact this h
@@ -5264,7 +5271,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           dtorIn := hi'.dtorIn }
     | catchSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
-        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
+        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl,
+        Z, hz.catchRIn.restmt rfl rfl (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun c hc => by simp [Stmt.catchFrames] at hc), ZKeep.refl _ _⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
