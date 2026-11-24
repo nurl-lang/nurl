@@ -5365,8 +5365,10 @@ class FnCheck:
                         # x is handed over on the runs it lent and released
                         # on the others, its destructor run at the exit -
                         # moved on some paths only, as nurlc's per-call bit
-                        # says)
-                        st.vals[a[1]] = AV("X")
+                        # says - with what it holds, as a join of the run
+                        # that kept it and the run that moved it leaves it:
+                        # its release there runs its closures' captures)
+                        st.vals[a[1]] = AV("X", xv.loans, xv.alias, xv.held)
                     mine = {l for l in cur.loans if self.loans.get(l, (None,))[0] == (a[1], ())}
                     # (…and where the result holds x as a field - a literal
                     # over it - what x held sits there)
