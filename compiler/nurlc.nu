@@ -784,6 +784,7 @@ $ `stdlib/core/vec.nu`
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
 : i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
+: i CORE_VF_ENVOWN 2048  // a capture's flag: a closure returned where it is made (`^ \ …`), whose env owns this handle capture — moved in from its owner, a copy where the binding borrows — not a copy of its handle that depends on the binding (gen_env_allocation; AGORA-978). The engine does not ask it
 : i CORE_VF_AGGLEND 1024  // a variable's flag: a returned literal codegen made without copying a field it was given lent: the literal is a lend of what that field borrows, on the runs the function answers lent (__gen_agg_lit_body, agora #907)
 : i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884); on a `:` raw string binding, codegen gave it a copy of its own (AGORA-953)
 : ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
@@ -25956,6 +25957,25 @@ unsafe @ eng_print_types → v {
 // (a `: ~` binding the body assigns, MEMORY.md §2.3): flag 8.
 @ core_capture_byref s name → v {
     ( core_capture_flag ( __core_in name ) 8 F )
+}
+
+// The handle captures of a closure returned where it is made (`^ \ …`):
+// its env owns them — the binding's value moved in, or a copy where the
+// binding borrows (gen_env_allocation) — so the closure does not depend on
+// the binding: flag CORE_VF_ENVOWN, for readers of the IR (tools/ncore's
+// translation to A2); the engine does not ask it, so its verdicts stay as
+// they are. Not a capture taken by pointer, nor one flag 4 already says the
+// env takes over (AGORA-978).
+@ core_capture_envown i syms s caps → v {
+    : ~ s rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s t ( nurl_sym_get syms nm )
+        ? & & ( __is_handle_ty t ) ! ( __is_capture_byref nm syms ) ! ( str_contains_word g_nc_own_caps nm ) {
+            ( core_capture_flag ( __core_in nm ) CORE_VF_ENVOWN F )
+        } {}
+    }
 }
 
 // The captures of the closure body being built whose binding moves into
@@ -89859,7 +89879,10 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ( nurl_sym_def body_syms `__fn_ret_proof_live__` `` )
 
     : i __cc_h g_core_os_n
-    ? != 0 g_core_live { ( core_closure_begin syms captured_vars closure_fn_name ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ret_type ) } {}
+    ? != 0 g_core_live {
+        ( core_closure_begin syms captured_vars closure_fn_name ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ret_type )
+        ? clo_returned { ( core_capture_envown syms captured_vars ) } {}
+    } {}
     // Register closure parameters
     : ~ s bp_types ( nurl_str_cat param_types `` )
     : ~ s bp_names ( nurl_str_cat param_names `` )
