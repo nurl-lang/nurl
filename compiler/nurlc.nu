@@ -274,6 +274,12 @@ $ `stdlib/core/vec.nu`
 : ~ i g_core_ftmpl 0  // …and the generic it is an instance of, interned (`` none)
 : ~ i g_core_acks 0  // bumped by the hooks of the constructs only a hook can lower (core_expr_exit)
 : ~ i g_core_last_agg -1  // the temporary core_agg made last
+: ~ i g_argtmp_inert 0  // the argument mem_arg_temps just read is an inert literal (AGORA-995)
+: ~ i g_llh_set 0  // `__last_local_hand__` holds a record (mem_local_lend_of)
+: ~ i g_coa_set 0  // `__last_call_owns_all__` holds a callee (mem_own_lendback)
+: ~ i g_lentp_memo 0  // mem_fn_lent_params' answers per compiled callee, while bodies are compiled
+: ~ i g_lentp_memo_on 1  // …until module end, whose resolutions change them
+: ~ i g_scalarp_n 0  // how many functions have a g_fn_scalarp entry (mem_fn_lent_params asks none before the first)
 : ~ i g_lit_inert 0  // the literal just built holds nothing a drop releases: every field a value of a type with no drop (AGORA-995)
 : ~ i g_nc_hand 0  // the lend __park_nc_local_lend parks is handed over where it is whole (__ret_local_hand)
 : ~ i g_agg_lit_lends 0  // the literal being built keeps a field as the lend it is - no copy, the return answers per run (CORE_VF_AGGLEND, agora #907)
@@ -2613,6 +2619,7 @@ unsafe @ agg_field_count i syms s ot → i {
 // sink it is not a borrow-checker move — a handle stays readable through its
 // alias, as it always has.
 : ~ i g_fn_keeps 0
+: ~ i g_fn_scalarp 0  // fname -> its scalar parameters a lend channel names, safe code (mem_fn_lent_params skips them; AGORA-995)
 
 // Per-function SHARE-KEEP map (agora #793): indices of the parameters a
 // share of which the body puts where it outlives the call — an `rc_clone`
@@ -6600,7 +6607,7 @@ unsafe @ __arg_param_lend_root i syms → s {
     // freed it under them — agora #749.)
     ? ! | ( __roots_have_lend_chain syms roots ) ( __roots_have_field roots ) { ^ l0 } {}
     // (A chain is no local handed back whole: __ret_local_hand stands down.)
-    ( nurl_sym_def syms `__last_local_hand__` `- -` )
+    ( nurl_sym_def syms `__last_local_hand__` `- -` ) = g_llh_set 1
     // (…on top of what the arguments by name answer: the chain adds, it
     // takes nothing away.)
     : s t0 ( nurl_sym_get syms `__last_local_lend__` )
@@ -6630,6 +6637,7 @@ unsafe @ __arg_param_lend_root i syms → s {
 // and the result is that value, the caller's to drop. An i1 that says so,
 // `` where no such local is.
 @ __ret_local_hand i syms i cg s hbit → s {
+    ? == 0 g_llh_set { ^ ( nurl_str_cat `` `` ) } {}
     : s h ( nurl_sym_get syms `__last_local_hand__` )
     ? == 0 ( nurl_str_len h ) { ^ ( nurl_str_cat `` `` ) } {}
     : s lo ( str_first_word h )
@@ -6649,10 +6657,10 @@ unsafe @ __arg_param_lend_root i syms → s {
     : s own1 ( nurl_sym_get syms `__last_call_own__` )
     : ~ s lent ``
     // (Without a per-call bit, only a callee compiled already that lends on
-    // every return — `retfresh` unset — is known to: a fresh value it
+    // every return — `retlendonly` — is known to: a fresh value it
     // returned would be taken for the local's.)
     : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn gn
-    ? & == 0 ( nurl_str_len own1 ) | == 0 ( nurl_sym_len2 syms who `__body_done` ) != 0 ( nurl_sym_len2 g_pending_impl `retfresh##` who ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? & == 0 ( nurl_str_len own1 ) | == 0 ( nurl_sym_len2 syms who `__body_done` ) == 0 ( nurl_sym_len2 g_pending_impl `retlendonly##` who ) { ^ ( nurl_str_cat `` `` ) } {}
     // (Only a callee compiled already, of safe code, that hands this very
     // argument back whole: `retwhole`.)
     ? | == 0 ( nurl_sym_len2 syms who `__body_done` ) ! ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retwhole##` who ) hix ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -6711,7 +6719,7 @@ unsafe @ __arg_param_lend_root i syms → s {
 // local still owns its value, the local's flag is cleared and the result is
 // that value. Only for a binding never reassigned (no `__mutable`), outside
 // `;` blocks and closures, and a callee compiled already that lends on every
-// return (`retfresh` unset). An i1, or ``.
+// return (`retlendonly`). An i1, or ``.
 @ __bind_hand i syms i cg s rup s name s rf → s {
     : s rec ( nurl_sym_get2 syms rup `__lhand` )
     ? | | | == 0 ( nurl_str_len rec ) != 0 ( nurl_sym_len2 syms name `__mutable` ) != 0 g_defer_count != 0 g_bck_closure_depth { ^ ( nurl_str_cat `` `` ) } {}
@@ -6723,7 +6731,7 @@ unsafe @ __arg_param_lend_root i syms → s {
     : s ix ( str_first_word r2 )
     : s up ( str_first_word ( str_skip_word r2 ) )
     : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn gn
-    ? | == 0 ( nurl_sym_len2 syms who `__body_done` ) != 0 ( nurl_sym_len2 g_pending_impl `retfresh##` who ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | == 0 ( nurl_sym_len2 syms who `__body_done` ) == 0 ( nurl_sym_len2 g_pending_impl `retlendonly##` who ) { ^ ( nurl_str_cat `` `` ) } {}
     ? | | | ( nurl_sym_has_word g_fn_sink who ix ) ( nurl_sym_has_word g_fn_keeps who ix ) != 1 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) ) ! ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retwhole##` who ) ix ) { ^ ( nurl_str_cat `` `` ) } {}
     : s lo ( nurl_cg_reg cg )
     ( emit_sink_flag_load ( mem_lend_const syms `one` cn gn ( nurl_str_to_int ix ) ) lo )
@@ -6842,7 +6850,7 @@ unsafe @ __arg_lend_root i syms → s {
 @ mem_local_lend_of i syms i cg s key s args0 → s {
     ( nurl_sym_def syms `__last_local_lend__` `` )
     ( nurl_sym_def syms `__last_local_lend_idx__` `` )
-    ( nurl_sym_def syms `__last_local_hand__` `` )
+    ? != 0 g_llh_set { ( nurl_sym_def syms `__last_local_hand__` `` ) = g_llh_set 0 } {}
     ? == 0 ( nurl_str_len key ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ( seq key `__field__` ) { ^ ( __field_lend_local syms args0 ) } {}
     : s cn ( str_first_word key )
@@ -6885,10 +6893,11 @@ unsafe @ __arg_lend_root i syms → s {
                     // all the same, __mem_bind_bit.)
                     : s __hsb ( nurl_sym_get2 syms up `__sborrow` )
                     ? & & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__pname` ) | == 0 ( nurl_str_len __hsb ) == ( nurl_str_get __hsb 0 ) 64 == 0 ( nurl_sym_len2 syms up `__alias` ) {
-                        : s __hcur ( nurl_sym_get syms `__last_local_hand__` )
+                        : s __hcur ? == 0 g_llh_set `` ( nurl_sym_get syms `__last_local_hand__` )
+                        = g_llh_set 1
                         ( nurl_sym_def syms `__last_local_hand__` ? == 0 ( nurl_str_len __hcur ) ( nurl_str_cat4 lo ` ` up ( nurl_str_cat ` ` ( nurl_str_int idx ) ) ) ( nurl_str_cat3 __hcur ` - ` up ) )
                     } {
-                        ( nurl_sym_def syms `__last_local_hand__` `- -` )
+                        ( nurl_sym_def syms `__last_local_hand__` `- -` ) = g_llh_set 1
                     }
                     : s lp ( nurl_cg_reg cg )
                     ( emit_sink_flag_load ( mem_lend_const syms `part` cn gn idx ) lp )
@@ -9328,7 +9337,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // names — `^ ( okr @ Val { … } k )`, mem_own_lendback. Recorded, every
     // caller took this function for one that lends what okr does, and
     // dropped nothing of the result; AGORA-995.)
-    ? & & & == ret_eff_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_name__` ) ! ret_call_copied ! & != 0 ( nurl_sym_len syms `__last_call_owns_all__` ) ( seq ( nurl_sym_get syms `__last_call_owns_all__` ) ( nurl_sym_get syms `__last_call_name__` ) ) {
+    ? & & & == ret_eff_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_name__` ) ! ret_call_copied ! & != 0 g_coa_set ( seq ( nurl_sym_get syms `__last_call_owns_all__` ) ( nurl_sym_get syms `__last_call_name__` ) ) {
         // (An argument that is a call lending a parameter is its stand-in,
         // g_call_proots: `^ ( id0 ( id0 p ) )` lends p; agora #777.)
         : s rfroots ? != 0 ( nurl_str_len g_call_proots ) ( nurl_str_cat g_call_proots `` ) ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
@@ -10702,7 +10711,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         } {}
     } {}
     // (A return that may hand back a value of the caller's own — anything
-    // but a static lend — is one: `retfresh`, which a caller's handover of
+    // but a static lend — is one: `__fn_ret_fresh__` (no `retlendonly`), which a caller's handover of
     // a local asks, __ret_local_hand.)
     // (Not one owned only where this function takes the parameters it lends
     // over, __aw_sinkbit: what it hands back is still the caller's value.)
@@ -30447,7 +30456,20 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 // whole or in part, directly, through a callee, or as any address its
 // result may carry (the returned-parameter summary: `vec_get` hands back
 // an element read through the vector's buffer).
-@ mem_fn_lent_params i syms s fname → s { ^ ( __fn_lent_params_of syms fname T ) }
+@ mem_fn_lent_params i syms s fname → s {
+    // (While bodies are compiled a compiled callee's channels stand still -
+    // what changes them runs at module end, which turns this off: asked once
+    // per callee, not once per call. `=` marks an answer that is empty.)
+    ? & != 0 g_lentp_memo_on != 0 ( nurl_sym_len2 syms fname `__body_done` ) {
+        ? == 0 g_lentp_memo { = g_lentp_memo ( nurl_sym_new ) } {}
+        : s m ( nurl_sym_get g_lentp_memo fname )
+        ? != 0 ( nurl_str_len m ) { ^ ( nurl_str_slice m 1 - ( nurl_str_len m ) 1 ) } {}
+        : s r ( __fn_lent_params_of syms fname T )
+        ( nurl_sym_def g_lentp_memo fname ( nurl_str_cat `=` r ) )
+        ^ r
+    } {}
+    ^ ( __fn_lent_params_of syms fname T )
+}
 
 // …`scal` F: a scalar parameter counted too, as any other — what the
 // `= o ( pick o other k )` refusal asks (resolve_opt_pick_lends), whose
@@ -30455,13 +30477,18 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 // probe is refused through it).
 @ __fn_lent_params_of i syms s fname b scal → s {
     // (…not a scalar parameter of safe code, which carries no address: what
-    // it is "lent" as reaches nothing - `scalarp##`, AGORA-995.)
-    : s own ( nurl_str_cat4 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) ( nurl_str_cat ` ` ? scal ( nurl_sym_get g_pending_impl ( nurl_str_cat `scalarp##` fname ) ) `` ) )
+    // it is "lent" as reaches nothing - g_fn_scalarp, AGORA-995.)
+    // (Most callees lend nothing: every channel empty is answered before
+    // anything is built.)
+    : s __ra ( nurl_sym_get g_fn_ret_alias fname )
+    : s __rl ( nurl_sym_get g_pending_impl ( nurl_str_cat `retlend##` fname ) )
+    : s __rp ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpart##` fname ) )
+    : s __rpm ( nurl_sym_get g_fn_ret_param fname )
     : s __rd ( nurl_sym_get g_pending_impl ( nurl_str_cat `retread##` fname ) )
-    : ~ s rest ( nurl_str_cat4 ( nurl_sym_get g_fn_ret_alias fname ) ` `
-    ( nurl_sym_get g_pending_impl ( nurl_str_cat `retlend##` fname ) )
-    ( nurl_str_cat4 ` ` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpart##` fname ) )
-    ` ` ( nurl_str_cat3 ( nurl_sym_get g_fn_ret_param fname ) ` ` __rd ) ) )
+    ? & & & & == 0 ( nurl_str_len __ra ) == 0 ( nurl_str_len __rl ) == 0 ( nurl_str_len __rp ) == 0 ( nurl_str_len __rpm ) == 0 ( nurl_str_len __rd ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s __scp ? & scal != 0 g_scalarp_n ( nurl_sym_get g_fn_scalarp fname ) ``
+    : s own ? == 0 ( nurl_str_len __scp ) ( nurl_str_cat3 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) ) ( nurl_str_cat4 ( nurl_sym_get g_fn_sink fname ) ` ` ( nurl_sym_get g_fn_keeps fname ) ( nurl_str_cat ` ` __scp ) )
+    : ~ s rest ( nurl_str_cat4 __ra ` ` __rl ( nurl_str_cat4 ` ` __rp ` ` ( nurl_str_cat3 __rpm ` ` __rd ) ) )
     : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -40562,7 +40589,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? != 0 ( nurl_str_len __at_1 ) {
             = lendback_bits ? == 0 ( nurl_str_len lendback_bits ) ( nurl_str_cat __at_1 `` ) ( nurl_str_cat3 lendback_bits ` ` __at_1 )
             = lendback_idx ( nurl_str_cat3 lendback_idx ` ` ( nurl_str_int arg_idx ) )
-        } { ? != 0 ( nurl_sym_len syms `__argtmp_inert__` ) { = lendback_idx ( nurl_str_cat3 lendback_idx ` ` ( nurl_str_int arg_idx ) ) } {} }
+        } { ? != 0 g_argtmp_inert { = lendback_idx ( nurl_str_cat3 lendback_idx ` ` ( nurl_str_int arg_idx ) ) } {} }
         : s __at_p ( nurl_sym_get syms `__argtmp_part__` )
         ? != 0 ( nurl_str_len __at_p ) { = lendpart_bits ? == 0 ( nurl_str_len lendpart_bits ) ( nurl_str_cat __at_p `` ) ( nurl_str_cat3 lendpart_bits ` ` __at_p ) } {}
         // A raw string the callee may take over: its own, or a copy
@@ -51919,7 +51946,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // (A literal argument that holds nothing a drop releases — `@ Val { VI
     // 3 }` — lends nothing anyone could release: among the temporaries a
     // lend out of which is no borrow of the caller's, mem_own_lendback.)
-    ( nurl_sym_def syms `__argtmp_inert__` ? & == arg_tt TT_AT != 0 g_lit_inert `1` `` )
+    = g_argtmp_inert ? & == arg_tt TT_AT != 0 g_lit_inert 1 0
     // A call through a closure value: its type is the closure's, the
     // result's is inside it.
     : s __cty ( nurl_sym_get syms call_name )
@@ -52645,7 +52672,7 @@ unsafe @ __src_has_raw_ptr s text → b {
 // after the call). The result is the caller's then. Returns the result.
 @ mem_own_lendback i syms i cg s cn s res s rlt s one s part s idxs → s {
     ( nurl_sym_def g_call_cp `res` `` )
-    ( nurl_sym_def syms `__last_call_owns_all__` `` )
+    ? != 0 g_coa_set { ( nurl_sym_def syms `__last_call_owns_all__` `` ) = g_coa_set 0 } {}
     // (Whether this call's result may be a temporary the caller made for
     // it, handed back: then it is the caller's own — h230 asks.)
     ( nurl_sym_def syms `__last_call_lendback__` ? | != 0 ( nurl_str_len one ) != 0 ( nurl_str_len part ) `1` `` )
@@ -52657,7 +52684,7 @@ unsafe @ __src_has_raw_ptr s text → b {
         ? & & != 0 ( nurl_str_len idxs ) != 0 ( nurl_sym_len2 syms cn `__body_done` ) ( __words_all_in ( mem_fn_lent_params syms cn ) idxs ) {
             ( nurl_sym_def syms `__last_call_ret_view__` `` )
             ( nurl_sym_def syms `__last_value_borrow__` `` )
-            ( nurl_sym_def syms `__last_call_owns_all__` ( nurl_str_cat cn `` ) )
+            ( nurl_sym_def syms `__last_call_owns_all__` ( nurl_str_cat cn `` ) ) = g_coa_set 1
         } {}
         ^ res
     } {}
@@ -52723,7 +52750,7 @@ unsafe @ __src_has_raw_ptr s text → b {
         ? all {
             ( nurl_sym_def syms `__last_call_ret_view__` `` )
             ( nurl_sym_def syms `__last_value_borrow__` `` )
-            ( nurl_sym_def syms `__last_call_owns_all__` ( nurl_str_cat cn `` ) )
+            ( nurl_sym_def syms `__last_call_owns_all__` ( nurl_str_cat cn `` ) ) = g_coa_set 1
         } {}
     } {
         // …and one compiled after this caller (a generic instance) whose
@@ -52827,7 +52854,9 @@ unsafe @ __src_has_raw_ptr s text → b {
 @ __mem_udrop_bind_flag i syms i cg s ptr s ty i rhs_tt s rhs_val s rhs_borrow → v {
     // (Which local of this frame the call it is bound from may hand back
     // whole — what `^ <binding>` hands over instead of copying, __bind_hand.)
-    ( nurl_sym_def syms ( nurl_str_cat ptr `__lhand` ) ? == rhs_tt TT_LPAREN ( __bind_hand_note syms ) `` )
+    // (Kept only where there is one: a word per binding otherwise.)
+    : s __bhn ? == rhs_tt TT_LPAREN ( __bind_hand_note syms ) ``
+    ? != 0 ( nurl_str_len __bhn ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__lhand` ) __bhn ) } {}
     ? & ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms rhs_val `__ptr` )
     {  // (`: T s s`: by name, the right-hand side is this binding itself; its
         // source is the one it shadows, whose slot gen_let_or_struct read
@@ -99494,7 +99523,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     | & | | == __fall_tt TT_LBRACK == __fall_tt TT_QUEST == __fall_tt TT_QUESTQUEST ( seq ( nurl_sym_get syms `__last_slice_owned__` ) `1` )
     & == __fall_tt TT_LPAREN ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
     // (A fall-off value is judged by no return: taken for one that may be
-    // fresh, `retfresh`.)
+    // fresh, `__fn_ret_fresh__`.)
     ? __fall_used { ( nurl_sym_set_deep syms `__fn_ret_fresh__` `1` ) } {}
     ? __fall_used {
         ( bck_record_expr_return syms
@@ -99646,15 +99675,24 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ? != 0 ( nurl_str_len __rwh ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retwhole##` fname ) __rwh ) } {}
     // …whether a return of it may hand back a value of the caller's own
     // (__ret_local_hand)…
-    ? != 0 ( nurl_sym_len syms `__fn_ret_fresh__` ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retfresh##` fname ) `1` ) } {}
+    // (Kept for the few that do not, `retlendonly`: one that hands back a
+    // parameter whole and nothing fresh on any return. A word per function
+    // otherwise.)
+    ? & == 0 ( nurl_sym_len syms `__fn_ret_fresh__` ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `retwhole##` fname ) ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retlendonly##` fname ) `1` ) } {}
     // …and its scalar parameters, in safe code values that carry no
     // address: no lend of one is a lend of anything (mem_fn_lend_kind).
     // (Not where its result is a view or a pointer — g_rpg_on 1, raw
     // provenance: there a number may be an address, `^ # *T + p 8`, and
     // what it was read through is what the result views.)
-    : s __sc_ps ( nurl_sym_get syms `__fn_scalar_params__` )
+    // (Kept only for one a lend channel names — handed back by value
+    // (`ret_param`), in part, whole, or read through, `borrow_x`: a word per
+    // function otherwise.)
+    : s __sc_ps0 ( nurl_sym_get syms `__fn_scalar_params__` )
+    : s __sc_ln ( __word_union ( __word_union ( nurl_sym_get syms `__fn_ret_param__` ) ( nurl_sym_get g_fn_ret_param fname ) ) ( __word_union ( nurl_sym_get syms `__fn_retpart__` ) ( nurl_sym_get syms `__fn_retlend__` ) ) )
+    : s __sc_ps ? != 0 ( nurl_sym_len syms `__fn_ret_borrow_x__` ) __sc_ps0 ( __words_common __sc_ps0 __sc_ln )
     ? & != 1 g_rpg_on != 0 ( nurl_str_len __sc_ps )
-    { ( nurl_sym_def g_pending_impl ( nurl_str_cat `scalarp##` fname ) __sc_ps ) }
+    { ? == 0 g_fn_scalarp { = g_fn_scalarp ( nurl_sym_new ) } {}
+        ( nurl_sym_def g_fn_scalarp fname __sc_ps ) = g_scalarp_n + g_scalarp_n 1 }
     {}
     // …and the views it hands back as they came (`^ p`, a view parameter):
     // its result is what that argument is (retpass, bck_sx_ev).
@@ -123660,6 +123698,9 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         // program refer to (lazy_flush).
         ( lazy_flush syms cg )
         ( emit_pending_drop_graphs syms )
+        // (…and what is lent is asked afresh from here: module end changes it.)
+        = g_lentp_memo_on 0
+        ? != 0 g_lentp_memo { ( nurl_sym_free g_lentp_memo ) = g_lentp_memo 0 } {}
         // Every body compiled: resolve the raw provenance graph, then close
         // the mutation summaries, before anything reads them.
         ( __clo_nodes_close )
@@ -124024,6 +124065,9 @@ unsafe @ main → i {
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_keeps ( nurl_sym_new )
+    // (Made at its first entry, as g_fn_rckeeps.)
+    = g_fn_scalarp 0
+    = g_scalarp_n 0
     // (Made at the first share-keep a function reports, __rck_publish: most
     // modules have none, and a table is 36 KB before its first entry.)
     = g_fn_rckeeps 0
