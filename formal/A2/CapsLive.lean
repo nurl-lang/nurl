@@ -1590,4 +1590,398 @@ theorem RhsT.readsCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : 
         | exact (hM.rdCapsInp w (by assumption)).2
         | exact (hM.rdCapsInp w (by assumption)).1.lend)
 
+
+/-! ### The frame clause (AGORA-937 B4, frame-relative)
+
+A borrowed parameter's held anchor `w` is captured but read-only by no
+package in any slot of the parameter's frame (outside the frame's frozen
+list `D`), live or dead: the frame's code never names `w`, so it makes no
+package capturing it inout (`THRU_STAGE3_DESIGN.md`). -/
+
+/-- **The frame clause**: every slot outside `D` meets `LiveGood m w`. -/
+def FrameCaps (m : Mem) (D : List Var) (w : Var) : Prop :=
+  ∀ v o V, v ∉ D → m.st v = some ⟨o, some V⟩ → LiveGood m w V
+
+theorem FrameCaps.of_st {m m' : Mem} {D : List Var} {w : Var} (h : FrameCaps m D w) (hst : m'.st = m.st) :
+    FrameCaps m' D w := fun v o V hv hs => by
+  rw [hst] at hs
+  obtain ⟨h1, h2⟩ := h v o V hv hs
+  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx)⟩
+
+/-- A slot given a value whose every part is clean, and whose handles reach
+    clean nodes, keeps the clause (a slot emptied, in particular). -/
+theorem FrameCaps.set {m : Mem} {D : List Var} {w : Var} (h : FrameCaps m D w) {y : Var} {o : Bool}
+    {v : Option Val}
+    (hv : ∀ V, v = some V → (∀ n, Sub n V → ValCapsInp n w) ∧
+      (∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+        (∃ ty d es, n = .node ty c d es) → ValCapsInp n w)) :
+    FrameCaps (m.set y ⟨o, v⟩) D w := by
+  intro x o1 V hxD hs
+  have htgt : ∀ x' t n, (m.set y ⟨o, v⟩).st x' = some ⟨true, some t⟩ → Sub n t →
+      (m.st x' = some ⟨true, some t⟩) ∨ ValCapsInp n w := by
+    intro x' t n hx' hsn
+    by_cases hxy : x' = y
+    · subst hxy; simp at hx'; obtain ⟨_, rfl⟩ := hx'; exact Or.inr ((hv t rfl).1 n hsn)
+    · simp [upd_ne _ _ hxy] at hx'; exact Or.inl hx'
+  have hcl : ∀ V', (∀ c, Sub (.href c) V' → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) →
+      ∀ c, Sub (.href c) V' → ∀ x t n, (m.set y ⟨o, v⟩).st x = some ⟨true, some t⟩ → Sub n t →
+        (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+    intro V' h2 c hc x' t n hx' hsn hnd
+    rcases htgt x' t n hx' hsn with hx'' | hn
+    · exact h2 c hc x' t n hx'' hsn hnd
+    · exact hn
+  by_cases hxy : x = y
+  · subst hxy
+    simp at hs; obtain ⟨_, rfl⟩ := hs
+    obtain ⟨hsub, hnh⟩ := hv V rfl
+    exact ⟨hsub V (Sub.refl _), hcl V hnh⟩
+  · simp [upd_ne _ _ hxy] at hs
+    obtain ⟨h1, h2⟩ := h x o1 V hxD hs
+    exact ⟨h1, hcl V h2⟩
+
+theorem FrameCaps.set_none {m : Mem} {D : List Var} {w : Var} (h : FrameCaps m D w) (y : Var) (o : Bool) :
+    FrameCaps (m.set y ⟨o, none⟩) D w :=
+  h.set fun _ e => by cases e
+
+theorem FrameCaps.remove {m : Mem} {D : List Var} {w : Var} (h : FrameCaps m D w) (y : Var) :
+    FrameCaps (m.remove y) D w := by
+  have := h.set_none y true
+  intro v o V hv hs
+  have hrm : ∀ z sl, (m.remove y).st z = some sl → m.st z = some sl := by
+    intro z sl hz
+    by_cases hzy : z = y
+    · subst hzy; simp [Mem.remove, upd] at hz
+    · simpa [Mem.remove, upd, hzy] using hz
+  obtain ⟨h1, h2⟩ := h v o V hv (hrm _ _ hs)
+  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hrm _ _ hx)⟩
+
+/-- A wider domain asks less. -/
+theorem FrameCaps.mono {m : Mem} {D D' : List Var} {w : Var} (h : FrameCaps m D w)
+    (hD : ∀ v ∈ D, v ∈ D') : FrameCaps m D' w :=
+  fun v o V hv hs => h v o V (fun h' => hv (hD v h')) hs
+
+/-- What the frame's code reads (outside `D`) meets the clause: the value
+    lemma's premise (`RhsT.readsCapsVal`). -/
+theorem FrameCaps.reads {m : Mem} {D : List Var} {w : Var} (h : FrameCaps m D w) {Γ : Ctx} {r : Rhs}
+    (hr : ∀ y ∈ r.vars, y ∉ D) :
+    ∀ y E o V, Γ y = some E → E.live = true → y ∈ r.vars → m.st y = some ⟨o, some V⟩ → LiveGood m w V :=
+  fun y _ o V _ _ hy hs => h y o V (hr y hy) hs
+
+
+theorem TakeVal.frameCaps {m m1 : Mem} {D : List Var} {y : Var} {v : Val} {w : Var} (ht : TakeVal m y v m1)
+    (h : FrameCaps m D w) : FrameCaps m1 D w := by
+  cases ht with
+  | own _ => exact h.set_none _ _
+  | bor _ => exact h
+
+/-- **The store a typed right-hand side leaves keeps the frame clause**,
+    where it reads only the frame's bindings: it changes only the slot it
+    reads, to nothing or to part of what it held. -/
+theorem RhsT.frameCapsSt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {D : List Var} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (h : FrameCaps m D w)
+    (hD : ∀ y ∈ r.vars, y ∉ D) : FrameCaps m1 D w := by
+  cases he
+  case pair => rename_i h1 h2; exact h2.frameCaps (h1.frameCaps h)
+  case arcNew =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.frameCaps h).of_st rfl
+  case lockNew =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.frameCaps h).of_st rfl
+  case cellNew =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.frameCaps h).of_st rfl
+  case chanSend =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.frameCaps h).of_st rfl
+  case chanSendClosed =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.frameCaps h).of_st rfl
+  case lockRestore =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.frameCaps h).of_st rfl
+  case pop =>
+    obtain hv : m.st _ = some ⟨true, some (.node _ _ _ (_ ++ [_]))⟩ := by assumption
+    have hyD := hD _ (List.mem_cons_self ..)
+    have hT := (h _ _ _ hyD hv).1
+    refine FrameCaps.set h (fun V e => ?_)
+    cases e
+    refine ⟨hT.shrink (fun e he => List.mem_append_left _ he), fun c hc => ?_⟩
+    cases hc with
+    | child he hs => exact (h _ _ _ hyD hv).2 c (Sub.child (List.mem_append_left _ he) hs)
+  case remove =>
+    obtain hv : m.st _ = some ⟨true, some (.node _ _ _ _)⟩ := by assumption
+    have hyD := hD _ (List.mem_cons_self ..)
+    have hT := (h _ _ _ hyD hv).1
+    refine FrameCaps.set h (fun V e => ?_)
+    cases e
+    refine ⟨hT.shrink (fun e he => List.mem_of_mem_eraseIdx he), fun c hc => ?_⟩
+    cases hc with
+    | child he hs => exact (h _ _ _ hyD hv).2 c (Sub.child (List.mem_of_mem_eraseIdx he) hs)
+  case take =>
+    refine FrameCaps.set (h.of_st rfl) (fun V e => ?_)
+    cases e
+    refine ⟨fun n hn => ?_, fun c hc => ?_⟩
+    rotate_left
+    · cases hc with | child he _ => simp at he
+    cases hn with
+    | refl =>
+      refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with | elem he => simp at he
+    | child he _ => simp at he
+  case inl =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact ht.frameCaps h
+  case inr =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact ht.frameCaps h
+  case pack =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact ht.frameCaps h
+  all_goals first
+    | exact h
+    | exact h.set_none _ _
+
+
+theorem LiveGood.slotTgt {m : Mem} {Γ : Ctx} {w y : Var} {o : Bool} {V : Val} (hg : LiveGood m w V)
+    (hM : MInv m Γ) (hs : m.st y = some ⟨o, some V⟩) {c : Nat} (hc : Sub (.href c) V) :
+    ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t → (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+  cases o
+  · exact hg.2 c hc
+  · exact (hM.slot_no_href hs hc).elim
+
+theorem LiveGood.partTgt {m : Mem} {Γ : Ctx} {w y : Var} {E : Entry} {o : Bool} {V : Val}
+    (hg : LiveGood m w V) (hM : MInv m Γ) (hy : Γ y = some E) (hl : E.live = true)
+    (hs : m.st y = some ⟨o, some V⟩) {u : Val} (hu : Sub u V) {c : Nat} (hc : Sub (.href c) (lendOf u)) :
+    ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t → (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+  cases o
+  · rcases sub_href_lendOf hc with hh | ⟨ty, d, es, hn⟩
+    · exact hg.2 c (hh.trans hu)
+    · exact (hM.bor_no_node hy hl hs (hn.trans hu)).elim
+  · exact hM.tgt_lendOf (Or.inl ⟨y, V, hs, Sub.refl _⟩) hg.1 hu hc
+
+/-- ... where only the bindings it reads are asked about. -/
+theorem RhsT.readsCapsTgt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ)
+    (h : ∀ y E o V, Γ y = some E → E.live = true → y ∈ r.vars → m.st y = some ⟨o, some V⟩ → LiveGood m w V) :
+    ∀ c, Sub (.href c) v → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+  intro c hc
+  -- (a payload a block holds: no handle, `WFv`)
+  have hpayNo : ∀ k bl V, m.blk k = some bl → bl.pay = some V → Sub (.href c) V → False :=
+    fun k bl V hk hp hs => ((hM.blocks k bl hk).2.2.1 V hp).1.href_sub_false hs
+  cases hr
+  case borrow =>
+    cases he
+    · rename_i hv
+      cases hc
+      exact hM.tgt_of_node (Or.inl ⟨_, _, hv, Sub.refl _, _, _, _, rfl⟩) ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1)
+    · exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).2 _ hc
+  case «at» =>
+    cases he with
+    | «at» hn hv _ =>
+      obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv
+      · exact hM.tgt_lendOf (Or.inl ⟨_, _, hv, Sub.refl _⟩) ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1)
+          (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+      · rcases hn' with ⟨x, t', hx, hs, hnd⟩ | ⟨k, bl, hk, hs, _⟩
+        · exact hM.tgt_lendOf (Or.inl ⟨x, t', hx, hs⟩)
+            ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hhr).2 _ (Sub.refl _) x t' _ hx hs hnd)
+            (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+        · exact hM.tgt_lendOf (Or.inr ⟨k, bl, hk, hs⟩) ((hM.rdCapsInp w hk).1.sub hs)
+            (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+  case sat =>
+    cases he with
+    | sat hn hv _ _ _ hda =>
+      have hN := hM.viewTargetCaps (by assumption) (by assumption) hv hda w
+      rcases hda with ⟨x, t', hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+      · exact hM.tgt_lendOf (Or.inl ⟨x, t', hx, hs⟩) hN (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+      · exact hM.tgt_lendOf (Or.inr ⟨k, bl, hk, hs⟩) hN (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+  case arcGet =>
+    cases he with
+    | arcGet _ hk => exact hM.tgt_lendOf (Or.inr ⟨_, _, hk, Sub.refl _⟩) (hM.rdCapsInp w hk).1 (Sub.refl _) hc
+  case glob =>
+    cases he with
+    | glob _ hf => rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;> cases hc
+  case lockTake =>
+    cases he with
+    | lockTake _ hk _ => exact (hpayNo _ _ _ hk rfl hc).elim
+  case chanRecv =>
+    cases he with
+    | chanRecv _ hk _ _ _ _ =>
+      cases hc with
+      | inr hc => exact (hpayNo _ _ _ hk rfl (Sub.fst (Sub.child (List.mem_cons_self ..) hc))).elim
+    | chanRecvNone _ _ _ _ => cases hc with | inl hc => cases hc
+  case rwTryRead =>
+    cases he
+    · cases hc with | inr hc => cases hc
+    · cases hc with | inl hc => cases hc
+  case rwTryWrite =>
+    cases he
+    · cases hc with | inr hc => cases hc
+    · cases hc with | inl hc => cases hc
+  case fst =>
+    cases he with
+    | fst hv => exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).partTgt hM (by assumption) (by assumption) hv (Sub.fst (Sub.refl _)) hc
+  case snd =>
+    cases he with
+    | snd hv => exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).partTgt hM (by assumption) (by assumption) hv (Sub.snd (Sub.refl _)) hc
+  case getl =>
+    cases he with
+    | getl hv => exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).partTgt hM (by assumption) (by assumption) hv (Sub.inl (Sub.refl _)) hc
+  case getr =>
+    cases he with
+    | getr hv => exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).partTgt hM (by assumption) (by assumption) hv (Sub.inr (Sub.refl _)) hc
+  case pop =>
+    cases he with
+    | pop hv _ _ => exact (hM.slot_no_href hv (Sub.child (by simp) hc)).elim
+  case remove =>
+    cases he with
+    | remove hn hv _ _ _ => exact (hM.slot_no_href hv (Sub.child (List.getElem_mem hn) hc)).elim
+  case takel =>
+    cases he with
+    | takel hv => exact (hM.slot_no_href hv (Sub.inl hc)).elim
+  case taker =>
+    cases he with
+    | taker hv => exact (hM.slot_no_href hv (Sub.inr hc)).elim
+  case inl hy hl _ _ =>
+    cases he with
+    | inl h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      cases hc with | inl hc => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).slotTgt hM hs1 hc
+  case inr hy hl _ _ =>
+    cases he with
+    | inr h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      cases hc with | inr hc => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).slotTgt hM hs1 hc
+  case pack hy hl _ _ _ _ =>
+    cases he with
+    | pack h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      cases hc with | pkg hc => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).slotTgt hM hs1 hc
+  case pair y z Ey Ez Γa Dy Dz hy hl hpa1 hz hl2 hpa2 _ =>
+    cases he with
+    | @pair _ _ v1 v2 m1' m2' h1 h2 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      obtain ⟨_, hs2⟩ := h2.slot
+      have hs2' : ∃ o, m.st z = some ⟨o, some v2⟩ := by
+        rcases h1.st_of z with he | he
+        · rw [he] at hs2; exact ⟨_, hs2⟩
+        · rw [he] at hs2; cases hs2
+      obtain ⟨_, hs2'⟩ := hs2'
+      obtain ⟨Ez0, hz0, hl0⟩ := hpa1.liveBack _ _ hz hl2
+      cases hc with
+      | fst hc => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).slotTgt hM hs1 hc
+      | snd hc => exact (h _ _ _ _ hz0 hl0 (by simp [Rhs.vars]) hs2').slotTgt hM hs2' hc
+  all_goals cases he
+  all_goals first
+    | (cases hc; done)
+    | (cases hc with | child he _ => simp at he)
+    | exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).2 _ hc
+    | exact (hM.slot_no_href (by assumption) hc).elim
+
+
+theorem RhsT.readsSt_back {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1))
+    (h : ∀ y E o V, Γ y = some E → E.live = true → y ∈ r.vars → m.st y = some ⟨o, some V⟩ → LiveGood m w V) :
+    ∀ x t n, m1.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ t', m.st x = some ⟨true, some t'⟩ ∧ Sub n t') ∨ ValCapsInp n w := by
+  -- a slot set to `none`, or a `TakeVal`'s, keeps every other slot
+  have hnone : ∀ (m' : Mem) y o', ∀ x t n, (m'.set y ⟨o', none⟩).st x = some ⟨true, some t⟩ →
+      Sub n t → (∃ t', m'.st x = some ⟨true, some t'⟩ ∧ Sub n t') := by
+    intro m' y o' x t n hx hsn
+    by_cases hxy : x = y
+    · subst hxy; simp at hx
+    · simp [upd_ne _ _ hxy] at hx; exact ⟨t, hx, hsn⟩
+  have htv : ∀ {m' m'' : Mem} {y : Var} {u : Val}, TakeVal m' y u m'' → ∀ x t n,
+      m''.st x = some ⟨true, some t⟩ → Sub n t → (∃ t', m'.st x = some ⟨true, some t'⟩ ∧ Sub n t') := by
+    intro m' m'' y u ht x t n hx hsn
+    cases ht with
+    | own _ => exact hnone _ _ _ x t n hx hsn
+    | bor _ => exact ⟨t, hx, hsn⟩
+  have hset : ∀ (y : Var) (o' : Bool) (N : Val), (∀ n, Sub n N → ValCapsInp n w) → ∀ x t n,
+      (m.set y ⟨o', some N⟩).st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ t', m.st x = some ⟨true, some t'⟩ ∧ Sub n t') ∨ ValCapsInp n w := by
+    intro y o' N hN x t n hx hsn
+    by_cases hxy : x = y
+    · subst hxy; simp at hx; obtain ⟨_, rfl⟩ := hx; exact Or.inr (hN n hsn)
+    · simp [upd_ne _ _ hxy] at hx; exact Or.inl ⟨t, hx, hsn⟩
+  have hset' : ∀ (m0 : Mem) (y : Var) (N : Val), (∀ n, Sub n N → ValCapsInp n w) → m0.st = m.st → ∀ x t n,
+      (m0.set y ⟨true, some N⟩).st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ t', m.st x = some ⟨true, some t'⟩ ∧ Sub n t') ∨ ValCapsInp n w := by
+    intro m0 y N hN hst x t n hx hsn
+    by_cases hxy : x = y
+    · subst hxy; simp at hx; obtain ⟨_, rfl⟩ := hx; exact Or.inr (hN n hsn)
+    · simp [upd_ne _ _ hxy] at hx; rw [hst] at hx; exact Or.inl ⟨t, hx, hsn⟩
+  intro x t n hx hsn
+  cases hr
+  case pop =>
+    cases he with
+    | pop hv _ _ =>
+      exact hset _ _ _ (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1).shrink (fun e he => List.mem_append_left _ he)) x t n hx hsn
+  case remove =>
+    cases he with
+    | remove hn hv _ _ _ =>
+      exact hset _ _ _ (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1).shrink (fun e he => List.mem_of_mem_eraseIdx he)) x t n hx hsn
+  case take =>
+    cases he with
+    | take hv =>
+      refine hset' _ _ _ (fun n hsn => ?_) rfl x t n hx hsn
+      cases hsn with
+      | refl =>
+        refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+        cases hc with | elem he => simp at he
+      | child he _ => simp at he
+  case pair =>
+    cases he with
+    | pair h1 h2 =>
+      obtain ⟨t', hx', hs'⟩ := htv h2 x t n hx hsn
+      exact Or.inl (htv h1 x t' n hx' hs')
+  case arcNew =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case lockNew =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case cellNew =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case lockRestore =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case chanSend =>
+    cases he
+    · obtain ht : TakeVal _ _ _ _ := by assumption
+      exact Or.inl (htv ht x t n hx hsn)
+    · obtain ht : TakeVal _ _ _ _ := by assumption
+      exact Or.inl (htv ht x t n hx hsn)
+  all_goals cases he
+  all_goals first
+    | exact Or.inl ⟨t, hx, hsn⟩
+    | exact Or.inl (hnone _ _ _ x t n hx hsn)
+    | exact Or.inl (htv ‹TakeVal _ _ _ _› x t n hx hsn)
+
+
+/-- **A binding given the value of a typed right-hand side keeps the frame
+    clause**, where the right-hand side reads only the frame's bindings. -/
+theorem RhsT.frameCapsSet {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {D : List Var} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ) (h : FrameCaps m D w)
+    (hD : ∀ y ∈ r.vars, y ∉ D) (hw : w ∉ r.vars ∨ w ∈ F) {x : Var} {o' : Bool} :
+    FrameCaps (m1.set x ⟨o', some v⟩) D w := by
+  have hR := h.reads (Γ := Γ) hD
+  refine (hr.frameCapsSt he h hD).set (fun V e => ?_)
+  cases e
+  refine ⟨fun n hn => (hr.readsCapsVal he hM hR hw).sub hn, fun c hc x' t n hx' hsn hnd => ?_⟩
+  rcases hr.readsSt_back he hR x' t n hx' hsn with ⟨t', hx'', hs''⟩ | hn
+  · exact hr.readsCapsTgt he hM hR c hc x' t' n hx'' hs'' hnd
+  · exact hn
+
 end A2
