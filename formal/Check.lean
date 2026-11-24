@@ -975,6 +975,7 @@ import D
 #print axioms B.allocSize_ok
 #print axioms B.countAdd_ok
 #print axioms B.reserveC_overflow
+#print axioms B.reserveC_room
 #print axioms B.reserveC_ok
 #print axioms B.doubleTo_le
 #print axioms B.growCap_le

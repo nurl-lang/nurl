@@ -66,36 +66,52 @@ theorem countAdd_ok (a b : Int) : ∀ p, countAdd a b = some p → p = a + b ∧
     simp at hp; subst hp
     refine ⟨rfl, by omega, by omega⟩
 
-/-- `vec_reserve` with its count checked, as the runtime does it:
-    `alloc_count_add len n` panics (`none`) when `len + n` passes `iMax`,
-    before the Vec changes; otherwise it is `reserve` (github#2242's
-    review: `reserve` itself adds in `Nat`). -/
+/-- `vec_reserve` with its count checked, as the runtime does it: only on
+    the growth path (`n > 0` and less room than `n`) does it call
+    `alloc_count_add len n`, which panics (`none`) when `len + n` passes
+    `iMax`, before the Vec changes; every other path is `reserve`'s
+    (github#2242's review: `reserve` itself adds in `Nat`). -/
 def reserveC {α : Type} (h : Heap α) (v : RVec) (n : Nat) : Option (Heap α × RVec) :=
-  match countAdd v.len n with
-  | none => none
-  | some _ => reserve h v n
+  if n > 0 ∧ v.cap - v.len < n then
+    match countAdd v.len n with
+    | none => none
+    | some _ => reserve h v n
+  else reserve h v n
 
-/-- A count past `iMax` panics, and nothing changes. -/
+/-- On the growth path, a count past `iMax` panics, and nothing changes. -/
 theorem reserveC_overflow {α : Type} {h : Heap α} {v : RVec} {n : Nat}
-    (hc : (v.len : Int) + n > iMax) : reserveC h v n = none := by
+    (hg : n > 0 ∧ v.cap - v.len < n) (hc : (v.len : Int) + n > iMax) : reserveC h v n = none := by
   have : countAdd v.len n = none := by
     unfold countAdd
     split
     · rfl
     · omega
-  simp [reserveC, this]
+  unfold reserveC
+  rw [ite_eq_left hg, this]
+
+/-- Off the growth path `reserveC` is `reserve`, whatever the counts. -/
+theorem reserveC_room {α : Type} {h : Heap α} {v : RVec} {n : Nat}
+    (hg : ¬ (n > 0 ∧ v.cap - v.len < n)) : reserveC h v n = reserve h v n := by
+  unfold reserveC
+  rw [ite_eq_right hg]
 
 /-- A count that fits is `reserve_ok`'s. -/
 theorem reserveC_ok {α : Type} {h : Heap α} {v : RVec} {es : List α} (n : Nat) (hw : h.WF) (hr : Rep h v es)
     (hfit : (v.len : Int) + n ≤ iMax) :
     ∃ h' v', reserveC h v n = some (h', v') ∧ Rep h' v' es ∧ h'.WF ∧ v.len + n ≤ v'.cap ∧
       v'.len = v.len := by
-  have : countAdd v.len n = some (v.len + n) := by
+  have : countAdd v.len n = some ((v.len : Int) + n) := by
     unfold countAdd
     split
     · omega
     · rfl
-  simpa [reserveC, this] using reserve_ok n hw hr
+  have hR : reserveC h v n = reserve h v n := by
+    unfold reserveC
+    split
+    · simp only [this]
+    · rfl
+  rw [hR]
+  exact reserve_ok n hw hr
 
 /-- The doubling of `alloc_grow_cap` stops below twice what is needed: from
     a start `c > 0`, it ends at `c` itself (already enough) or below
