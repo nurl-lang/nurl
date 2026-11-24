@@ -234,3 +234,5 @@
   a float), and the question of what a frame turns into integers no longer
   asks itself into a recursion: asked again while it is answered, it is
   unsupported.
+- An aggregate handed to a `sink` is checked member by member first: one
+  already released or handed on is a mismatch.

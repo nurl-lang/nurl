@@ -1429,12 +1429,21 @@ def check_function(name, blocks, owning, journal=False):
                     # (an aggregate handed on takes what it carries with it:
                     # a later release of one of those is a release of what
                     # the callee owns now)
-                    todo = [vid]
+                    # (every member first: one already released or handed on
+                    # is handed on again inside this aggregate)
+                    members, todo = [], list(via.get(vid, ()))
                     while todo:
                         x = todo.pop()
-                        if x not in given:
-                            given.add(x)
+                        if x not in members:
+                            members.append(x)
                             todo.extend(via.get(x, ()))
+                    for x in members:
+                        if x in released:
+                            return f"mismatch: {name} a released value handed to a `sink` of {callee} inside an aggregate: {'>'.join(path)}"
+                        if x in given:
+                            return f"mismatch: {name} a value handed to a `sink` of {callee} twice, inside an aggregate: {'>'.join(path)}"
+                    given.add(vid)
+                    given.update(members)
             m = dropifv(l)
             if m:
                 # a release of the value a register holds, as its flag says

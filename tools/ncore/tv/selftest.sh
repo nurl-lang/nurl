@@ -498,4 +498,12 @@ awk '/define void @__nurl_fn.give\(/{m=1} m && /^}/{m=0}
     if (m && /call void @__nurl_fn.keep\(/) print "  call void @__dropifv_Vec__i64(i1 true, %Vec__i64 " c ")" }' "$TMP/g.ll" > "$TMP/grel.ll"
 grep -q "call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %r" "$TMP/grel.ll" || { echo "FAIL: the member-release edit did not apply"; fail=1; }
 cmut a_clone_released_after_the_literal_carrying_it_was_handed_to_a_sink "$TMP/grel.ll" "$TMP/g.core"
+# a clone the literal carries released before keep takes the literal: what
+# keep is handed was released already
+awk '/define void @__nurl_fn.give\(/{m=1} m && /^}/{m=0}
+  { if (m && /= call %Vec__i64 @__nurl_cloneif_Vec__i64\(i1 true, / && c == "") c = $1
+    if (m && /call void @__nurl_fn.keep\(/) print "  call void @__dropifv_Vec__i64(i1 true, %Vec__i64 " c ")"
+    print }' "$TMP/g.ll" > "$TMP/gpre.ll"
+grep -q "call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %r" "$TMP/gpre.ll" || { echo "FAIL: the member-release-before edit did not apply"; fail=1; }
+cmut a_clone_released_before_the_literal_carrying_it_was_handed_to_a_sink "$TMP/gpre.ll" "$TMP/g.core"
 exit $fail
