@@ -24,3 +24,15 @@
     `arcDrop_ok` now states that the value handed back at the last release
     is the one the block held, and `weakDrop_ok` states the block's
     liveness afterwards, not only the returned flag.
+  - `vec_set`'s length check is modelled (`setC`, `setC_ok`): at or past
+    the length it answers `F` and writes nothing, even with capacity left.
+    `set` is named as the raw store it is.
+  - `vec_reserve` checks the byte size of the capacity it rounds up to
+    (`reserveZ`), as `__vec_grow`'s `alloc_size` does, not only the count.
+    `reserveC_size_gap` shows the case the count check alone lets through.
+  - `vec_append`'s complete call, with the drop of the emptied source, is
+    covered (`appendFree_ok`), also for a source that was already empty.
+  - The release of a packed `Vec` after its detach frees both the control
+    block and the new buffer (`packedPush_release`).
+  - `releaseFrom_fresh` states when no id is reused across a release: for
+    destructors that never move the fresh-id counter back.

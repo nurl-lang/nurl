@@ -11,6 +11,12 @@ product or sum is the true one and fits in an `i64` (at most `2^63 - 1`).
 The signed 64-bit arithmetic is modelled exactly: a result is computed in
 `Int` and is the machine's value only when it lies in range, which is what
 the theorems show.
+
+`vec_reserve` checks two things on its growth path, in this order: the
+count `len + n` (`alloc_count_add`) and the byte size of the capacity the
+growth rounds that count up to (`alloc_size` in `__vec_grow`). `reserveC`
+models the first only; `reserveZ` models both, and `reserveC_size_gap`
+shows a reserve that the first check passes and the second refuses.
 -/
 
 namespace B
@@ -70,7 +76,11 @@ theorem countAdd_ok (a b : Int) : ∀ p, countAdd a b = some p → p = a + b ∧
     the growth path (`n > 0` and less room than `n`) does it call
     `alloc_count_add len n`, which panics (`none`) when `len + n` passes
     `iMax`, before the Vec changes; every other path is `reserve`'s
-    (github#2242's review: `reserve` itself adds in `Nat`). -/
+    (github#2242's review: `reserve` itself adds in `Nat`). It checks the
+    count only, not the byte size of the capacity the growth rounds up to:
+    for 8-byte elements, an empty `Vec` and `n = 2^60 - 1` it is `some`
+    while the runtime's `alloc_size` panics (`reserveC_size_gap`).
+    `reserveZ` below is the whole check. -/
 def reserveC {α : Type} (h : Heap α) (v : RVec) (n : Nat) : Option (Heap α × RVec) :=
   if n > 0 ∧ v.cap - v.len < n then
     match countAdd v.len n with
@@ -138,5 +148,124 @@ theorem growCap_le (cap need : Nat) (hn : need ≤ 4611686018427387904) :
   dsimp only
   rw [ite_eq_right (by omega)]
   exact doubleTo_le _ (by split <;> omega)
+
+/-- `__vec_grow_to`'s capacity: a growth sets it to `alloc_grow_cap`'s. -/
+theorem growTo_cap {α : Type} {h h1 : Heap α} {v v1 : RVec} {need : Nat} (hc : v.cap < need)
+    (he : growTo h v need = some (h1, v1)) : v1.cap = growCap v.cap need := by
+  unfold growTo at he
+  rw [ite_eq_left hc] at he
+  cases hd : v.data with
+  | none =>
+    simp only [hd, Option.some.injEq, Prod.mk.injEq] at he
+    rw [← he.2]
+  | some d =>
+    simp only [hd] at he
+    cases hr : h.realloc d (growCap v.cap need) with
+    | none => rw [hr] at he; exact absurd he (by simp)
+    | some q =>
+      rw [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at he
+      rw [← he.2]
+
+/-- `vec_reserve` for elements of `z` bytes, as the runtime runs it. On the
+    growth path (`n > 0`, less room than `n`): `alloc_count_add len n`
+    (the panic, `none`, past `iMax`), then `__vec_grow`: `__vec_grow_cap`
+    picks `alloc_grow_cap cap need` (the owned `cap < need` case: an
+    `RVec`'s capacity is never negative, so the view case does not arise),
+    and `alloc_size z` of that ROUNDED capacity is checked (the panic,
+    `none`) before `__vec_place` allocates; then `reserve`'s growth. Every
+    other path is `reserve`'s, with no check. The runtime computes the
+    capacity in `i64`; for a count `need ≤ iMax` the doubling stays below
+    `2^63` (`alloc_grow_cap` doubles only below `2^62`), so `growCap` in
+    `Nat` is that value. -/
+def reserveZ {α : Type} (z : Nat) (h : Heap α) (v : RVec) (n : Nat) : Option (Heap α × RVec) :=
+  if n > 0 ∧ v.cap - v.len < n then
+    match countAdd v.len n with
+    | none => none
+    | some _ =>
+      match allocSize z (growCap v.cap (v.len + n)) with
+      | none => none
+      | some _ => reserve h v n
+  else reserve h v n
+
+/-- Off the growth path `reserveZ` is `reserve`, whatever the counts. -/
+theorem reserveZ_room {α : Type} {h : Heap α} {v : RVec} {n : Nat} (z : Nat)
+    (hg : ¬ (n > 0 ∧ v.cap - v.len < n)) : reserveZ z h v n = reserve h v n := by
+  unfold reserveZ
+  rw [ite_eq_right hg]
+
+/-- On the growth path, a count past `iMax` panics, and nothing changes. -/
+theorem reserveZ_count_overflow {α : Type} {h : Heap α} {v : RVec} {n : Nat} (z : Nat)
+    (hg : n > 0 ∧ v.cap - v.len < n) (hc : (v.len : Int) + n > iMax) : reserveZ z h v n = none := by
+  have : countAdd v.len n = none := by
+    unfold countAdd
+    split
+    · rfl
+    · omega
+  unfold reserveZ
+  rw [ite_eq_left hg, this]
+
+/-- On the growth path, a rounded capacity whose byte size `alloc_size`
+    refuses panics, and nothing changes. -/
+theorem reserveZ_size_overflow {α : Type} {h : Heap α} {v : RVec} {n : Nat} (z : Nat)
+    (hg : n > 0 ∧ v.cap - v.len < n) (hs : allocSize z (growCap v.cap (v.len + n)) = none) :
+    reserveZ z h v n = none := by
+  unfold reserveZ
+  rw [ite_eq_left hg]
+  cases countAdd v.len n with
+  | none => rfl
+  | some _ =>
+    generalize allocSize z (growCap v.cap (v.len + n)) = A at hs
+    subst hs; rfl
+
+/-- A count that fits and, on the growth path, a rounded capacity whose
+    byte size fits: `reserve_ok`'s result, and on the growth path the new
+    capacity is `alloc_grow_cap`'s and its byte size `z * cap` is the true
+    product, at most `iMax`. -/
+theorem reserveZ_ok {α : Type} {h : Heap α} {v : RVec} {es : List α} (z n : Nat) (hw : h.WF) (hr : Rep h v es)
+    (hfit : (v.len : Int) + n ≤ iMax)
+    (hsz : n > 0 ∧ v.cap - v.len < n → allocSize z (growCap v.cap (v.len + n)) ≠ none) :
+    ∃ h' v', reserveZ z h v n = some (h', v') ∧ Rep h' v' es ∧ h'.WF ∧ v.len + n ≤ v'.cap ∧
+      v'.len = v.len ∧
+      (n > 0 ∧ v.cap - v.len < n → v'.cap = growCap v.cap (v.len + n) ∧ (z : Int) * v'.cap ≤ iMax) := by
+  obtain ⟨h', v', he, hr', hw', hroom, hlen⟩ := reserve_ok n hw hr
+  refine ⟨h', v', ?_, hr', hw', hroom, hlen, fun hg => ?_⟩
+  · unfold reserveZ
+    by_cases hg : n > 0 ∧ v.cap - v.len < n
+    · rw [ite_eq_left hg]
+      have hca : countAdd v.len n = some ((v.len : Int) + n) := by
+        unfold countAdd
+        rw [ite_eq_right (by omega)]
+      obtain ⟨b, hb⟩ := Option.ne_none_iff_exists'.mp (hsz hg)
+      rw [hca]
+      generalize allocSize z (growCap v.cap (v.len + n)) = A at hb
+      subst hb; exact he
+    · rw [ite_eq_right hg]; exact he
+  · have hc : v.cap < v.len + n := by omega
+    have he' : growTo h v (v.len + n) = some (h', v') := by
+      unfold reserve at he; rwa [ite_eq_left hg] at he
+    have hcap := growTo_cap hc he'
+    refine ⟨hcap, ?_⟩
+    obtain ⟨b, hb⟩ := Option.ne_none_iff_exists'.mp (hsz hg)
+    obtain ⟨e, -, hle⟩ := allocSize_ok z _ b hb
+    rw [hcap]; rw [← e]; exact hle
+
+/-- The gap `reserveC` leaves (github#2242's review): an empty `Vec` of
+    8-byte elements, `vec_reserve v (2^60 - 1)`. The count fits, so
+    `reserveC` grows and answers `some`. But the growth rounds the capacity
+    up to `2^60`, whose byte size `8 * 2^60 = 2^63` is past `iMax`, and the
+    runtime's `alloc_size` panics: `reserveZ` is `none`. -/
+theorem reserveC_size_gap {α : Type} (h : Heap α) :
+    (reserveC h ⟨none, 0, 0⟩ (2 ^ 60 - 1)).isSome = true ∧ growCap 0 (2 ^ 60 - 1) = 2 ^ 60 ∧
+      reserveZ 8 h ⟨none, 0, 0⟩ (2 ^ 60 - 1) = none := by
+  have hg : growCap 0 (2 ^ 60 - 1) = 2 ^ 60 := by
+    unfold growCap
+    simp only [Nat.lt_irrefl, ↓reduceIte, Nat.reducePow, Nat.reduceSub, Nat.reduceLT, gt_iff_lt]
+    repeat (rw [doubleTo]; simp only [Nat.reduceMul, Nat.reduceLT, and_self, and_false, ↓reduceIte])
+  refine ⟨?_, hg, ?_⟩
+  · simp [reserveC, countAdd, reserve, growTo, iMax]
+  · apply reserveZ_size_overflow 8 (by decide)
+    simp only [Nat.zero_add]
+    rw [hg]
+    simp [allocSize, iMax]
 
 end B

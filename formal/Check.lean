@@ -918,6 +918,7 @@ import D
 #print axioms B.push_refines
 #print axioms B.get_ok
 #print axioms B.set_ok
+#print axioms B.setC_ok
 #print axioms B.pop_ok
 #print axioms B.free_ok
 #print axioms B.insert_ok
@@ -930,8 +931,14 @@ import D
 #print axioms B.vpush_ok
 #print axioms B.dropLoop_ok
 #print axioms B.releaseFrom_ok
+#print axioms B.memcpy_frame
+#print axioms B.dropLoop_nid
+#print axioms B.dropLoop_wf
+#print axioms B.releaseFrom_fresh
 #print axioms B.copyAt_ok
 #print axioms B.append_ok
+#print axioms B.rep_free_other
+#print axioms B.appendFree_ok
 -- Phase B2: `String` (stdlib/core/string.nu's raw core): the bytes and the NUL terminator
 #print axioms B.strSeal_ok
 #print axioms B.pushBytes_ok
@@ -978,6 +985,12 @@ import D
 #print axioms B.reserveC_overflow
 #print axioms B.reserveC_room
 #print axioms B.reserveC_ok
+#print axioms B.growTo_cap
+#print axioms B.reserveZ_room
+#print axioms B.reserveZ_count_overflow
+#print axioms B.reserveZ_size_overflow
+#print axioms B.reserveZ_ok
+#print axioms B.reserveC_size_gap
 #print axioms B.doubleTo_le
 #print axioms B.growCap_le
 -- Phase B9: std/rc.nu's Rc / Weak / rc_take: a checked-out value is never read or dropped through the block;
@@ -990,6 +1003,7 @@ import D
 #print axioms B.rcWeakDrop_ok
 #print axioms B.packedPush_room
 #print axioms B.packedPush_ok
+#print axioms B.packedPush_release
 -- Phase C0: an executable checker for A1's straight-line fragment, sound against A1's typing
 #print axioms C.checkExpr_sound
 #print axioms C.inferRhs_sound
