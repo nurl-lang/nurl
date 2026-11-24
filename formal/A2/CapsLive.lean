@@ -36,8 +36,69 @@ theorem MInv.liveCaps {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : NoM
     ValCapsInp.of_namesIn (hM.held v E _ V hv hl hs rfl) (hM.pkgs v _ V hs rfl) (hnm v E hv hl)
 
 
-namespace A2
 
+
+/-- `Γ1` ends bindings of `Γ` at most: a live binding of `Γ1` is a live one
+    of `Γ`. -/
+def LiveBack (Γ Γ1 : Ctx) : Prop :=
+  ∀ v E1, Γ1 v = some E1 → E1.live = true → ∃ E, Γ v = some E ∧ E.live = true
+
+theorem LiveBack.refl (Γ : Ctx) : LiveBack Γ Γ := fun _ E h hl => ⟨E, h, hl⟩
+
+theorem LiveBack.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : LiveBack Γ1 Γ2) (h2 : LiveBack Γ2 Γ3) : LiveBack Γ1 Γ3 :=
+  fun v E3 h3 hl3 => by
+    obtain ⟨E2, h2', hl2⟩ := h2 v E3 h3 hl3
+    exact h1 v E2 h2' hl2
+
+theorem LiveBack.kill (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : LiveBack Γ (A2.kill e hv x Γ) :=
+  fun v E1 h hl => by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    refine ⟨E, hE, ?_⟩
+    unfold killE at hl; split at hl
+    · simp at hl
+    · exact hl
+
+theorem LiveBack.setDead {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) (y : Var) (E : Entry) (hd : E.live = false) :
+    LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl => by
+  by_cases hvy : v = y
+  · subst hvy; simp [setE] at hv; subst hv; rw [hd] at hl; cases hl
+  · simp only [setE, upd_ne _ _ hvy] at hv; exact h v E1 hv hl
+
+theorem LiveBack.setLive {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
+    (hl : Ey.live = true) (E : Entry) : LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl1 => by
+  by_cases hvy : v = y
+  · subst hvy; exact ⟨Ey, hy, hl⟩
+  · simp only [setE, upd_ne _ _ hvy] at hv; exact h v E1 hv hl1
+
+theorem PushArg.liveBack {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
+    (hp : PushArg Γ F y Ey t D Γ1) : LiveBack Γ Γ1 := by
+  cases hp with
+  | move _ _ _ => exact (LiveBack.kill Γ .replace false y).setDead y _ rfl
+  | int => exact LiveBack.refl Γ
+  | slice _ => exact LiveBack.refl Γ
+
+/-- A typed right-hand side ends bindings at most. -/
+theorem RhsT.liveBack {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1) :
+    LiveBack Γ Γ1 := by
+  cases hr with
+  | @moveOwn y Ey hy _ _ _ _ => exact (LiveBack.kill Γ .replace false _).setDead _ _ rfl
+  | @moveUp y Ey _ _ _ hy => exact (LiveBack.kill Γ .replace false _).setDead _ _ rfl
+  | pop _ _ _ _ _ => exact LiveBack.kill Γ _ _ _
+  | remove _ _ _ _ _ _ _ => exact LiveBack.kill Γ _ _ _
+  | pair hy _ hpa1 hz _ hpa2 _ => exact hpa1.liveBack.trans hpa2.liveBack
+  | inl hy _ hpa _ => exact hpa.liveBack
+  | inr hy _ hpa _ => exact hpa.liveBack
+  | pack hy _ _ hpa => exact hpa.liveBack
+  | arcNew hy _ _ _ _ _ _ hpa => exact hpa.liveBack
+  | lockNew hy _ _ _ _ _ hpa => exact hpa.liveBack
+  | cellNew hy _ _ _ _ _ hpa => exact hpa.liveBack
+  | chanSend _ _ _ hy _ _ hpa => exact hpa.liveBack
+  | lockRestore _ _ _ hy _ _ hpa => exact hpa.liveBack
+  | @takel y Ey _ _ hy _ _ _ _ _ => exact (LiveBack.kill Γ .replace false _).setDead _ _ rfl
+  | @take y Ey hl hy => exact (LiveBack.kill Γ .replace false _).setLive hy (by assumption) _
+  | @taker y Ey _ _ hy _ _ _ _ _ => exact (LiveBack.kill Γ .replace false _).setDead _ _ rfl
+  | _ => exact LiveBack.refl Γ
 
 /-- The clause over the live bindings: a live slot's value, and the nodes
     its handle or view reaches in the slots, hold no package that captures
