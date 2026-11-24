@@ -1376,7 +1376,7 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
     cases heq
     exact hself ht'
   · -- apart from the hole: unchanged, its views valid as before
-    exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩⟩, hw, hv.keep hH, hnm, hsh.of_blk hb⟩
+    exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨T', hT', ht'⟩, Or.inl ⟨rfl, rfl⟩⟩, hw, hv.keep hH (BlkLe.of_eq hb), hnm, hsh.of_blk hb⟩
   · rcases hr'.node_shape with ⟨heq, rfl⟩ | ⟨es2', rfl⟩
     · cases heq
       exact hself ht'
@@ -1388,8 +1388,9 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
           have := hin'.holdsView
           rw [← Ty.holdsView_undtor, h.node_ty] at this
           simp [Ty.holdsView, hhv] at this) hr' hw hin
-        obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hv s v hin0
-        exact ⟨d0, o0, l0, rfl, dep, hd, hH dep hd _ _ _ _ ha⟩
+        obtain ⟨d0, o0, l0, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := hv s v hin0
+        · exact ⟨d0, o0, l0, rfl, .inl ⟨dep, hd, hH dep hd _ _ _ _ ha⟩⟩
+        · exact ⟨d0, o0, l0, rfl, .inr (by sview_keep hsv)⟩
       · exact DSH_namesIn hr' (hw'.names_nil (by simpa [Ty.holdsView] using hhv)) hnm
       · exact SharesOK.repl hsh' hr' hw (hsh.of_blk hb)
 
@@ -2571,9 +2572,9 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val hEo hlo hcan.ownSlot
         rw [hT0] at h1; cases h1
         obtain ⟨s, hin⟩ := hwT.sub_view hs
-        obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
+        obtain ⟨_, _, _, hv1, hvo⟩ := hvsT s _ hin
         cases hv1
-        exact ha.owned hi.heap
+        exact hvo.elim (fun ⟨_, _, ha⟩ => ha.owned hi.heap) (fun hsv => .inr hsv.payAddr)
       exact MInv.edit_dropE hi hanch hEo hoF hcan hds hhs0 hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp)
@@ -2666,9 +2667,9 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
         obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val hEo hlo hcan.ownSlot
         rw [hT0] at h1; cases h1
         obtain ⟨s, hin⟩ := hwT.sub_view hs
-        obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
+        obtain ⟨_, _, _, hv1, hvo⟩ := hvsT s _ hin
         cases hv1
-        exact ha.owned hi.heap
+        exact hvo.elim (fun ⟨_, _, ha⟩ => ha.owned hi.heap) (fun hsv => .inr hsv.payAddr)
       exact MInv.edit_dropE hi hanch hEo hoF hcan hds hhs0 hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp)
@@ -2980,9 +2981,9 @@ theorem MInv.editB_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val hEo hlo hcan.ownSlot
     rw [hT0] at h1; cases h1
     obtain ⟨s, hin⟩ := hwT.sub_view hs
-    obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
+    obtain ⟨_, _, _, hv1, hvo⟩ := hvsT s _ hin
     cases hv1
-    exact ha.owned hi.heap
+    exact hvo.elim (fun ⟨_, _, ha⟩ => ha.owned hi.heap) (fun hsv => .inr hsv.payAddr)
   exact MInv.editB_drops hi hanch hx hmx hl hty hhv (fun _ h => Edit.noConfusion h) hthru hts hno
     (HeapOK.editSet hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf hvT hn
       hf hr)

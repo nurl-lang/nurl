@@ -390,6 +390,13 @@ theorem EvalR.stay {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
     rw [TakeVal.blk_eq h1, TakeVal.nid_eq h1] at hfr ⊢
     exact upd_ne _ _ (hk.ne_fresh hfr)
   | rwRead _ _ hfr | rwTryRead _ _ hfr => exact upd_ne _ _ (hk.ne_fresh hfr)
+  | slit hfr =>
+    -- AGORA-980: a static literal's block is at a fresh key
+    refine upd_ne _ _ (fun e => ?_)
+    subst e
+    rcases hk with ⟨_, hl⟩ | ⟨u, hu, _⟩
+    · omega
+    · rw [hu] at hfr; cases hfr
   | atomic _ h0 _ _ _ | chanRecv _ h0 _ _ _ _ | chanClose _ h0 _ | lockTake _ h0 _ =>
     exact upd_ne _ _ (hk.ne_some h0)
   | chanSend _ h1 h0 _ _ _ _ =>

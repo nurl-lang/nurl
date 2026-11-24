@@ -65,6 +65,15 @@ theorem EvalR.grows {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
     · by_cases h2 : i = m.nid
       · exact .inr (by omega)
       · simp only [upd, ite_eq_right h1, ite_eq_right h2] at hi; exact .inl hi
+  | slit hfr =>
+    -- AGORA-980: the literal's node at two fresh addresses, its block at a third
+    refine ⟨(by show m.nid ≤ m.nid + 3; omega), fun i hi => ?_, BlkLe.fresh hfr _⟩
+    change upd (upd m.alloc m.nid true) (m.nid + 1) true i = true at hi
+    by_cases h1 : i = m.nid + 1
+    · exact .inr (by omega)
+    · by_cases h2 : i = m.nid
+      · exact .inr (by omega)
+      · simp only [upd, ite_eq_right h1, ite_eq_right h2] at hi; exact .inl hi
   | pair h1 h2 => exact (TakeVal.grows h1).trans (TakeVal.grows h2)
   | inl h1 => exact TakeVal.grows h1
   | inr h1 => exact TakeVal.grows h1

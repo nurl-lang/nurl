@@ -130,14 +130,19 @@ theorem ValOK.href_inv {m : Mem} {τ : Ty} {c : Nat} {P H : List Dep} (h : ValOK
   | dtor _ ih => exact ih hv
   | _ => cases hv
 
+/-- A view a value is valid as: through a dependency, or (AGORA-980) a static
+    literal's text. -/
 theorem ValOK.view_inv {m : Mem} {τ : Ty} {d o l : Nat} {P H : List Dep} (h : ValOK m τ (.view d o l) P H) :
-    ∃ dep ∈ P, ∃ s, ViewAt m dep d o l s ∧ τ.undtor = .slice s := by
+    (∃ dep ∈ P, ∃ s, ViewAt m dep d o l s ∧ τ.undtor = .slice s) ∨
+      ∃ s, SViewAt m d o l s ∧ τ.undtor = .slice s := by
   generalize hv : Val.view d o l = v at h
   induction h with
-  | view hex => cases hv; obtain ⟨dep, hd, hh⟩ := hex; exact ⟨dep, hd, _, hh, rfl⟩
+  | view hex => cases hv; obtain ⟨dep, hd, hh⟩ := hex; exact .inl ⟨dep, hd, _, hh, rfl⟩
+  | sview hs => cases hv; exact .inr ⟨_, hs, rfl⟩
   | dtor _ ih =>
-    obtain ⟨dep, hd, s, hh, hu⟩ := ih hv
-    exact ⟨dep, hd, s, hh, by simpa [Ty.undtor] using hu⟩
+    rcases ih hv with ⟨dep, hd, s, hh, hu⟩ | ⟨s, hs, hu⟩
+    · exact .inl ⟨dep, hd, s, hh, by simpa [Ty.undtor] using hu⟩
+    · exact .inr ⟨s, hs, by simpa [Ty.undtor] using hu⟩
   | _ => cases hv
 
 theorem WFv.view_slice {τ : Ty} {d o l : Nat} (h : WFv τ (.view d o l)) : ∃ s, τ = .slice s := by
@@ -167,19 +172,30 @@ theorem MInv.viewTargetCaps {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {y : Var} {E :
     (hs : m.st y = some ⟨o, some (.view d o' l)⟩) (hda : DataAt m d n) (w : Var) : ValCapsInp n w := by
   obtain ⟨sl, hsl, hok, hown, howning, hbor⟩ := hM.slot y E hy
   rw [hs] at hsl; cases hsl
-  have hvat : ∃ dep s, ViewAt m dep d o' l s ∧ s.holdsView = false := by
+  -- (…or of a static literal's text, AGORA-980: a node of integers in a
+  -- static block, which holds no package)
+  have hvat : (∃ dep s, ViewAt m dep d o' l s ∧ s.holdsView = false) ∨ ∃ s, SViewAt m d o' l s := by
     cases hos : E.mode.ownSlot
     · obtain ⟨V', hV', hvok⟩ := hbor hos hl
       cases hV'
-      obtain ⟨dep, _, s, hva, hu⟩ := hvok.view_inv
-      exact ⟨dep, s, hva, Ty.ok_slice_noView hok hu⟩
+      rcases hvok.view_inv with ⟨dep, _, s, hva, hu⟩ | ⟨s, hsv, _⟩
+      · exact .inl ⟨dep, s, hva, Ty.ok_slice_noView hok hu⟩
+      · exact .inr ⟨s, hsv⟩
     · obtain ⟨_, hwf, hvs⟩ := howning hos
       obtain ⟨s, hτ⟩ := (hwf _ rfl).view_slice
       obtain ⟨T, hT, hvo⟩ := hvs hl
       cases hT
-      obtain ⟨d1, o1, l1, he, dep, _, hva⟩ := hvo s _ (by rw [hτ]; exact ViewIn.here)
+      obtain ⟨d1, o1, l1, he, hor⟩ := hvo s _ (by rw [hτ]; exact ViewIn.here)
       cases he
-      exact ⟨dep, s, hva, Ty.ok_slice_noView hok (by rw [hτ]; rfl)⟩
+      rcases hor with ⟨dep, _, hva⟩ | hsv
+      · exact .inl ⟨dep, s, hva, Ty.ok_slice_noView hok (by rw [hτ]; rfl)⟩
+      · exact .inr ⟨s, hsv⟩
+  rcases hvat with hvat | ⟨s, ht, k, bl, c', es', hk, _, hsb, _, hwf⟩
+  case inr =>
+    subst ht
+    have hL : DataAt m d (.node .int c' d es') := Or.inr ⟨k, bl, hk, hsb, _, _, _, rfl⟩
+    rw [dataAt_unique hM.heap hda hL]
+    exact valCapsInp_of_names (hwf.names_nil_fn (by simp [Ty.hasFn])) w
   obtain ⟨dep, s, ⟨c', es', _, hland, _, hwf⟩, hsv⟩ := hvat
   have hfn : (Ty.vec s).hasFn = false := by
     cases hf : s.hasFn
@@ -216,6 +232,7 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
     · exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
     · exact h.val (by assumption) (by assumption) (by assumption)
   case view => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case slit => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
   case glob =>
     cases he with
     | glob _ hf =>
@@ -1484,6 +1501,7 @@ theorem RhsT.readsCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : 
     · exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
     · exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1
   case view => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case slit => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
   case glob =>
     cases he with
     | glob _ hf =>

@@ -253,6 +253,12 @@ theorem EvalR.codes {P : Prog} {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (he :
   | borrowBor hv => exact ⟨h.slot hv, h⟩
   | «at» hn hv _ => exact ⟨pkgOK_lend (pkgOK_elem (h.vecOf hB hv) (List.getElem_mem hn)), h⟩
   | view _ => exact ⟨pkgOK_view P _ _ _, h⟩
+  | @slit n _ =>
+    -- AGORA-980: a static literal's block owns, and its holders read, a node of integers
+    have hn : PkgOK P (.node .int m.nid (m.nid + 1) (List.replicate n (.int 0))) := by
+      refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with | elem he => rw [List.eq_of_mem_replicate he]; exact pkgOK_int P 0
+    exact ⟨pkgOK_view P _ _ _, h.withBlk rfl (h.blk.upd ⟨hn, hn⟩)⟩
   | sat hn _ _ _ _ hda => exact ⟨pkgOK_lend (pkgOK_elem (h.dataAt hB hda) (List.getElem_mem hn)), h⟩
   | pop hv _ _ =>
     have hT := h.slot hv

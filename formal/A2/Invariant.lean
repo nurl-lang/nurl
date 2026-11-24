@@ -67,6 +67,7 @@ theorem BlkKeep.rd {bl bl' : Blk} (h : BlkKeep bl bl') : bl'.rd = bl.rd := by
   cases hkd : bl.kind with
   | arc => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
   | view => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
+  | static => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
   | lock =>
     rw [hkd] at hk
     obtain ⟨t, k, p⟩ := bl; obtain ⟨t', k', p'⟩ := bl'
@@ -401,16 +402,30 @@ inductive Top : Val → Val → Prop
   | pkg {n a : Val} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)} :
       Top n a → Top n (.pkg fs te ms a cs)
 
+/-- AGORA-980: the node whose element buffer is `d`, found in an owned tree
+    or a payload other than a static literal's.  A static literal's text is
+    no memory a dependency tracks: nothing changes it, and a view of it is
+    valid with no dependency (`ValOK.sview`). -/
+def DataAtM (m : Mem) (d : Nat) (n : Val) : Prop :=
+  (∃ x t, m.st x = some ⟨true, some t⟩ ∧ Sub n t ∧ ∃ ty c es, n = .node ty c d es) ∨
+  (∃ k bl, m.blk k = some bl ∧ Sub n bl.rd ∧ ∃ ty c es, n = .node ty c d es ∧ (bl.kind ≠ .static ∨ ty ≠ .int))
+
+theorem DataAtM.dataAt {m : Mem} {d : Nat} {n : Val} (h : DataAtM m d n) : DataAt m d n := by
+  rcases h with h | ⟨k, bl, hk, hs, ty, c, es, he, _⟩
+  · exact .inl h
+  · exact .inr ⟨k, bl, hk, hs, ty, c, es, he⟩
+
 /-- A node a root's slot reaches directly: one at the top of its own tree, or
     one a handle it holds names (a borrowed struct is a bundle of handles),
     or (A3.1) a share at the top of a borrowed slot's value: through it the
     slot reaches its block's payload.  A3.5's third cut: or a cell share at
     the top of a borrowed slot's value (a library's `in` handle), which a
-    copy of the slot, or a field read out of it, lands on. -/
+    copy of the slot, or a field read out of it, lands on.  (AGORA-980: a
+    view's node is one of memory, `DataAtM`: not a static literal's text.) -/
 def RootNode (m : Mem) (r : Var) (n : Val) : Prop :=
   (∃ T, m.st r = some ⟨true, some T⟩ ∧ Top n T) ∨
   (∃ v c, m.st r = some ⟨false, some v⟩ ∧ Top (.href c) v ∧ NodeAt m c n) ∨
-  (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAt m d n) ∨
+  (∃ v d o l, m.st r = some ⟨false, some v⟩ ∧ Top (.view d o l) v ∧ DataAtM m d n) ∨
   (∃ v k q, m.st r = some ⟨false, some v⟩ ∧ Top (.arc k q) v ∧ n = .arc k q) ∨
   (∃ v k, m.st r = some ⟨false, some v⟩ ∧ Top (.cell k) v ∧ n = .cell k)
 
@@ -494,9 +509,41 @@ def ViewAt (m : Mem) (dep : Dep) (d o l : Nat) (t : Ty) : Prop :=
   ∃ c es, dep.kind ≠ .self ∧ Landed m dep (.node t c d es) ∧
     o + l ≤ es.length ∧ WFv (.vec t) (.node t c d es)
 
-/-- Every view stored in `T` is valid through some dependency in `H`. -/
+/-- AGORA-980: the view `(d, o, l)` of element type `t` is of a static
+    literal's text, a node of integers in the payload of a `static` block, which no step changes
+    (`BlkKeep`) and which the sweep keeps while a view of it is held. -/
+def SViewAt (m : Mem) (d o l : Nat) (t : Ty) : Prop :=
+  t = .int ∧ ∃ k bl c es, m.blk k = some bl ∧ bl.kind = .static ∧ Sub (.node .int c d es) bl.rd ∧
+    o + l ≤ es.length ∧ WFv (.vec .int) (.node .int c d es)
+
+/-- A static literal's view stays valid while its blocks are kept. -/
+theorem SViewAt.blkLe {m m' : Mem} {d o l : Nat} {t : Ty} (h : SViewAt m d o l t)
+    (hb : BlkLe m.blk m'.blk) : SViewAt m' d o l t := by
+  obtain ⟨ht, k, bl, c, es, hk, hks, hs, hl, hw⟩ := h
+  obtain ⟨bl', hk', hkp⟩ := hb k _ hk
+  rw [hkp.2.2 (by rw [hks]; exact fun h => by cases h) (by rw [hks]; exact fun h => by cases h)] at hk'
+  exact ⟨ht, k, bl, c, es, hk', hks, hs, hl, hw⟩
+
+theorem SViewAt.of_blk {m m' : Mem} {d o l : Nat} {t : Ty} (h : SViewAt m d o l t)
+    (hb : m'.blk = m.blk) : SViewAt m' d o l t :=
+  h.blkLe (by rw [hb]; exact BlkLe.refl _)
+
+/-- AGORA-980: a static literal's view carried over a step: the same blocks,
+    or blocks that are kept (`BlkLe`, a hypothesis in scope). -/
+syntax "sview_keep " term : tactic
+macro_rules
+  | `(tactic| sview_keep $h) => `(tactic| first
+      | exact $h
+      | exact SViewAt.of_blk $h rfl
+      | exact SViewAt.blkLe $h (by assumption)
+      | exact SViewAt.blkLe $h (BlkLe.of_eq (by assumption))
+      | exact SViewAt.of_blk $h (by assumption))
+
+/-- Every view stored in `T` is valid through some dependency in `H`, or
+    (AGORA-980) is of a static literal's text. -/
 def ViewsOK (m : Mem) (τ : Ty) (T : Val) (H : List Dep) : Prop :=
-  ∀ s v, ViewIn τ T s v → ∃ d o l, v = .view d o l ∧ ∃ dep ∈ H, ViewAt m dep d o l s
+  ∀ s v, ViewIn τ T s v → ∃ d o l, v = .view d o l ∧
+    ((∃ dep ∈ H, ViewAt m dep d o l s) ∨ SViewAt m d o l s)
 
 /-- What a value captured by name (the closures in it) is held, by name,
     in `H`. -/
@@ -526,6 +573,9 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       (∃ dep ∈ P, HrefAt m dep c t H) → ValOK m (.vec t) (.href c) P H
   | view {t : Ty} {d o l : Nat} {P H : List Dep} :
       (∃ dep ∈ P, ViewAt m dep d o l t) → ValOK m (.slice t) (.view d o l) P H
+  /-- AGORA-980: a view of a static literal's text, which needs no dependency. -/
+  | sview {t : Ty} {d o l : Nat} {P H : List Dep} :
+      SViewAt m d o l t → ValOK m (.slice t) (.view d o l) P H
   | pair {a b : Ty} {x y : Val} {P H : List Dep} :
       ValOK m a x (P ++ H) H → ValOK m b y (P ++ H) H → ValOK m (.prod a b) (.pair x y) P H
   | inl {a b : Ty} {x : Val} {P H : List Dep} : ValOK m a x (P ++ H) H → ValOK m (.sum a b) (.inl x) P H
@@ -609,10 +659,21 @@ theorem valOK_vec {t : Ty} : ValOK m (.vec t) v P H ↔ ∃ c, v = .href c ∧ �
   · rintro ⟨c, rfl, h⟩; exact .href h
 
 theorem valOK_slice {t : Ty} :
-    ValOK m (.slice t) v P H ↔ ∃ d o l, v = .view d o l ∧ ∃ dep ∈ P, ViewAt m dep d o l t := by
+    ValOK m (.slice t) v P H ↔ ∃ d o l, v = .view d o l ∧
+      ((∃ dep ∈ P, ViewAt m dep d o l t) ∨ SViewAt m d o l t) := by
   constructor
-  · intro h; cases h with | view h => exact ⟨_, _, _, rfl, h⟩
-  · rintro ⟨d, o, l, rfl, h⟩; exact .view h
+  · intro h
+    cases h with
+    | view h => exact ⟨_, _, _, rfl, .inl h⟩
+    | sview h => exact ⟨_, _, _, rfl, .inr h⟩
+  · rintro ⟨d, o, l, rfl, h | h⟩
+    · exact .view h
+    · exact .sview h
+
+/-- A view valid through a dependency, or of a static literal's text. -/
+theorem ValOK.of_viewOr {d o l : Nat} {t : Ty}
+    (h : (∃ dep ∈ P, ViewAt m dep d o l t) ∨ SViewAt m d o l t) : ValOK m (.slice t) (.view d o l) P H :=
+  h.elim .view .sview
 
 theorem valOK_prod {a b : Ty} :
     ValOK m (.prod a b) v P H ↔ ∃ x y, v = .pair x y ∧ ValOK m a x (P ++ H) H ∧ ValOK m b y (P ++ H) H := by

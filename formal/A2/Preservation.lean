@@ -1506,8 +1506,10 @@ theorem ViewsOK.dropSelf {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨tr
     (hsf : SelfFree T) {τ : Ty} {H : List Dep} (h : ViewsOK m τ T H) :
     ViewsOK m τ T (H.filter (fun d => d.root != x || d.kind == .share)) := by
   intro s v hin
-  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hin
-  refine ⟨d, o, l, rfl, dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩
+  obtain ⟨d, o, l, rfl, hvo⟩ := h s v hin
+  rcases hvo.symm with hsv | ⟨dep, hd, ha⟩
+  · exact ⟨d, o, l, rfl, .inr (by sview_keep hsv)⟩
+  refine ⟨d, o, l, rfl, .inl ⟨dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩⟩
   by_cases hrx : dep.root = x
   · by_cases hks : dep.kind = .share
     · simp [hks]
@@ -2020,7 +2022,7 @@ theorem SlotOK.keepRoots {m m1 : Mem} {E : Entry} {sl : Slot} (hs : SlotOK m E s
     · obtain ⟨hown, hwf, hv⟩ := h2 ho
       refine ⟨hown, hwf, fun hl => ?_⟩
       obtain ⟨T, hT, hvs⟩ := hv hl
-      exact ⟨T, hT, hvs.keep fun h hh => (hk' h (by simp [Entry.vdeps, ho, hh])).1⟩
+      exact ⟨T, hT, hvs.keep (hb := BlkLe.of_eq hb) fun h hh => (hk' h (by simp [Entry.vdeps, ho, hh])).1⟩
     · obtain ⟨v, hv, hok⟩ := h3 ho hl
       exact ⟨v, hv, hok.keep (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd]))
         (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd])) hb⟩
@@ -2103,7 +2105,7 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
     exact ⟨hi.dtorIn.1 Ex hx hdb hos (Or.inl hnint) d hdv hnm,
       hi.wf.dtor x Ex hx hdb hos (Or.inl hnint) d hdv hnm⟩
   have hvs1 : ViewsOK m1 Ex.ty v0 (Ex.revive x).held := by
-    refine (revive_views hi.toMInv hx hos hdbv hslm).keep fun d hd => ?_
+    refine (revive_views hi.toMInv hx hos hdbv hslm).keep (hb := BlkLe.of_eq hblk) fun d hd => ?_
     have hdv : d ∈ (Ex.revive x).vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hd
     obtain ⟨hrs, Er, hEr, hro⟩ := hxd d hdv
     exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs) (BlkLe.of_eq hblk)).vkeep
@@ -2331,7 +2333,7 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
       intro hd; simp [Entry.revive] at hd
     · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
       rw [hout w hwk] at hsw
-      have hE0 : ArmOK m1 E0 sl := (hi.armed w E0 sl h0 hsw).keep fun _ hd hos dep hdm => by
+      have hE0 : ArmOK m1 E0 sl := (hi.armed w E0 sl h0 hsw).keep (hb := BlkLe.of_eq hblk) fun _ hd hos dep hdm => by
         have hdm' := List.mem_filter.mp hdm
         have hnm : dep.kind.isName = false := by simpa using hdm'.2
         have hdv : dep ∈ E0.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1

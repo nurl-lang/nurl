@@ -37,8 +37,7 @@ theorem rootKeep_move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', Ow
   · exact Or.inl ⟨T0, by rw [hr]; exact hn, ht⟩
   · obtain ⟨t, d, es, rfl⟩ := hnode.eq
     exact Or.inr (Or.inl ⟨v, c, by rw [hr]; exact hc, ht, (hin _ hnode.inMem).nodeAt rfl⟩)
-  · obtain ⟨t, c, es, rfl⟩ := hdata.eq
-    exact Or.inr (Or.inr (Or.inl ⟨v, d, o', l, by rw [hr]; exact hc, ht, (hin _ hdata.inMem).dataAt rfl⟩))
+  · exact Or.inr (Or.inr (Or.inl ⟨v, d, o', l, by rw [hr]; exact hc, ht, hdata.move hown hb⟩))
   · exact Or.inr (Or.inr (Or.inr (Or.inl ⟨v, k, q, by rw [hr]; exact hc, ht, hn⟩)))
   · exact Or.inr (Or.inr (Or.inr (Or.inr ⟨v, k, by rw [hr]; exact hc, ht, hn⟩)))
 
@@ -503,7 +502,7 @@ theorem slot_ownArg (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
         (mem_compAll.mpr ⟨e, hrd, .self, Or.inl rfl, by rw [comp_self_r]⟩))).1
     · exact (h.keep_A hi hb dep hd).1
   refine ⟨T, hT, hw, ViewsOK.ownHeld true (((hv.memDeps).mono (fun d hd =>
-    List.mem_append_left _ (hσm d hd))).keep hkeep), ?_⟩
+    List.mem_append_left _ (hσm d hd))).keep hkeep (BlkLe.of_eq hb.blk)), ?_⟩
   cases hhv : Ea.ty.holdsView
   · exact NamesIn.nil _ (hw.names_nil hhv)
   · intro c hc
@@ -829,7 +828,7 @@ theorem armed_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
   have hty1 : E1.ty = E0.ty := by rw [ht2, ht0]
   have hn1 : E1.ty ≠ .int ∨ E1.mode = .rootb := Or.inl (by rw [hty1]; exact hnint)
   rw [clean_ty, hty1]
-  refine (hvs.memDeps.keep hk).mono fun d hd' => ?_
+  refine (hvs.memDeps.keep hk (BlkLe.of_eq hb.blk)).mono fun d hd' => ?_
   have hd'' := List.mem_filter.mp hd'
   have hnm : d.kind.isName = false := by simpa using hd''.2
   refine (Entry.clean_vdeps_mem hdb1 hos1 hn1 hnm).mpr ?_
