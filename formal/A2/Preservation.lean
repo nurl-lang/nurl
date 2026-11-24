@@ -1263,9 +1263,9 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
       (compE E b)) F s Δ) (hny : NoPin Γ y) (hdy : DtorSafe Γ .replace false y) (hpz : EndOK Δ z)
     (hpx : EndOK (exitScope z Δ) x)
     {m m' : Mem} {s' : Stmt} (hi : Inv m Γ F (.unpair y x z s)) (hst : Step P m (.unpair y x z s) (.ok m' s'))
-    (hnr : ¬ IsReap m (.unpair y x z s) m' s') :
+    (hnr : ¬ IsReap m (.unpair y x z s) m' s') (Z : Var → List Var) (hzz : HeldZ m Γ Z (.unpair y x z s)) :
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x (exitScope z Δ)) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' := by
+      Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z' := by
   cases hst with
   | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | unpair hvy hmx hmz hxz' =>
@@ -1322,7 +1322,25 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     have hrel := post.rel
     have hanch1 := hrel.anchS hanchS
     refine ⟨_, StmtT.scope ⟨compE E a, by simp [setE, upd_ne _ _ hxz], compE_mode_ne E a⟩ hxF
-      (StmtT.scope ⟨compE E b, by simp [setE], compE_mode_ne E b⟩ hzF hs hpz) hpx, ?_, by simp, ?_, ?_⟩
+      (StmtT.scope ⟨compE E b, by simp [setE], compE_mode_ne E b⟩ hzF hs hpz) hpx, ?_, by simp, ?_, ?_,
+      Z, ?_, ZKeep.refl _ _⟩
+    rotate_right
+    · -- (AGORA-937 B4: the pair's halves were the pair's, a binding of the frame)
+      have hsp : s.spine = [] := src_spine hsrc
+      refine hzz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+        (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun v hv => ?_) (fun _ _ _ _ _ _ _ _ hD hcw => ?_)
+      · have hpz : p ≠ z := fun h => by
+          rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact compE_mode_ne E b hmp
+        have hpx : p ≠ x := fun h => by
+          rw [h] at hp; simp [setE, upd_ne _ _ hxz] at hp; rw [← hp] at hmp; exact compE_mode_ne E a hmp
+        simp only [setE, upd_ne _ _ hpz, upd_ne _ _ hpx] at hp
+        exact hrel.rootb_back hp hmp
+      · simp [Stmt.spine, hsp] at hv; rcases hv with rfl | rfl
+        · exact hx
+        · exact hz
+      · simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+        rcases hv with h | h | h <;> simp [h]
+      · exact hcw.unpair (hD y (by simp [Stmt.killVars])) hvy hxy hzy hxz
     · have hyx : y ≠ x := fun h => by rw [h, hx] at hy; cases hy
       have hyz : y ≠ z := fun h => by rw [h, hz] at hy; cases hy
       -- (AGORA-963 step 3: the pair's halves were the pair's)
@@ -5349,15 +5367,44 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           fun v E' hv _ => hKO.2 v E' hv,
           -- the body gave no `letd` binding outside it a new view
           fun v E hv hd hos hn _ => StmtT.dkeep hs hi.dtorOut hi.dtorIn v E hv hd hos hn (hKO.2 v E hv).1⟩,
-        fun v hv => ?_⟩
+        fun v hv => ?_, Z, ?_, fun q E hq hmq => rfl⟩
+      rotate_right
+      · -- (AGORA-937 B4: the frame's end restores its start's slots, `hsteq`, which
+        -- the frame's record covers)
+        have hrbΔ : ∀ q E, Δ q = some E → E.mode = .rootb → Γ q = some E ∧ q ∉ s.spine ∧ q < m0.nv := by
+          intro q E hq hmq
+          obtain ⟨hqs, E0, h0⟩ := hKO.2 q E hq
+          obtain ⟨E', h', hm', _, hrb⟩ := hKO.1 q E0 h0 hqs
+          rw [hq] at h'; cases h'
+          have hm0 : E0.mode = .rootb := by rw [← hm']; exact hmq
+          refine ⟨by rw [hrb hm0]; exact h0, hqs, ?_⟩
+          have := hM.nvSt q (by rw [← hM.dom, hq]; rfl)
+          simpa using this
+        refine
+          { caps := fun q E hq hmq d hd hb hh => ?_
+            reach := fun q E hq hmq v hv => ?_
+            bound := fun q E hq hmq v hv => ?_
+            frames := fun x0 m00 b0 h q E hq hmq _ hlt d hd hb hh => ?_ }
+        · obtain ⟨h0, hqs, hlt⟩ := hrbΔ q E hq hmq
+          exact (hz.frames x m0 s (by simp [Stmt.catchFrames]) q E h0 hmq hqs hlt d hd hb hh).of_st hsteq
+        · obtain ⟨h0, hqs, _⟩ := hrbΔ q E hq hmq
+          have hvx : v = x := by simpa [Stmt.under, Stmt.spine, Stmt.killVars] using hv
+          rw [hvx]
+          exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqs, Stmt.killVars])
+        · obtain ⟨h0, _, _⟩ := hrbΔ q E hq hmq
+          exact Nat.lt_of_lt_of_le (hz.bound q E h0 hmq v hv) (by simp [hnv1])
+        · simp [Stmt.catchFrames] at h
+          obtain ⟨rfl, rfl, rfl⟩ := h
+          obtain ⟨h0, hqs, _⟩ := hrbΔ q E hq hmq
+          exact hz.frames x0 m00 s (by simp [Stmt.catchFrames]) q E h0 hmq hqs hlt d hd hb hh
       have hvx : v ≠ x := fun e => hxF (e ▸ hv)
       have hvs : v ∉ s.spine := fun h => hs.spine_F v h (List.mem_append_left _ hv)
       simp only [Mem.set_st, upd_ne _ _ hvx]; exact hout v hvs
 
   | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ _ _ =>
-    intro m m' s' hcd hi hst Z hz
+    intro m m' s' hcd hi hst Z hzz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
-    · exact pres_reap ht0 hrs hcd hi hrk Z hz
-    exact pres_unpair hsrc hy hl hm (hty.imp id fun ⟨f, h, _⟩ => ⟨f, h⟩) hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst hnr
+    · exact pres_reap ht0 hrs hcd hi hrk Z hzz
+    exact pres_unpair hsrc hy hl hm (hty.imp id fun ⟨f, h, _⟩ => ⟨f, h⟩) hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst hnr Z hzz
 
 end A2
