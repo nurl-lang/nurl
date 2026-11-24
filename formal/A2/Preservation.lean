@@ -1,5 +1,6 @@
 import A2.TakeB
 import A2.StepCaps
+import A2.CapsLive
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/
