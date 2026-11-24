@@ -5012,7 +5012,7 @@ unsafe @ note_unsafe_item s pos s what → v {
 // parentheses, or one where a type is expected, is a type name; the one
 // after a whole type is the field's name. The template's own type
 // parameters are skipped. A type private to another strict file is refused.
-unsafe @ __vis_check_template s sname s tfile s tparams s body → v {
+@ __vis_check_template s sname s tfile s tparams s body → v {
     ? != 0 ( nurl_str_len ( nurl_sym_get2 g_generic_struct_syms sname `__svis` ) ) { ^ } {}
     ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__svis` ) `1` )
     : i lx ( nurl_lex_new body ( nurl_str_cat3 `<template ` sname ( nurl_str_cat3 ` of ` tfile `>` ) ) )
@@ -34471,7 +34471,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ^ ( nurl_str_cat `*` `` )
 }
 
-unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
+@ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
 
 // Is `txt` (an `=`'s right-hand side as written) a struct literal of
 // literals only — `@ Name { `text` 12 T … }`: no binding, call, field
@@ -59158,7 +59158,7 @@ unsafe @ amv_open i syms s src s vt → s {
     ^ ( nurl_str_cat `m` `` )
 }
 
-unsafe @ amv_close → v { = g_amv_cur 0 }
+@ amv_close → v { = g_amv_cur 0 }
 
 // Does the statement being compiled move `src` (amv_open)?
 @ amv_moves s src → b { ^ & != 0 g_amv_cur ( seq g_amv_src src ) }
@@ -61639,6 +61639,27 @@ unsafe @ bck_st_get s state i id → i {
         ^ ? == v BCK_MAYBE_OWNED BCK_BORROWED_SHARED v
     } {}
     BCK_UNINIT
+}
+
+// The first binding at or after `k` that `state`, `n` bytes long, holds
+// as a borrow - what bck_st_get answers BCK_BORROWED_SHARED for: that
+// digit, or BCK_MAYBE_OWNED's - or `n` when none does. A row's sweep asks
+// about every binding of its state in turn, and bck_st_get measures the
+// state up to the id it is asked: quadratic in the bindings, per row (1.6 %
+// of a self-compile was that strnlen alone).
+// (unsafe: the bytes are read through a raw pointer. `n` is the state's
+// length as the caller measured it, so every byte read is inside it.)
+unsafe @ bck_st_next_borrow s state i n i k → i {
+    : *u sp # *u state
+    : i cb + 48 BCK_BORROWED_SHARED
+    : i cm + 48 BCK_MAYBE_OWNED
+    : ~ i j ? < k 0 0 k
+    ~ < j n {
+        : i c # i . sp j
+        ? | == c cb == c cm { ^ j } {}
+        = j + j 1
+    }
+    n
 }
 
 // The digit as it is — BCK_MAYBE_OWNED too: a state put back as it was.
@@ -73181,9 +73202,12 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : i amv_k ? & == kc 6 | ( bck_field_is rec 6 `am` ) ( bck_field_is rec 6 `ak` ) ( bck_field_int rec 1 ) -1
     : ~ s brest ( nurl_str_cat ist `` )
     : i n ( nurl_str_len ist )
-    : ~ i k 0
+    // (Only a binding `ist` holds as a borrow can be consumed here: the walk
+    // steps from one to the next, bck_st_next_borrow.)
+    : ~ i k ( bck_st_next_borrow ist n 0 )
     ~ < k n {
-        ? && && == BCK_BORROWED_SHARED ( bck_st_get ist k ) | | == BCK_MOVED ( bck_st_get out k ) == BCK_STORED ( bck_st_get out k ) == BCK_MAYBE_MOVED ( bck_st_get out k ) ! & == k amv_k ( bck_st_may_own ist k ) {
+        : i ok ( bck_st_get out k )
+        ? && | | == BCK_MOVED ok == BCK_STORED ok == BCK_MAYBE_MOVED ok ! & == k amv_k ( bck_st_may_own ist k ) {
             : s ks ( nurl_str_int k )
             : s fbk ( nurl_sym_get g_bck ( bck_bkey `fb_` ks ) )
             ? == 0 ( nurl_str_len fbk ) {
@@ -73236,7 +73260,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 }
             }
         } {}
-        = k + k 1
+        = k ( bck_st_next_borrow ist n + k 1 )
     }
     // (Last, so a cause found above — a copy of the handle, an element
     // through a borrow — is the one a view ends with.)
@@ -97202,8 +97226,10 @@ unsafe @ __emit_hoisted_body s funcdef → v {
         : s tail # s + # i fp + sq 1
         ? & mark != 0 ( nurl_str_starts tail `jfs ` ) {
             : i js + sq 5
+            // (js, je inside [0, flen]: __span_dup, not nurl_str_slice's
+            // strlen of the whole function per marker.)
             : i je ( __ha_line_end funcdef js flen )
-            : s jw ( nurl_str_slice funcdef js - je js )
+            : s jw ( __span_dup funcdef js je )
             ? ! ( str_contains_word jf_slots jw ) {
                 = jf_slots ? == 0 jf_n ( nurl_str_cat jw `` ) ( nurl_str_cat3 jf_slots ` ` jw )
                 = jf_n + jf_n 1
@@ -97214,7 +97240,7 @@ unsafe @ __emit_hoisted_body s funcdef → v {
             ? & mark != 0 ( nurl_str_starts tail `jcs ` ) {
                 : i cs + sq 5
                 : i ce ( __ha_line_end funcdef cs flen )
-                : s cw ( nurl_str_slice funcdef cs - ce cs )
+                : s cw ( __span_dup funcdef cs ce )
                 = jc_pairs ? == 0 jc_n ( nurl_str_cat cw `` ) ( nurl_str_cat3 jc_pairs ` ` cw )
                 = jc_n + jc_n 1
             } {}
@@ -110075,7 +110101,7 @@ unsafe @ __rpg_ovreads_set s v → v { = g_rpg_ovreads ( nurl_str_cat v `` ) }
     ^ nm
 }
 
-unsafe @ __rpg_tmp_next → v { = g_rpg_tmp + g_rpg_tmp 1 }
+@ __rpg_tmp_next → v { = g_rpg_tmp + g_rpg_tmp 1 }
 
 // What a `??`'s matched value (first token `tt`, type `vt`) reaches, for
 // the payloads its arms bind (__rprov_alias): a call's result under a
