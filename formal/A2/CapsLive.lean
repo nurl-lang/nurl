@@ -1074,16 +1074,16 @@ theorem LiveCaps.repl {m m' : Mem} {Γ Γ' : Ctx} {w r : Var} {T T' n n' : Val}
 /-- **An edit of a `Vec` node through its owner** (`NodeOf`): the node
     `⟨t, c, d, es⟩` becomes `⟨t, c, d', es'⟩` at the same handle, each new
     element an old one or clean throughout, so the clause carries over. -/
-theorem LiveCaps.editNode {m1 m' : Mem} {Γ1 Γ' Γ'' : Ctx} {w x o : Var} {T T' : Val} {t : Ty}
+theorem LiveCaps.editNodeH {m1 m' : Mem} {Γ1 Γ' : Ctx} {w x o : Var} {T T' : Val} {t : Ty}
     {c d d' : Nat} {es es' : List Val}
     (h : LiveCaps m1 Γ1 w) (hb : LiveBack Γ1 Γ') (hno : NodeOf m1 x o T t c d es)
     (hrp : Repl (.node t c d es) (.node t c d' es') T T')
     (hr' : m'.st o = some ⟨true, some T'⟩) (hne : ∀ z, z ≠ o → m'.st z = m1.st z)
     (hcl : ValCapsInp (.node t c d es) w → ValCapsInp (.node t c d' es') w)
-    (hel : ∀ e ∈ es', e ∈ es ∨ ∀ z, Sub z e → ValCapsInp z w) (hM : MInv m' Γ'') :
+    (hel : ∀ e ∈ es', e ∈ es ∨ ∀ z, Sub z e → ValCapsInp z w) (hnoh : ∀ c, Sub (.href c) T' → False) :
     LiveCaps m' Γ' w := by
   obtain ⟨_, _, ho, _⟩ := hno
-  refine h.repl hb ho hrp hr' hne hcl (fun z hz => ?_) (fun c' hc => hM.slot_no_href hr' hc)
+  refine h.repl hb ho hrp hr' hne hcl (fun z hz => ?_) hnoh
   cases hz with
   | refl =>
     intro ty c2 d2 es2 heq
@@ -1219,5 +1219,26 @@ theorem LiveCaps.of_shrink {m m' : Mem} {Γ Γ' : Ctx} {w x : Var} (h : LiveCaps
   · obtain ⟨E0, h0, hl0⟩ := hb v E hvx hv hl
     obtain ⟨h1, h2⟩ := h v E0 o V h0 hl0 (hp v _ hs)
     exact ⟨h1, fun c hc x' t n hx' hsn hnd => h2 c hc x' t n (hp x' _ hx') hsn hnd⟩
+
+
+theorem LiveCaps.editNode {m1 m' : Mem} {Γ1 Γ' Γ'' : Ctx} {w x o : Var} {T T' : Val} {t : Ty}
+    {c d d' : Nat} {es es' : List Val}
+    (h : LiveCaps m1 Γ1 w) (hb : LiveBack Γ1 Γ') (hno : NodeOf m1 x o T t c d es)
+    (hrp : Repl (.node t c d es) (.node t c d' es') T T')
+    (hr' : m'.st o = some ⟨true, some T'⟩) (hne : ∀ z, z ≠ o → m'.st z = m1.st z)
+    (hcl : ValCapsInp (.node t c d es) w → ValCapsInp (.node t c d' es') w)
+    (hel : ∀ e ∈ es', e ∈ es ∨ ∀ z, Sub z e → ValCapsInp z w) (hM : MInv m' Γ'') :
+    LiveCaps m' Γ' w :=
+  h.editNodeH hb hno hrp hr' hne hcl hel fun _ hc => hM.slot_no_href hr' hc
+
+/-- **The node a live binding reaches** (itself, or through its handle) is
+    clean. -/
+theorem LiveCaps.nodeOf {m : Mem} {Γ : Ctx} {w x o : Var} {E : Entry} {T : Val} {t : Ty} {c d : Nat}
+    {es : List Val} (h : LiveCaps m Γ w) (hx : Γ x = some E) (hl : E.live = true)
+    (hno : NodeOf m x o T t c d es) : ValCapsInp (.node t c d es) w := by
+  obtain ⟨_, _, ho, hor⟩ := hno
+  rcases hor with ⟨rfl, rfl⟩ | ⟨hsx, hs⟩
+  · exact (h _ E true _ hx hl ho).1
+  · exact (h x E false _ hx hl hsx).2 c (Sub.refl _) o T _ ho hs ⟨t, d, es, rfl⟩
 
 end A2
