@@ -1184,3 +1184,12 @@ Integration state (branch wip/t937-b4-int, 8158047b7):
   - `te.ok` from `PkgsOK` or `MemCodes`.
 
 Next: check whether either already exists.
+
+*Integration progress (2026-11-25):*
+- **CapsLive.lean** also has `RhsT.liveCapsSet`, the combined `x := r`, and `LiveCaps.of_change` / `of_changeR`, the clause across slot changes. `of_changeR` asks two things:
+  - a live changed value is clean, with no handle;
+  - each node in a changed slot is clean, or is what an old node at the same handle became, clean if that one was.
+
+  An edit's owner may be dead, so its whole tree need not be clean.
+- **Preservation:** `letv`, `letd` and `assign` are done (42 errors left).
+- **Next:** `Repl.nodesBack`, the node correspondence across a `Repl`, from `Repl.capsInp`. Then the edit, push, insert and `takeB` sites through `of_changeR`; then `unpair`, `reap`, `free`, the scope exits, the frames, and `frozenIn` / `catchIn` (`hlive`).
