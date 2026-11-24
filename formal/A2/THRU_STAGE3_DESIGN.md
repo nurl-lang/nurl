@@ -1271,3 +1271,14 @@ What `Inv` lacks is `z_p` for a parameter outside the current spine. Options, in
 3. Carry the frame list in the `rbind` statement: `rbind p z s`. This is a syntax change across A2/A3 (largest).
 
 Whichever is chosen, the obligations above stand, with `v ∉ F` read as `v ∉ z_p`. Next session: start with option 1's feasibility.
+
+**Option 1 checked (2026-11-25): an existential frame list is not enough.** An `Inv` field `∃ Z ⊆ F ++ s.frozenAt p, FCaps m Γ (∉ Z) d.root` is kept by the leaf steps, and `catchP` can restore the creation-time `Z`.
+
+But `catchIn` must show the outer `Z` covers the post-state. A binding older than the catch frame lies in the catch's `F` and may be revived there. It was clean at the frame's start only for the `Z` chosen then. Nothing ties that choice to the `Z` chosen now.
+
+So the list must be **canonical**: the runtime frozen lists of the frames above `p`, concatenated. That is option 2. `Inv` takes the map `Z : Var → List Var` of the outer frames' parameters, `Inv m Γ F Z s`:
+- `preserve` keeps `Z` for the old parameters;
+- `Inv.frozenIn` and `Inv.rbindIn` extend it;
+- a catch frame's carried clause is stated at the `Z` of its start, which is the `Z` then, because `Z` is threaded.
+
+This is a signature change at every `Inv` use: mechanical, large, multi-session. It is the next step.
