@@ -3356,10 +3356,6 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 // The type arguments of the generic struct being instantiated (its field
 // types are parsed in a pseudo-file); see vis_check_xref.
 : ~ s g_vis_inst_targs ``
-// The file that wrote the generic struct template an instance is being made
-// from, while its body is re-read (AGORA-861): its own private types are
-// visible there, another module's are not.
-: ~ s g_vis_tmpl_file ``
 
 // Nonzero while the compiler reads back a type it recorded itself (a
 // library handle's type argument, __libh_targ): the program wrote it
@@ -4995,6 +4991,50 @@ unsafe @ note_unsafe_item s pos s what → v {
 // the name as one token and never asked, so a strict module's private type
 // could be named from another file inside any generic). Called with the
 // lexer still on the name, so the diagnostic points at it.
+// A generic struct template's own field types, judged once against the file
+// that wrote it (AGORA-861). The template is stored unparsed and is first
+// read in an instance's rescan, where substituted text cannot tell a name
+// the template wrote from an instance's type argument; so its unsubstituted
+// body is read here. A struct body is `type name` pairs: an identifier in
+// parentheses, or one where a type is expected, is a type name; the one
+// after a whole type is the field's name. The template's own type
+// parameters are skipped. A type private to another strict file is refused.
+unsafe @ __vis_check_template s sname s tfile s tparams s body → v {
+    ? != 0 ( nurl_str_len ( nurl_sym_get2 g_generic_struct_syms sname `__svis` ) ) { ^ } {}
+    ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__svis` ) `1` )
+    : i lx ( nurl_lex_new body ( nurl_str_cat3 `<template ` sname ( nurl_str_cat3 ` of ` tfile `>` ) ) )
+    ? == ( nurl_lex_type lx ) TT_LBRACE { ( nurl_lex_advance lx ) } {}
+    : ~ i depth 0
+    : ~ b want_type T
+    ~ & != ( nurl_lex_type lx ) TT_EOF ! & == depth 0 == ( nurl_lex_type lx ) TT_RBRACE {
+        : i tt ( nurl_lex_type lx )
+        ? == tt TT_LPAREN { = depth + depth 1 } {
+            ? == tt TT_RPAREN {
+                = depth - depth 1
+                ? == depth 0 { = want_type F } {}
+            } {
+                ? ( is_ident_tok tt ) {
+                    : s v ( nurl_lex_val lx )
+                    : b is_type | > depth 0 want_type
+                    ? & is_type ! ( str_contains_word tparams v ) {
+                        : s sf ( nurl_sym_get2 g_vis_syms v `__src_file` )
+                        ? & != 0 ( nurl_str_len sf ) ! ( seq sf tfile ) {
+                            ? & ( seq ( nurl_sym_get2 g_vis_syms sf `__strict` ) `1` ) ! ( seq ( nurl_sym_get2 g_vis_syms v `__pub` ) `1` ) {
+                                ( die lx ( nurl_str_cat4 `private type '` v
+                                ( nurl_str_cat4 `' is not visible across files: the generic struct '` sname `' written in '` tfile )
+                                ( nurl_str_cat3 `' names it in a field. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub : name ...'). Defined in '` sf `'` ) ) )
+                            } {}
+                        } {}
+                    } {}
+                    ? == depth 0 { = want_type ! want_type } {}
+                } {}
+            }
+        }
+        ( nurl_lex_advance lx )
+    }
+    ( nurl_lex_free lx )
+}
+
 @ __vis_check_targ i lex s ta → v {
     // (a name with no recorded file - a builtin, a type parameter - is never
     // private: one hash lookup settles most type arguments)
@@ -5005,27 +5045,12 @@ unsafe @ note_unsafe_item s pos s what → v {
     // where it is visible: judged where it is written, AGORA-860.)
     : s lf ( nurl_lex_filename lex )
     ? ( seq sf lf ) { ^ } {}
-    : b synth & != 0 ( nurl_str_len lf ) == ( nurl_str_get lf 0 ) 60
-    ? synth {
-        // (A synthetic lexer reads text the compiler substituted. A generic
-        // struct's template is stored unparsed, so its own field types are
-        // first read here, in an instance's rescan: judged against the file
-        // that wrote the template - its own private types pass, another
-        // module's do not. The instance's type arguments were judged where
-        // the program wrote them. Any other synthetic text - `<generic_ret>`
-        // and the like - holds only type arguments judged where written.)
-        ? == 0 ( nurl_str_len g_vis_tmpl_file ) { ^ } {}
-        ? ( seq sf g_vis_tmpl_file ) { ^ } {}
-        ? ( __vis_targ_exempt ta ) { ^ } {}
-        : s strict ( nurl_sym_get2 g_vis_syms sf `__strict` )
-        : s is_pub ( nurl_sym_get2 g_vis_syms ta `__pub` )
-        ? & ( seq strict `1` ) ! ( seq is_pub `1` ) {
-            ( die lex ( nurl_str_cat4 `private type '` ta
-            ( nurl_str_cat3 `' is not visible across files: a generic struct written in '` g_vis_tmpl_file `' names it in a field. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub : name ...'). Defined in '` )
-            ( nurl_str_cat sf `'` ) ) )
-        } {}
-        ^
-    } {}
+    // (A synthetic lexer reads text the compiler substituted: a generic
+    // struct's body, an instance's return type. Its names were judged
+    // where they are written - a type argument in the program's own file,
+    // a name in a struct template once against the template's file
+    // (__vis_check_template) - so none is judged again by name here.)
+    ? & != 0 ( nurl_str_len lf ) == ( nurl_str_get lf 0 ) 60 { ^ } {}
     ? ( __vis_targ_exempt ta ) { ^ } {}
     : s lt ( llvm_type ta )
     ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37 { ( vis_check_xref lex ta `type` ) } {}
@@ -96664,8 +96689,7 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
                 // as the template's own - AGORA-861.)
                 : s __saved_vta ( nurl_str_cat g_vis_inst_targs `` )
                 = g_vis_inst_targs ( nurl_str_cat ta_list `` )
-                : s __saved_vtf ( nurl_str_cat g_vis_tmpl_file `` )
-                = g_vis_tmpl_file ( nurl_sym_get2 g_generic_struct_syms sname `__sfile` )
+                ( __vis_check_template sname ( nurl_sym_get2 g_generic_struct_syms sname `__sfile` ) tparams body )
                 : i lex_inner ( nurl_lex_new subst ( nurl_str_cat `<inst-rescan:` ( nurl_str_cat mangled `>` ) ) )
                 ( scan_generic_structs lex_inner syms )
                 ( nurl_lex_free lex_inner )
@@ -96708,7 +96732,6 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
                 ( nurl_print ` }\n\n` )
                 ( nurl_lex_free lex2 )
                 = g_vis_inst_targs __saved_vta
-                = g_vis_tmpl_file __saved_vtf
                 ( nurl_sym_def_module syms mangled ( nurl_str_cat `%` mangled ) )
                 ( nurl_sym_def_module syms ( nurl_str_cat mangled `__is_type` ) `1` )
                 ( nurl_sym_def_module syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )
