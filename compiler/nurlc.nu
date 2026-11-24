@@ -17648,6 +17648,22 @@ unsafe @ eng_byte s w i k → i {
     ^ & >= was 0 < was at
 }
 
+// Is every place of the variable `pv` that `alias` names at the replaced
+// place `pp` (or its option's or result's payload `t0`, `f0`) of the type
+// `ty` of the binding that reads it (eng_handover)?
+@ __eng_ho_typed i ty i alias i pv i pp i t0 i f0 → b {
+    : ~ i k 0
+    ~ < k ( sq_len alias ) {
+        : i a ( sq_at alias k )
+        : i ap ( pl_path a )
+        ? & == ( pl_var a ) pv | | == ap pp == ap t0 == ap f0 {
+            ? != ( eng_ty_of a ) ty { ^ F } {}
+        } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 @ eng_handover i st i place i sat → v {
     : i pv ( pl_var place )
     : i pp ( pl_path place )
@@ -17704,7 +17720,11 @@ unsafe @ eng_byte s w i k → i {
                 // agora #881, #886)
                 ? & & & ok ! ( eng_ho_on av place ) ! & == own OW_O == ( av_loans av ) 0 ( __eng_linked vid pv sat ) {
                     : i ty ( fv_ty vid )
-                    ? & & != ty ET_NONE ! ( et_is_view ty ) != ( et_kind ty ) EK_CLOSURE {
+                    // (…nor a binding of another type than the place it
+                    // reads - an option a call wrapped the place's value in,
+                    // `wrap s → ? String`: nurlc hands the old value to no
+                    // one and frees it under the payload, agora #1000)
+                    ? & & & != ty ET_NONE ! ( et_is_view ty ) != ( et_kind ty ) EK_CLOSURE ( __eng_ho_typed ty alias pv pp t0 f0 ) {
                         : i loans ( av_loans av )
                         : ~ i keep 0
                         = k 0

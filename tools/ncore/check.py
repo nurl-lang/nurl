@@ -2786,6 +2786,12 @@ class FnCheck:
             ty = self.fn.vars[vid].ty
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
                 continue
+            # (…nor a binding of another type than the place it reads - an
+            # option a call wrapped the place's value in, `wrap s → ? String`:
+            # codegen hands the old value to no one and frees it under the
+            # payload, agora #1000)
+            if any(self.ty_of_place(a) != ty for a in av.alias):
+                continue
             keep = {l for l in av.loans if self.loans.get(l, (None,))[0] not in av.alias}
             if first is None or av.own == "O":
                 # (the first binding that read it: one value has one owner)
@@ -4275,12 +4281,16 @@ class FnCheck:
                 self.moved_from = None
                 was = cur.own if cur is not None else None
                 carried = None
-                if (ty is not None and ty[0] in ("opt", "res") and op[0] == "v" and not op[2]
+                if (ty is not None and op[0] == "v" and not op[2]
                         and op[1] in self.lit_nocopy and op[1] in self.lit_params
+                        and (ty[0] in ("opt", "res") or not self.lit_mixed.get(op[1]))
                         and dest_vid is not None and self.fn.vars[dest_vid].kind == "temp"):
                     # (a literal that keeps an `in` parameter with no copy,
-                    # as the payload of an option or a result literal: good
-                    # to hand back as it is, as the literal was)
+                    # as the payload of an option or a result literal, or a
+                    # field of a struct or a variant literal that lends it on
+                    # - `^ @ KK { @ K { p } }`: good to hand back as it is,
+                    # as the literal was; anything else that takes the outer
+                    # literal still meets its lit_nocopy)
                     carried = self.lit_nocopy.pop(op[1])
                 av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
                 if carried is not None:
@@ -4317,8 +4327,9 @@ class FnCheck:
                                 and av.alias and (all(a[0] in self.pidx and a[1] for a in av.alias)
                                                   or (op[0] == "v" and not op[2] and (
                                                       op[1] in self.lit_params.get(dest_vid, ())
-                                                      or (ty is not None and ty[0] in ("opt", "res")
-                                                          and op[1] in self.lit_params))))):
+                                                      or (op[1] in self.lit_params
+                                                          and ((ty is not None and ty[0] in ("opt", "res"))
+                                                               or not self.lit_mixed.get(op[1]))))))):
                             # a part of a parameter, read in place: the
                             # literal is a lend of the caller's value, good
                             # to hand back as it is and nothing else
