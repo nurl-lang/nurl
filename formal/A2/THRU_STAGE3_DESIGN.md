@@ -985,3 +985,158 @@ parameter's type a `Vec` of views.
    (`CallH.minv`), or as a `CallPre` context the call steps through?
 3. ~~Is a depth-aware `.drop` worth adding before 3d?~~ Yes; it is needed,
    not just more precise (`MInv.rootbLive`), and it is done (`Eff.dropIn`, above).
+
+## B4, the turn-on (in progress, branch `wip/t937-b4`)
+
+**On main since the groundwork PR (no rule change):**
+- `CallThruOK` is defined in Typing.lean, but it is not yet a premise of `CallT`.
+- `zN` leaves out `thruW`, which is empty for every call typed today: a body that changes through a borrow is passed no views (`CallH.thru`).
+- `StmtT.keepKV`.
+- `CallH.thruReady` (given `CallThruOK`).
+- `CallH.held_anch` (given `CallThruOK` and a root in `callR`).
+
+**Only on the WIP branch:**
+- `CallT`'s second branch;
+- `CallH.thru`'s disjunction;
+- `StmtT.rbind` / `WrapCond` on `AnchoredS`;
+- the closure restriction, and the witnesses.
+
+Those land together with the frame-relative clause below.
+
+**Done on the branch:**
+- **The call rule.** `CallThruOK` (Typing.lean) is the second branch of `CallT`'s `ThruFn` premise: the call passes views of real memory `w` that the callee changes only inside its elements.
+- **No exit kill.** Weakening ends a caller binding such as `s2`, a view inside `w`'s elements, before the call (`EntryWeaker.live`). A dead binding is never read again, so A2 accepts what nurlc does, and `callPost` is unchanged.
+- **The frame.** `zN` leaves out `thruW`, the roots the callee changes inside.
+- **The anchors.**
+  - `StmtT.rbind` takes `AnchoredS Γ E F (p :: s.killVars)`.
+  - `WrapCond .inp` takes `AnchoredS … V`.
+  - `StmtT.keepKV` keeps such a root bound.
+  - `CallH.held_anch` shows that the lifted lent parameter's view of `w` is a `HeldAnch`.
+- **The rename.** `CallH.thruReady`: the call sets the body up ready for a change through its regions (`ThruReady`).
+
+**What is left: the closure-capture clause must be frame-relative.**
+
+`HeldCapsInp` asks for `CapsInpAt m w` over the whole store, for the held anchors of borrowed parameters outside the running scopes, at roots outside `F`. A running `rbind`'s own parameter is in the spine, so it is skipped. `Inv.rbindIn` then needs the clause for it.
+
+The clause cannot be stated at the outer level as it stands:
+- There, `F` lacks the frozen part `z'` the typing chose. The runtime `frozen z` (`zOf`) contains the changed root `w` too.
+- So no condition on `F` tells `w` from a frozen root `w'`.
+- A live caller closure that captures `w'` inout is legal and unreachable from the callee. It makes the store-wide `CapsInpAt m w'` false.
+
+The clause must therefore speak of what the frame can reach:
+- bindings at or above the frame's base;
+- the call's `inout` arguments;
+- closed under names held: what an argument's closures capture by name, transitively. A lent closure that reads a closure `x` which changes `w` would otherwise let the callee change `w` through `x`.
+
+Stated this way, the clause holds for frozen roots as well: a frozen root is no root of `mutNames`, and the callee names none of the caller's bindings. So the clause needs neither the spine exclusion nor the `∉ F` condition.
+
+**Preservation:**
+- A step inside the frame binds only fresh variables, at or above `m.nv`, which is at or above the base.
+- It writes only reached slots, from values it read there (`EvalR.capsInp`, restricted to the reach).
+- A nested frame's base is at or above the outer one's.
+- `rbindSkip` removes the parameter.
+
+**Refined, after `CapsOK` and `MInv.noPkg` (github#2268):**
+- **No transitive capture problem.** A binding captured by name holds nothing (`CapsOK`: `Ev.held = []`), and its type holds no views. By `noPkg`, every package in its slot captures nothing by name, so it cannot carry an inout capture of `w` into the frame.
+- **The call can establish the store clause.** At a route-U call, `CapsInpAt m w` over the whole store follows from three things:
+  - `noPkg` for bindings whose type has no closure, dead ones included;
+  - `MInv.held` with `NamesIn` for live closures;
+  - `CallThruOK`'s "closure-typed bindings are live and change `w` by no name".
+
+  Blocks need nothing.
+- **Left: the spine.** A running `rbind`'s parameter `p` is in the spine at every level above it. There, `F` does not show whether `p`'s held anchor is a changed root `w` or a frozen root `w'`. The typing's frozen part `z'` lives only in the derivation, and the runtime `frozen z` (`zOf`) contains both roots.
+
+**Direction for the spine: make the runtime frozen list informative.**
+- `Step.letcall` builds `frozen z` with `z` = `zOf` minus, when `fn.body.hasThru`, every slot whose tree holds a node that an argument's value views (`ViewAddr`, `DataAt`).
+- `frozen z` is ghost: no step reads `z`. So no behaviour changes, and for every call typed today nothing is removed (`callR = []`, so no argument holds views).
+- `z' ⊆ z` still holds for the typing. `zN` drops `thruW`, and the correspondence lemma shows that `thruW` is the set of removed slots.
+- The spine clause then reads, at an `rbind` under `frozen z`: "a held anchor at a root outside `F ++ z` has `CapsInpAt`". A frozen `w'` is in `z`, so the clause is vacuous for it. A changed `w` is not in `z`, so the clause applies, and the call establishes it as above.
+- `Inv.rbindIn` moves to the typing's `F ++ z'`. A root in `z` but not in `z'` is a root of `mutNames`, which by `NamesFree` no argument but a closure reaches, so it is no held anchor.
+
+**Correction: the informative runtime list does not work.** The runtime cannot match the typing:
+- `thruW` is the roots an argument *may* view (`callR`). An argument whose value holds no views at run time, such as an empty `Vec` of slices, removes nothing from the runtime `z`.
+- `w` then stays in `z` while the typing has freed it (`zN` drops `thruW`).
+- Inside the frame, under `F ++ zN`, the clause still asks `CapsInpAt m w`, and the outer level gives nothing for it.
+
+**What remains: a frame-relative store clause.** For a borrowed parameter `p` of the frame based at `b`, with held anchor `w`: every slot at or above `b` holds `ValCapsInp · w`, and so do the slots of the call's `inout` arguments and every block. This is true for frozen roots too, because a caller closure that captures `w'` is below `b`. What the frame reads elsewhere is harmless:
+- A captured name holds nothing (`CapsOK`), and by `noPkg` its packages capture nothing by name.
+- A view lands in a root whose type holds no views. So that type has no closures (`hasFn → holdsView`), and by `noPkg` its packages capture nothing by name.
+- A borrow of a closure part holds its names, so an inout capture of `w` would make `w` a root of `mutNames`, which `CallThruOK` excludes.
+
+The proof work is `EvalR.capsInp` restated for that clause. A read below `b`, outside the `inout` arguments, needs the typing facts above, carried as `MInv`-level facts. Then comes the preservation of the new `Inv` field over every step, as for `heldCaps` in B2.
+
+**Two scaffolds discharged (8eac5d2e1):**
+- `CallThruOK` takes no closure argument. A call through a package, whose receiver is a closure, therefore stays on the regions-only branch. `CallT.clean` and the package call's `.resolve_right` then follow by contradiction.
+- Route U for closure arguments is later work. Until then A2 types fewer such calls than nurlc accepts, which is no hole.
+
+**The two left share one cause.**
+- `Inv.rbindIn` needs the spine clause (above).
+- Rename's lifted `CallThruOK` needs, in the placed context, "every closure-typed binding is live". The outer frames' bindings are there too, and nothing is known of them.
+
+The liveness clause exists only to let the call establish the store-wide `CapsInpAt`. With the frame-relative clause:
+- the clause is not needed: a dead caller closure lies below the frame's base and is never read by it;
+- so it can go from `CallThruOK`;
+- the lift then needs only what the renaming keeps.
+
+So the next piece of work is the frame-relative clause, and the clause's removal from `CallThruOK`.
+
+**The frame-relative clause, as lemmas (plan).** `EvalR.capsInp` reads three kinds of place:
+- slots of the right-hand side's variables;
+- nodes found through a borrow or a view (`SlotsCaps.vecOf` / `.dataAt`), which can lie in any slot's tree;
+- blocks, which are already free (`MInv.rdCapsInp`).
+
+So the clause is "every slot is safe except a set `D`": `CapsExcept m w D := (∀ x ∉ D, ∀ o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w) ∧ blocks`.
+- At a route-U call, `D` is the caller's dead closure-typed slots.
+- Every other slot is safe at entry:
+  - `noPkg` covers types without closures;
+  - `NamesIn` covers live closures, with `CallThruOK`'s "no mutating name on `w`";
+  - `w`'s own tree has no closures, since its type holds no views.
+
+The steps inside the frame keep it:
+- **Writes** go to slots at or above the base, or to `inout` arguments. Both are live, so neither is in `D`.
+- **Reads** never touch `D`:
+  - the statement's variables are callee variables, `inout` arguments, or captured names, and captured names are live (`CapsOK`);
+  - nodes reached through a borrow or view lie in a root the reaching entry depends on (`Landed` / `RootNode`);
+  - a live entry's roots are bound root-mode entries (`CtxWF.live`). Dead closure roots are needed here: a live view of a closure's environment would have to be ended when the closure died. That is the one fact still to check.
+
+Lemmas:
+1. `EvalR.capsExcept`: `EvalR.capsInp` with `SlotsCaps` replaced by `CapsExcept` and a premise that the evaluation reads outside `D` (`EvalR.ReadsOut m r D`).
+2. `RhsT.readsOut`: a typed right-hand side, under `MInv`, reads outside the dead slots.
+3. `Step.capsExcept`, the twin of `Step.slotsCaps`.
+4. `Inv.heldCaps` restated with `∃ D`, all members dead closure-typed slots below the frame. The spine exclusion and `∉ F` go.
+5. Remove `CallThruOK`'s "closure-typed bindings live", then discharge the two scaffolds.
+
+**Rejected: "NamesIn for dead entries too".** The idea:
+- `MInv.held` would cover dead entries as well.
+- `StmtT.rbind` would ask that no entry holds a mutating name on its held anchors.
+- `Inv.rbindIn` would then derive `CapsInpAt` directly.
+
+It fails because `Entry.clean` drops a dead entry's dependencies on purpose (`held := memDeps …` or `[]`), and the package call builds its `MInv` over `cleanC Γ`. Making it work would mean changing `clean`, about 170 `EntryWeaker` constructions and 87 uses of `MInv.held`. `CapsExcept`, above, is the route.
+
+**What the lift needs, and the two candidate invariants.**
+
+Rename's lifted `CallThruOK` fails only on "every closure-typed binding is live", because outer frames may hold dead closures. Those closures cannot capture the callee's own `w`, which is fresh at the callee's entry. Showing that takes a store fact, from one of two candidates.
+
+- **(i) `CapsExcept`, above.** Its read lemma must be typing-aware:
+  - A dead binding killed in place keeps its slot, and a live view may still depend on it, since `CtxWF.live` does not ask the root to be live.
+  - So a read can land in a dead struct's `Vec`. Its elements are safe when their type has no closures (`WFv.no_pkg`). Otherwise they are a closure whose captures the dead owner's names once listed.
+- **(ii) No forward captures.** A package in a slot below a frame's base captures none of that frame's variables:
+  - A package is made inside the frame, from the frame's variables.
+  - It leaves the frame only through an `inout` argument or the result, after the frame's variables die.
+  - The exit checks have to be shown to refuse the `inout` case.
+
+(ii) is closer to what the lift needs, and it is local to frames. (i) also covers the top-level call's dead closures. Next session: settle which one, by trying (ii)'s step lemma on `assign` to an `inout` argument first.
+
+**(ii) checked on `assign` to an `inout` argument: it does not hold as stated.**
+- A2 does not refuse a callee that assigns its `inout` parameter a closure capturing a callee local `w`. The assign rule asks only `x ∉ roots E.vdeps` and the modes.
+- At the body's end, `exitScope w` kills the entry that names `w`. The caller's slot keeps the package, though: it is below the base and captures `w`.
+- So (ii) has to exempt the call's `inout` arguments while the frame runs.
+- It also needs the running frames' bases, which `Inv` does not carry. The spine gives the `rbind` parameters `base + j`, but not `base`.
+
+With both, (ii) is a new `Inv` field with a preservation proof over every step, as large as (i).
+
+Neither candidate is cheap. Choose by which consumers each serves:
+- (i) serves the top-level call's dead closures and the lift. It needs a typing-aware read lemma.
+- (ii) serves the lift only, and still needs the dead-closure clause at the top level.
+
+So **(i) `CapsExcept` is the choice**, and (ii) is dropped.
