@@ -119,6 +119,88 @@ theorem Sub.cases' {v t : Val} (h : Sub v t) : v = t ∨ ∃ e, Child e t ∧ Su
   | inr hs => exact Or.inr ⟨_, Child.inr, hs⟩
   | pkg hs => exact Or.inr ⟨_, Child.pkg, hs⟩
 
+/-- A3.5b: a value of a type that holds no closure holding bindings by name
+    holds only Send packages, each capturing nothing by name. -/
+theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {fs : List Nat} {te : Ty}
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
+  induction hw with
+  | int => cases hs
+  | view => cases hs
+  | arc => cases hs
+  | rguard => cases hs
+  | lk => cases hs
+  | cell => cases hs
+  | node hes ih =>
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | elem hx => exact ih x hx (by simpa [Ty.hasFn] using hf) hsx
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | fst => exact iha hf.1 hsx
+      | snd => exact ihb hf.2 hsx
+  | inl _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inl => exact ih hf.1 hsx
+  | inr _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inr => exact ih hf.2 hsx
+  | pkg _ hq ih =>
+    obtain ⟨_, hf', hcs⟩ := hq.send hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h; exact hcs
+    · cases hc with
+      | pkg => exact ih hf' hsx
+  | dtor _ _ ih => exact ih hf hs
+
+/-- A3.5b: a lent value of a type that holds no closure holding bindings by
+    name holds only Send packages, each capturing nothing by name. -/
+theorem ValOK.no_pkg {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H) (hf : τ.hasFn = false) {fs : List Nat} {te : Ty}
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
+  induction hv with
+  | int => cases hs
+  | href => cases hs
+  | view => cases hs
+  | arc => cases hs
+  | rguard => cases hs
+  | lk => cases hs
+  | cell => cases hs
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | fst => exact iha hf.1 hsx
+      | snd => exact ihb hf.2 hsx
+  | inl _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inl => exact ih hf.1 hsx
+  | inr _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inr => exact ih hf.2 hsx
+  | pkg _ hq ih =>
+    obtain ⟨_, hf', hcs⟩ := hq.send hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h; exact hcs
+    · cases hc with
+      | pkg => exact ih hf' hsx
+  | dtor _ ih => exact ih hf hs
+
 theorem Sub.ids {a b : Val} (h : Sub a b) : ∀ i ∈ a.ids, i ∈ b.ids := by
   induction h with
   | refl => exact fun i hi => hi

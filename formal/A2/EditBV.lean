@@ -313,49 +313,6 @@ theorem WFv.node_holdsView {τ : Ty} {T : Val} (hw : WFv τ T) {u : Ty} {c d : N
         | _ => have := ih hsx; rw [(hq.send rfl).1] at this; cases this
   | dtor _ _ ih => exact ih hs
 
-/-- A3.5b: a value of a type that holds no closure holding bindings by name
-    holds only Send packages, each capturing nothing by name. -/
-theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {fs : List Nat} {te : Ty}
-    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
-  induction hw with
-  | int => cases hs
-  | view => cases hs
-  | arc => cases hs
-  | rguard => cases hs
-  | lk => cases hs
-  | cell => cases hs
-  | node hes ih =>
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | elem hx => exact ih x hx (by simpa [Ty.hasFn] using hf) hsx
-  | pair _ _ iha ihb =>
-    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | fst => exact iha hf.1 hsx
-      | snd => exact ihb hf.2 hsx
-  | inl _ ih =>
-    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | inl => exact ih hf.1 hsx
-  | inr _ ih =>
-    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | inr => exact ih hf.2 hsx
-  | pkg _ hq ih =>
-    obtain ⟨_, hf', hcs⟩ := hq.send hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h; exact hcs
-    · cases hc with
-      | pkg => exact ih hf' hsx
-  | dtor _ _ ih => exact ih hf hs
-
 /-- A view the rewritten tree stores is one the old tree stored, or one that
     the replacement stores and the hole did not (`Q`). -/
 theorem NSE_viewIn' {n n' T T' : Val} (hr : Repl n n' T T') {Q : Ty → Val → Prop} :
@@ -627,7 +584,8 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     by rw [Entry.hold_mode, killE_mode], fun hl' _ r hr' => ?_, ht', fun hl' _ => ?_, fun hl' U hU => ?_,
     fun U hU => ?_, fun h => absurd (h.symm.trans hdb') (by decide), fun h => ?_,
     fun h => absurd (h.symm.trans hdb') (by decide), fun h => absurd (h.symm.trans hdb') (by decide), ?_,
-    FreshE.of_ownSlot (by simpa [killE_mode] using hos)⟩
+    FreshE.of_ownSlot (by simpa [killE_mode] using hos),
+    NoPkgS.of_wfv fun U hU => by cases hU; rw [ht']; exact hwT'⟩
   · cases hU; rw [ht']; exact hwT'
   · -- the views of the live owner
     rw [Entry.hold_live] at hl'
@@ -860,6 +818,12 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
       exact (hi.held v E sl T hE hl hsl hT).mono (List.subset_append_left _ _)
     · rw [ite_eq_right hvr] at hl ⊢; exact hi.held v E sl T hE hl hsl hT
   pkgs := hi.pkgs
+  noPkg v E' sl T h hsl hT hfn := by
+    obtain ⟨E, hE, rfl⟩ := holdOn_get h
+    refine hi.noPkg v E sl T hE hsl hT ?_
+    by_cases hvr : v ∈ rs
+    · rw [ite_eq_left hvr, Entry.hold_ty] at hfn; exact hfn
+    · rw [ite_eq_right hvr] at hfn; exact hfn
   armed v E' sl h hsl := by
     obtain ⟨E, hE, rfl⟩ := holdOn_get h
     by_cases hvr : v ∈ rs

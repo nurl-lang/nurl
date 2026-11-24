@@ -139,6 +139,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   fresh := hi.fresh
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
+  noPkg v E sl T hE hsl hT := hi.noPkg v E sl T hE (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
     (RootKeep.of_st (r := dep.root) h (BlkLe.of_eq hb)).vkeep (BlkLe.of_eq hb)
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
@@ -269,6 +270,7 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
   fresh := hi.fresh
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
+  noPkg v E sl T hE hsl hT := hi.noPkg v E sl T hE (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
     (RootKeep.of_st (r := dep.root) h hb).vkeep hb
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
@@ -325,6 +327,7 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
     fresh := hi.fresh
     held := fun v E sl T hE hl hsl hT => hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
     pkgs := fun v sl T hsl hT => hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
+    noPkg := fun v E sl T hE hsl hT => hi.noPkg v E sl T hE (by rw [h] at hsl; exact hsl) hT
     armed := fun v E sl hE hsl => by
       have hsl0 : m.st v = some sl := by rw [h] at hsl; exact hsl
       have h1 : ArmOK mb E sl := (hi.armed v E sl hE hsl0).keep fun _ _ _ dep _ =>
@@ -359,6 +362,21 @@ structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop 
   /-- AGORA-901: a `Vec` handle lent names a node no package holds, when it
       reaches memory through clean roots only and no share (`MInv.pkgFree`). -/
   pkgFree : ∀ i, PkgNames m1 Γ1 E v i → PkgFreeId m1 i
+
+/-- AGORA-937: a right-hand side's value of a type that holds no closure
+    holding bindings by name holds only packages capturing nothing by name. -/
+theorem RhsOut.noPkg {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
+    (hout : RhsOut m1 Γ1 E v o) (hf : E.ty.hasFn = false) {fs : List Nat} {te : Ty}
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
+  rcases hout.mode with h | h
+  · exact (hout.valOwn h).2.1.no_pkg hf hs
+  · exact (hout.valBor h).no_pkg hf hs
+
+/-- AGORA-937: so a slot holding it passes `NoPkgS` for an entry of its type. -/
+theorem RhsOut.noPkgS {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
+    (hout : RhsOut m1 Γ1 E v o) {E' : Entry} (hty : E'.ty = E.ty) {o' : Bool} :
+    NoPkgS E' ⟨o', some v⟩ :=
+  fun hf T hT _ _ _ _ _ hs => by cases hT; exact hout.noPkg (by rw [← hty]; exact hf) hs
 
 /-- The context and memory after a right-hand side, and how they relate to
     before. -/
@@ -2534,7 +2552,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
       fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun hd _ hn dep hdd hnm => ?_,
       fun h => by simp at h, fun hd => hi.wf.view y E hy hd, ArmOK.of_none rfl, fun _ T h => by simp at h,
-      FreshE.of_ownSlot hos⟩
+      FreshE.of_ownSlot hos, fun _ T h => by simp at h⟩
     obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor y E hy hd hos (Or.inl hn) dep hdd hnm
     by_cases hry : dep.root = y
     · exact Or.inl ⟨hry, Mode.isRoot_of_ownSlot hos⟩
@@ -2953,7 +2971,8 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
       fun hl hn r hr => ?_, rfl, fun hl hn => by rw [hupd]; exact hi.names x Ex hx hl hn,
       fun hl T hT' => ?_, fun T hT' => ?_, fun hd hos' hn dep hdd hnm => ?_,
       fun hd => hi.wf.arm x Ex hx hd, fun hd => hi.wf.view x Ex hx hd, ?_,
-      fun _ T hT' => by cases hT'; rw [hty]; exact hshN, FreshE.of_ownSlot hos⟩
+      fun _ T hT' => by cases hT'; rw [hty]; exact hshN, FreshE.of_ownSlot hos,
+      NoPkgS.of_wfv fun U hU => by cases hU; rw [hty]; exact hwT'⟩
     · obtain ⟨T, hT0, hvs⟩ := hlv hl
       cases hT0; rw [hty] at hvs ⊢
       exact hviews _ rfl (fun dep hd hne => hkeepR dep hd hne fun _ =>
@@ -3157,7 +3176,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF ⟨_, hm1y⟩),
         fun _ T hT' => by
           simp only [Option.some.injEq] at hT'; subst hT'; rw [killE_ty, hty]; exact hshS,
-        FreshE.of_ownSlot (by rw [killE_mode]; exact hos)⟩
+        FreshE.of_ownSlot (by rw [killE_mode]; exact hos),
+        NoPkgS.of_wfv fun U hU => by cases hU; rw [killE_ty, hty]; exact hwS⟩
       rw [killE_vdeps] at hr
       rw [killE_ty] at hn
       obtain ⟨Er, hEr, hroot⟩ := hi.wf y E hy hl (Or.inl hn) r hr
