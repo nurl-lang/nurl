@@ -1094,4 +1094,130 @@ theorem LiveCaps.editNode {m1 m' : Mem} {Γ1 Γ' Γ'' : Ctx} {w x o : Var} {T T'
     · exact NodeBack.of_sub (Sub.child he hs)
     · exact fun _ _ _ _ _ => Or.inl (hc _ hs)
 
+
+theorem LiveBack.holdThru (D P : List Dep) (Γ : Ctx) : LiveBack Γ (A2.holdThru D P Γ) := fun v E1 h hl => by
+  simp only [A2.holdThru, A2.holdOn] at h
+  obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+  refine ⟨E, hE, ?_⟩
+  split at hl
+  · simpa using hl
+  · exact hl
+
+
+/-- A slot given a clean value with no handle keeps the clause. -/
+theorem LiveCaps.setClean {m : Mem} {Γ Γ' : Ctx} {w y : Var} {o : Bool} {V : Val} (h : LiveCaps m Γ w)
+    (hb : ∀ x E1, x ≠ y → Γ' x = some E1 → E1.live = true → ∃ E0, Γ x = some E0 ∧ E0.live = true)
+    (hv : ValCapsInp V w) (hnh : ∀ c, Sub (.href c) V → False) :
+    LiveCaps (m.set y ⟨o, some V⟩) Γ' w :=
+  h.setG hb fun V' e => by cases e; exact ⟨fun n hn => hv.sub hn, fun c hc => (hnh c hc).elim⟩
+
+
+/-- **Splitting a live pair into two fresh slots keeps the clause**: the
+    halves were the pair's, clean, and their handles reach what the pair's
+    reached. -/
+theorem LiveCaps.unpair {m : Mem} {Γ Γ' : Ctx} {w y x z : Var} {E : Entry} {o oa ob : Bool} {a b : Val}
+    (h : LiveCaps m Γ w) (hy : Γ y = some E) (hl : E.live = true)
+    (hvy : m.st y = some ⟨o, some (.pair a b)⟩) (hxy : x ≠ y) (hzy : z ≠ y) (hxz : x ≠ z)
+    (hb : ∀ u E1, u ≠ x → u ≠ z → Γ' u = some E1 → E1.live = true → ∃ E0, Γ u = some E0 ∧ E0.live = true) :
+    LiveCaps (((m.set y ⟨true, none⟩).set x ⟨oa, some a⟩).set z ⟨ob, some b⟩) Γ' w := by
+  obtain ⟨hP, hPt⟩ := h y E o _ hy hl hvy
+  have htg : ∀ x' t n, (((m.set y ⟨true, none⟩).set x ⟨oa, some a⟩).set z ⟨ob, some b⟩).st x' = some ⟨true, some t⟩ →
+      Sub n t → m.st x' = some ⟨true, some t⟩ ∨ ValCapsInp n w := by
+    intro x' t n hx' hsn
+    by_cases e1 : x' = z
+    · subst e1; simp [Mem.set, upd] at hx'; obtain ⟨-, rfl⟩ := hx'
+      exact Or.inr (hP.sub (Sub.snd hsn))
+    by_cases e2 : x' = x
+    · subst e2; simp [Mem.set, upd, e1] at hx'; obtain ⟨-, rfl⟩ := hx'
+      exact Or.inr (hP.sub (Sub.fst hsn))
+    by_cases e3 : x' = y
+    · subst e3; simp [Mem.set, upd, e1, e2] at hx'
+    · simp [Mem.set, upd, e1, e2, e3] at hx'; exact Or.inl hx'
+  have hfin : ∀ V, Sub V (.pair a b) → ∀ c, Sub (.href c) V → ∀ x' t n,
+      (((m.set y ⟨true, none⟩).set x ⟨oa, some a⟩).set z ⟨ob, some b⟩).st x' = some ⟨true, some t⟩ →
+      Sub n t → (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+    intro V hV c hc x' t n hx' hsn hnd
+    rcases htg x' t n hx' hsn with hx'' | hn
+    · exact hPt c (Sub.trans hc hV) x' t n hx'' hsn hnd
+    · exact hn
+  intro v E1 o1 V hv hl1 hs
+  by_cases e1 : v = z
+  · subst e1; simp [Mem.set, upd] at hs; obtain ⟨-, rfl⟩ := hs
+    exact ⟨hP.sub (Sub.snd (Sub.refl _)), hfin _ (Sub.snd (Sub.refl _))⟩
+  by_cases e2 : v = x
+  · subst e2; simp [Mem.set, upd, e1] at hs; obtain ⟨-, rfl⟩ := hs
+    exact ⟨hP.sub (Sub.fst (Sub.refl _)), hfin _ (Sub.fst (Sub.refl _))⟩
+  by_cases e3 : v = y
+  · subst e3; simp [Mem.set, upd, e1, e2] at hs
+  simp [Mem.set, upd, e1, e2, e3] at hs
+  obtain ⟨E0, h0, hl0⟩ := hb v E1 e2 e1 hv hl1
+  obtain ⟨h1, h2⟩ := h v E0 o1 V h0 hl0 hs
+  refine ⟨h1, fun c hc x' t n hx' hsn hnd => ?_⟩
+  rcases htg x' t n hx' hsn with hx'' | hn
+  · exact h2 c hc x' t n hx'' hsn hnd
+  · exact hn
+
+
+/-- A block's payload holds no handle. -/
+theorem MInv.pay_no_href {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {k : Nat} {bl : Blk} {V : Val} {c : Nat}
+    (hk : m.blk k = some bl) (hp : bl.pay = some V) (hs : Sub (.href c) V) : False := by
+  obtain ⟨_, _, hpay, _⟩ := hM.blocks k bl hk
+  exact ((hpay V hp).1).href_sub_false hs
+
+
+/-- **A panicking step writes no slot**: it ends bindings (the running
+    scopes' unwind) and frees, so each slot left is one it found. -/
+theorem Step.panic_st {P : Prog} {m m' : Mem} {s : Stmt} (h : Step P m s (.panic m')) :
+    ∀ x sl, m'.st x = some sl → m.st x = some sl := by
+  generalize hr : Res.panic m' = r at h
+  induction h generalizing m'
+  all_goals first
+    | (cases hr; done)
+    | (cases hr; intro x sl h; exact h)
+    | (cases hr; rename_i ih; intro x sl h; exact ih rfl x sl h)
+    | skip
+  case scopeLP ih =>
+    cases hr
+    intro x sl h
+    rename_i hrl
+    cases hrl <;>
+    · simp only [Mem.remove, upd] at h; split at h
+      · cases h
+      · exact ih rfl x sl h
+  all_goals
+    cases hr
+    rename_i ih
+    intro x sl h
+    simp only [Mem.remove, upd] at h; split at h
+    · cases h
+    · exact ih rfl x sl h
+
+
+/-- An owning binding whose type holds no function holds a value with no
+    package and no handle. -/
+theorem MInv.own_noFn {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {x : Var} {E : Entry} {o : Bool} {V : Val}
+    (hE : Γ x = some E) (hos : E.mode.ownSlot = true) (hf : E.ty.hasFn = false)
+    (hs : m.st x = some ⟨o, some V⟩) : V.names = [] ∧ ∀ c, Sub (.href c) V → False := by
+  obtain ⟨sl, hsl, _, _, howning, _⟩ := hM.slot x E hE
+  rw [hs] at hsl; cases hsl
+  have hw := (howning hos).2.1 V rfl
+  exact ⟨hw.names_nil_fn hf, fun c hc => hw.href_sub_false hc⟩
+
+/-- **The clause across a step that only ends slots**, where the context
+    ends bindings but one, `x`, whose live value is clean with no handle. -/
+theorem LiveCaps.of_shrink {m m' : Mem} {Γ Γ' : Ctx} {w x : Var} (h : LiveCaps m Γ w)
+    (hp : ∀ y sl, m'.st y = some sl → m.st y = some sl)
+    (hb : ∀ u E1, u ≠ x → Γ' u = some E1 → E1.live = true → ∃ E0, Γ u = some E0 ∧ E0.live = true)
+    (hx : ∀ E1 o V, Γ' x = some E1 → E1.live = true → m'.st x = some ⟨o, some V⟩ →
+      ValCapsInp V w ∧ ∀ c, Sub (.href c) V → False) :
+    LiveCaps m' Γ' w := by
+  intro v E o V hv hl hs
+  by_cases hvx : v = x
+  · subst hvx
+    obtain ⟨h1, h2⟩ := hx E o V hv hl hs
+    exact ⟨h1, fun c hc => (h2 c hc).elim⟩
+  · obtain ⟨E0, h0, hl0⟩ := hb v E hvx hv hl
+    obtain ⟨h1, h2⟩ := h v E0 o V h0 hl0 (hp v _ hs)
+    exact ⟨h1, fun c hc x' t n hx' hsn hnd => h2 c hc x' t n (hp x' _ hx') hsn hnd⟩
+
 end A2
