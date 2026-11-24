@@ -32,7 +32,7 @@ ok()   { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 skip() { echo "  SKIP $1"; SKIP=$((SKIP+1)); }
 
-echo "[1/6] the CLI builds"
+echo "[1/7] the CLI builds"
 if ! $NURL src/main.nu "$WORK/ply" >/dev/null 2>"$WORK/build.err"; then
     bad "build"; tail -6 "$WORK/build.err"
     echo; echo "$PASS passed, $FAIL failed, $SKIP skipped"; exit 1
@@ -40,7 +40,7 @@ else
     ok "built"
 fi
 
-echo "[2/6] --version agrees with nurl.toml"
+echo "[2/7] --version agrees with nurl.toml"
 manifest=$(sed -n 's/^version = "\(.*\)"/\1/p' nurl.toml | head -1)
 got=$("$WORK/ply" --version)
 if [ "$got" = "ply $manifest" ]; then
@@ -49,7 +49,7 @@ else
     bad "--version says '$got', manifest says '$manifest'"
 fi
 
-echo "[3/6] the writer, against an independent parser"
+echo "[3/7] the writer, against an independent parser"
 if ! $NURL tests/writecheck.nu "$WORK/writecheck" >/dev/null 2>"$WORK/wc_build.err"; then
     bad "writecheck build"; tail -6 "$WORK/wc_build.err"
 elif [ -z "$PY" ]; then
@@ -105,7 +105,7 @@ PYEOF
     [ "$vf" -eq 0 ] && ok "$out"
 fi
 
-echo "[4/6] ply info"
+echo "[4/7] ply info"
 vf=0
 "$WORK/ply" info "$WORK/bin.ply" > "$WORK/info.txt" 2>&1 \
     || { bad "info failed"; cat "$WORK/info.txt"; vf=1; }
@@ -116,7 +116,7 @@ echo "not a ply" > "$WORK/nope.ply"
 [ "$?" = "1" ] || { bad "info on a non-PLY should exit 1"; vf=1; }
 [ "$vf" -eq 0 ] && ok "header printed, non-PLY refused"
 
-echo "[5/6] the reader: our own files back, others' layouts, refusals"
+echo "[5/7] the reader: our own files back, others' layouts, refusals"
 if ! $NURL tests/readcheck.nu "$WORK/readcheck" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "readcheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PY" ]; then
@@ -194,7 +194,7 @@ PYEOF
 ) && ok "$out" || bad "reader: $out"
 fi
 
-echo "[6/6] the viewer serves, and renders in a real browser"
+echo "[6/7] the viewer serves, and renders in a real browser"
 VPORT="${PLY_VIEW_PORT:-8792}"
 "$WORK/ply" view "$WORK/bin.ply" --port "$VPORT" > "$WORK/view.log" 2>&1 &
 VPID=$!
@@ -236,6 +236,83 @@ else
 fi
 kill "$VPID" 2>/dev/null
 wait "$VPID" 2>/dev/null
+
+echo "[7/7] the tileset client: a root with no content, a 503, a redirect, indexed points"
+if [ -z "$PY" ]; then skip "the tileset client check needs python3"
+elif ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+    skip "the tileset client check needs chrome or chromium on PATH"
+else
+    SRV="$WORK/srv"; mkdir -p "$SRV"; cp views/viewer.html "$SRV/viewer.html"
+    "$PY" - "$SRV" <<'PYEOF'
+import json, os, struct, sys
+d = sys.argv[1]
+def glb(path, n, indexed=False, shift=0.0):
+    pos = b"".join(struct.pack("<fff", (i % 20) * 0.05 + shift, (i // 20) * 0.05, 0.0) for i in range(n))
+    col = b"".join(struct.pack("<BBBB", 200, 120 + i % 100, 60, 255) for i in range(n))
+    idx = struct.pack("<%dI" % 4, 0, 1, 2, 3) if indexed else b""
+    views = [{"buffer": 0, "byteOffset": 0, "byteLength": len(pos)}, {"buffer": 0, "byteOffset": len(pos), "byteLength": len(col)}]
+    accs = [{"bufferView": 0, "componentType": 5126, "count": n, "type": "VEC3",
+             "min": [shift, 0, 0], "max": [0.95 + shift, (n - 1) // 20 * 0.05, 0]},
+            {"bufferView": 1, "componentType": 5121, "normalized": True, "count": n, "type": "VEC4"}]
+    prim = {"attributes": {"POSITION": 0, "COLOR_0": 1}, "mode": 0}
+    if indexed:
+        views.append({"buffer": 0, "byteOffset": len(pos) + len(col), "byteLength": len(idx)})
+        accs.append({"bufferView": 2, "componentType": 5125, "count": 4, "type": "SCALAR"}); prim["indices"] = 2
+    binb = pos + col + idx
+    doc = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+           "meshes": [{"primitives": [prim]}], "buffers": [{"byteLength": len(binb)}], "bufferViews": views, "accessors": accs}
+    js = json.dumps(doc).encode(); js += b" " * (-len(js) % 4); binb += b"\0" * (-len(binb) % 4)
+    out = struct.pack("<III", 0x46546C67, 2, 28 + len(js) + len(binb)) + struct.pack("<II", len(js), 0x4E4F534A) + js + struct.pack("<II", len(binb), 0x004E4942) + binb
+    os.makedirs(os.path.dirname(path), exist_ok=True); open(path, "wb").write(out)
+def tile(uri=None, kids=(), cx=0.5, err=0.0):
+    t = {"boundingVolume": {"box": [cx, 0, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1]}, "geometricError": err}
+    if uri: t["content"] = {"uri": uri}
+    if kids: t["children"] = list(kids)
+    return t
+def tileset(path, root):
+    root["refine"] = "ADD"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump({"asset": {"version": "1.1"}, "geometricError": 10, "root": root}, open(path, "w"))
+# a root of no content over two point children
+glb(d + "/structural/n1.glb", 400); glb(d + "/structural/n2.glb", 400, shift=1.0)
+tileset(d + "/structural/tileset.json", tile(None, [tile("n1.glb"), tile("n2.glb", cx=1.5)], err=1.0))
+# a root tile the server first answers 503 for
+glb(d + "/flaky/n0.glb", 400); tileset(d + "/flaky/tileset.json", tile("n0.glb"))
+# a manifest reached through a redirect: content resolves where it landed
+glb(d + "/real/sub/n0.glb", 400); tileset(d + "/real/sub/tileset.json", tile("n0.glb"))
+# point content with indices: refused, with the reason on screen
+glb(d + "/indexed/n0.glb", 400, indexed=True); tileset(d + "/indexed/tileset.json", tile("n0.glb"))
+PYEOF
+    cat > "$WORK/srv.py" <<'PYEOF'
+import http.server, os, sys
+root, port = sys.argv[1], int(sys.argv[2])
+seen = set()
+class H(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k): super().__init__(*a, directory=root, **k)
+    def log_message(self, *a): pass
+    def do_GET(self):
+        p = self.path.split("?")[0]
+        if p == "/flaky/n0.glb" and p not in seen:
+            seen.add(p); self.send_response(503); self.send_header("Content-Length", "0"); self.end_headers(); return
+        if p == "/redir/tileset.json":
+            self.send_response(302); self.send_header("Location", "/real/sub/tileset.json"); self.send_header("Content-Length", "0"); self.end_headers(); return
+        return super().do_GET()
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+PYEOF
+    TPORT=$(( 23000 + $$ % 20000 ))
+    "$PY" "$WORK/srv.py" "$SRV" "$TPORT" & TPID=$!
+    for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$TPORT/viewer.html" && break; sleep 0.1; done
+    tf=0
+    for case in structural flaky redir; do
+        out=$(sh tests/viewer_shot.sh "http://127.0.0.1:$TPORT/viewer.html?tiles=$case/tileset.json&probe=3" 2>&1 | tail -1)
+        lit=$(echo "$out" | sed -n 's/^lit \([0-9]*\)\/.*/\1/p')
+        [ "${lit:-0}" -ge 50 ] || { bad "tileset '$case' was not drawn: $out"; tf=1; }
+    done
+    out=$(sh tests/viewer_shot.sh "http://127.0.0.1:$TPORT/viewer.html?tiles=indexed/tileset.json&probe=3" 2>&1)
+    echo "$out" | grep -q "indexed point content" || { bad "indexed point content was not refused with its reason: $(echo "$out" | tail -2)"; tf=1; }
+    kill "$TPID" 2>/dev/null; wait "$TPID" 2>/dev/null
+    [ "$tf" -eq 0 ] && ok "a root with no content draws its first child; a 503 is retried; content resolves after a redirect; indexed points are refused, saying why"
+fi
 
 echo
 echo "$PASS passed, $FAIL failed, $SKIP skipped"

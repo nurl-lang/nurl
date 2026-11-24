@@ -65,6 +65,8 @@ $ `deps/glb/src/glb.nu`
     ^ ? == axis 1 y z
 }
 
+@ __pct_max f a f b → f { ^ ? > a b a b }
+
 @ __pct_uri i k → String {
     : String u ( string_from `n` )
     ( string_push_int u k )
@@ -72,7 +74,53 @@ $ `deps/glb/src/glb.nu`
     ^ u
 }
 
+// Built in a staging directory beside `dir`, and swapped in only once every
+// tile and the manifest are written: a build that fails part-way leaves
+// the tileset that was there before as it was, not old tiles mixed with
+// new ones under a manifest that no longer describes them.
 @ pct_build ( Slice f ) xyz ( Slice u ) rgb i up i capacity i grid i seed s dir i verbose → !PctStats String {
+    : String stage ( string_from dir )
+    ( string_push_str stage `.building-` )
+    ( string_push_int stage ( monotonic_ns ) )
+    : !PctStats String r ( __pct_build_into xyz rgb up capacity grid seed ( string_data stage ) verbose )
+    ?? r {
+        F e → {
+            ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _e → {} }
+            ^ @ !PctStats String { F e }
+        }
+        T st → {
+            : String old ( string_from dir )
+            ( string_push_str old `.old-` )
+            ( string_push_int old ( monotonic_ns ) )
+            : b had != 0 ( nurl_path_type dir )
+            ? had {
+                ?? ( fs_rename dir ( string_data old ) ) {
+                    T _ → {}
+                    F _e → {
+                        ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _e2 → {} }
+                        : String m ( string_from `pctiles: cannot move the old tileset aside: ` )
+                        ( string_push_str m dir )
+                        ^ @ !PctStats String { F m }
+                    }
+                }
+            } {}
+            ?? ( fs_rename ( string_data stage ) dir ) {
+                T _ → {}
+                F _e → {
+                    // put the old one back where it was
+                    ? had { ?? ( fs_rename ( string_data old ) dir ) { T _ → {} F _e3 → {} } } {}
+                    : String m ( string_from `pctiles: cannot move the new tileset into place: ` )
+                    ( string_push_str m dir )
+                    ^ @ !PctStats String { F m }
+                }
+            }
+            ? had { ?? ( dir_remove_all ( string_data old ) ) { T _ → {} F _e4 → {} } } {}
+            ^ @ !PctStats String { T st }
+        }
+    }
+}
+
+@ __pct_build_into ( Slice f ) xyz ( Slice u ) rgb i up i capacity i grid i seed s dir i verbose → !PctStats String {
     : i t0 ( monotonic_ns )
     : i np / ( slice_len [f] xyz ) 3
     : b col == ( slice_len [u] rgb ) * np 3
@@ -106,7 +154,10 @@ $ `deps/glb/src/glb.nu`
     : f dy - ( oc_max t 0 1 ) ( oc_min t 0 1 )
     : f dz - ( oc_max t 0 2 ) ( oc_min t 0 2 )
     : f diag ( float_sqrt + + * dx dx * dy dy * dz dz )
-    : ~ Tileset ts ( ts_new ? > diag 0.0 diag 1.0 )
+    // at least the root's own error, which a coarse grid can push above the
+    // diagonal (grid 2 on a cube: 8 x the root's half-size cells)
+    : f rooterr ? > nn 1 * PCT_ERROR_SCALE ( oc_spacing t 0 ) 0.0
+    : ~ Tileset ts ( ts_new ( __pct_max ( __pct_max diag rooterr ) 1.0e-9 ) )
     // which nodes have children: a leaf's error is 0
     : ( Vec i ) kids__v ( vec_zeroed [i] nn )
     : ( Slice i ) kids ( slice_from_vec [i] kids__v )

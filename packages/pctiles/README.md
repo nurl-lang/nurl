@@ -46,11 +46,13 @@ With the default grid of 64, a viewer has a recognisable scene after one
 `3d-tiles-validator` reports no errors or warnings on the tileset, and
 Khronos's validator none on any of its 568 tiles.
 
-Opened at their default settings in two clients:
+Opened at their default settings in two clients. CesiumJS is the browser
+runtime. Cesium for Unreal and Unity are built on Cesium Native, which has not
+been tried yet; they share the format and the 16 px default.
 
 | client | tiles loaded for the first view | points | failed |
 |---|---:|---:|---:|
-| CesiumJS 1.147 (`Cesium3DTileset`, the runtime under Cesium for Unreal and Unity) | 111 | 2,185,264 | 0 |
+| CesiumJS 1.147 (`Cesium3DTileset`) | 111 | 2,185,264 | 0 |
 | the ply viewer (`?tiles=`) | 151 | 2,872,878 | 0 |
 
 ## Limits
@@ -67,8 +69,13 @@ Opened at their default settings in two clients:
 ## Tests
 
 ```
-VALIDATORS=<dir with node_modules/3d-tiles-validator and gltf-validator> sh tests/pctiles_test.sh
+cd packages/pctiles
+sh tests/pctiles_test.sh
+VALIDATORS="/absolute/path/to/validators" sh tests/pctiles_test.sh   # optional, see below
 ```
+
+`VALIDATORS` names a directory where `npm install 3d-tiles-validator
+gltf-validator cesium` has been run.
 
 The test tiles a 120,000-point coloured terrain written in OpenCV axes, then
 checks:

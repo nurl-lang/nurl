@@ -978,11 +978,17 @@ function bootTiles(ts, url, label) {
   function checkDead() {
     if (shown) return;
     if (pinned ? pinned.state === 3 : tiles.every(function (t) { return !t.uri || t.state === 3; }))
-      fail("could not load the tileset's content", (pinned ? pinned.uri : "every tile") + ": " + (pinned && pinned.err_msg || "failed"));
+      fail("could not load the tileset's content: " + (pinned && pinned.err_msg || "no tile loaded"), pinned ? pinned.uri : "every tile failed");
   }
   function failed(t, e, transient) {
     t.state = 0;
-    if (transient && t.tries < 3) { t.retryAt = performance.now() + 1000 * Math.pow(2, t.tries); t.tries++; return; }
+    if (transient && t.tries < 3) {
+      var wait = 1000 * Math.pow(2, t.tries);
+      t.retryAt = performance.now() + wait; t.tries++;
+      /* a probe has no frame loop to ask again: it asks itself */
+      if (PROBE > 0 && !shown) setTimeout(function () { if (t.state === 0) fetchTile(t); }, wait);
+      return;
+    }
     t.state = 3; t.err_msg = String(e && e.message || e);
     checkDead();
   }
@@ -1358,11 +1364,11 @@ document.addEventListener("pointerlockchange", function () {
 document.addEventListener("mousemove", function (e) {
   if (fly && document.pointerLockElement === cv) lookBy(e.movementX, e.movementY);
 });
-window.addEventListener("keyup", function (e) { delete keys[e.code]; });
+` } {}
+    ? == k 2 { ^ `window.addEventListener("keyup", function (e) { delete keys[e.code]; });
 /* ctrl+w closes the tab and no page can take it back: in flight, with
    ctrl held to sink, a w pressed with it is one key away. The browser asks
-` } {}
-    ? == k 2 { ^ `   first instead. */
+   first instead. */
 window.addEventListener("beforeunload", function (e) {
   if (fly) { e.preventDefault(); e.returnValue = ""; }
 });

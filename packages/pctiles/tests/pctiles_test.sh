@@ -44,6 +44,41 @@ PY
 "$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/a" --capacity 8000 --grid 32 -q || fails=$((fails + 1))
 "$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/b" --capacity 8000 --grid 32 -q > /dev/null || fails=$((fails + 1))
 "$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/z" --capacity 8000 --grid 32 --up +z -q > /dev/null || fails=$((fails + 1))
+# a coarse grid on a cube: the root's error (8 x its spacing) is above the
+# box's diagonal, and the tileset's error must still be at least the root's
+python3 - "$WORK/cube.ply" <<'PY'
+import struct, sys
+with open(sys.argv[1], "wb") as f:
+    f.write(b"ply\nformat binary_little_endian 1.0\nelement vertex 125\nproperty float x\nproperty float y\nproperty float z\nend_header\n")
+    for i in range(125): f.write(struct.pack("<fff", i % 5, i // 5 % 5, i // 25))
+PY
+if "$WORK/pctiles" build "$WORK/cube.ply" -o "$WORK/cube" --capacity 1 --grid 2 -q > "$WORK/cube.out" 2>&1 && [ -f "$WORK/cube/tileset.json" ] \
+   && python3 -c "import json,sys; t=json.load(open(sys.argv[1])); sys.exit(0 if t['geometricError'] >= t['root']['geometricError'] else 1)" "$WORK/cube/tileset.json"; then
+    echo "PASS --grid 2 on a cube: the tileset's error is at least the root's"
+else echo "FAIL --grid 2 on a cube: $(cat "$WORK/cube.out")"; fails=$((fails + 1)); fi
+# a rebuild replaces the whole tileset: no tile of the old one is left
+"$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/re" --capacity 2000 --grid 16 -q > /dev/null
+n1=$(ls "$WORK/re" | wc -l)
+"$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/re" --capacity 60000 --grid 64 -q > /dev/null
+n2=$(ls "$WORK/re" | wc -l)
+n3=$(python3 -c "import json,sys; t=json.load(open(sys.argv[1]))
+def c(x): return 1 + sum(c(k) for k in x.get('children', []))
+print(c(t['root']) + 1)" "$WORK/re/tileset.json")
+left=$(ls -d "$WORK"/re.* 2>/dev/null | wc -l)
+if [ "$n2" = "$n3" ] && [ "$n1" -gt "$n2" ] && [ "$left" = 0 ]; then echo "PASS a rebuild replaces the tileset whole ($n1 files, then $n2; no staging left)"
+else echo "FAIL a rebuild left $n2 files for $n3 tiles+manifest (was $n1), $left staging dirs"; fails=$((fails + 1)); fi
+# a build that cannot finish leaves the old tileset as it was (an ordinary
+# user cannot write into a read-only parent; root can, so it skips)
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$WORK/ro" && cp -r "$WORK/re" "$WORK/ro/t" && chmod a-w "$WORK/ro"
+    before=$(cd "$WORK/ro/t" && cat tileset.json | md5sum)
+    if "$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/ro/t" --grid 16 -q > /dev/null 2>&1; then
+        echo "FAIL a build into a read-only parent claimed success"; fails=$((fails + 1))
+    elif [ "$(cd "$WORK/ro/t" && cat tileset.json | md5sum)" = "$before" ] && [ "$(ls "$WORK/ro/t" | wc -l)" = "$n2" ]; then
+        echo "PASS a build that cannot finish leaves the old tileset untouched"
+    else echo "FAIL a failed build changed the old tileset"; fails=$((fails + 1)); fi
+    chmod u+w "$WORK/ro"
+fi
 python3 - "$WORK" <<'PY' || fails=$((fails + 1))
 import json, os, struct, sys
 w = sys.argv[1]
@@ -136,8 +171,10 @@ JS
 else
     echo "SKIP the validators (set VALIDATORS to a dir with node_modules/3d-tiles-validator and gltf-validator)"
 fi
-# CesiumJS — the 3D Tiles runtime under Cesium for Unreal and Unity — opens
-# the tileset at its default settings, loads tiles and fails none, when
+# CesiumJS (the browser runtime; Cesium for Unreal and Unity are built on
+# Cesium Native, which this does not test) opens the tileset at its default
+# settings, zooms to it, loads what that view selects, fails none and
+# selects points, when
 # VALIDATORS also holds node_modules/cesium and a browser is on PATH
 if [ -n "$V" ] && [ -d "$V/node_modules/cesium/Build/Cesium" ] && command -v google-chrome >/dev/null 2>&1; then
     ln -sfn "$V/node_modules/cesium/Build/Cesium" "$WORK/a/cesium"
@@ -155,10 +192,18 @@ if [ -n "$V" ] && [ -d "$V/node_modules/cesium/Build/Cesium" ] && command -v goo
     var loaded = 0, failed = 0;
     ts.tileLoad.addEventListener(function () { loaded++; });
     ts.tileFailed.addEventListener(function () { failed++; });
-    ts.initialTilesLoaded.addEventListener(function () {
-      document.title = "cesium loaded=" + loaded + " failed=" + failed + " points=" + ts.statistics.numberOfPointsSelected;
-    });
+    /* the result once the camera has moved to the tileset and every tile
+       that view selects is in — not the first, pre-zoom batch */
+    /* settled: tiles have loaded AND everything the view selects is in
+       (right after zoomTo, tilesLoaded alone is vacuously true — no frame
+       has selected anything yet) */
     await viewer.zoomTo(ts);
+    var settled = false;
+    for (var i = 0; i < 600 && !settled; i++) {
+      await new Promise(function (r) { setTimeout(r, 100); });
+      settled = loaded > 0 && ts.tilesLoaded;
+    }
+    document.title = "cesium loaded=" + loaded + " failed=" + failed + " points=" + ts.statistics.numberOfPointsSelected + " settled=" + settled;
   } catch (e) { document.title = "cesium error " + e; }
 })();
 </script></body></html>
@@ -192,7 +237,8 @@ JS
     title=$(timeout 120 node "$WORK/cdp.mjs" "http://127.0.0.1:$PORT/cesium.html" "$WORK/chrome" 2>"$WORK/cesium.err")
     kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null
     case "$title" in
-        "cesium loaded="*" failed=0 points="*) [ "$(echo "$title" | sed 's/.*loaded=\([0-9]*\).*/\1/')" -gt 0 ] \
+        "cesium loaded="*" failed=0 points="*" settled=true") [ "$(echo "$title" | sed 's/.*loaded=\([0-9]*\).*/\1/')" -gt 0 ] \
+            && [ "$(echo "$title" | sed 's/.*points=\([0-9]*\).*/\1/')" -gt 0 ] \
             && echo "PASS CesiumJS opens the tileset at its defaults — $title" \
             || { echo "FAIL CesiumJS loaded nothing — $title"; fails=$((fails + 1)); } ;;
         *) echo "FAIL CesiumJS: ${title:-no answer}"; grep -v "^$" "$WORK/cesium.err" | tail -3; fails=$((fails + 1)) ;;

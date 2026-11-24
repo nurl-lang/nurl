@@ -54,7 +54,9 @@ tileset goes into a glTF tile as `(x, z, -y)`.
 ## Tests
 
 ```
-VALIDATORS=<dir with node_modules/3d-tiles-validator and gltf-validator> sh tests/tiles3d_test.sh
+cd packages/tiles3d
+sh tests/tiles3d_test.sh
+VALIDATORS="/absolute/path/to/validators" sh tests/tiles3d_test.sh   # after npm install 3d-tiles-validator gltf-validator there
 ```
 
 The test writes a 21-tile terrain of point tiles in two levels with ADD
