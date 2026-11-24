@@ -444,6 +444,7 @@ class FnCheck:
             self.hvid[h] = i
         self.s_effects = set()
         self.s_consumes = set()
+        self.s_twice = set()     # parameters a returned literal names more than once
         self.in_defer = False
         self.s_elems = set()
         self.rets = []
@@ -454,6 +455,7 @@ class FnCheck:
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
         self.lit_params = {}     # a literal temporary -> the parameters it names whole
+        self.lit_twice = {}      # …and those it names more than once (nurlc's twicelit: a part)
         self.lit_mixed = {}      # a literal temporary -> it holds a value of its own beside them
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
@@ -2662,7 +2664,8 @@ class FnCheck:
                                             if not path and kind == "handle" and k < len(ops)]
                 # (…and whether that is all it lends: one argument, whole -
                 # nurlc's lend kind 1, the return's handover)
-                self.call_lent_only[dest_vid] = (len(sm["lends"]) == 1 and len(self.call_lent[dest_vid]) == 1)
+                self.call_lent_only[dest_vid] = (len(sm["lends"]) == 1 and len(self.call_lent[dest_vid]) == 1
+                                                 and not sm.get("twice"))
             part = False
             for k in whole:
                 moved = self.move_out(st, ops[k][1], line)
@@ -4225,11 +4228,18 @@ class FnCheck:
                         # a parameter named whole in a struct literal or as
                         # a variant's payload: handed back as it is, the
                         # literal keeps the caller's argument (below, `ret`)
+                        if op[1] in self.lit_params.get(dest_vid, ()):
+                            self.lit_twice.setdefault(dest_vid, set()).add(op[1])
                         self.lit_params.setdefault(dest_vid, set()).add(op[1])
                     elif op[1] in self.lit_params and (wrapper or not self.lit_mixed.get(op[1])):
                         # (…or as the payload of an option or a result, or in
-                        # a literal nested in this one that lends them)
-                        self.lit_params.setdefault(dest_vid, set()).update(self.lit_params[op[1]])
+                        # a literal nested in this one that lends them - each
+                        # name counted, a nested literal's twice included)
+                        mine = self.lit_params.setdefault(dest_vid, set())
+                        tw = (mine & self.lit_params[op[1]]) | self.lit_twice.get(op[1], set())
+                        if tw:
+                            self.lit_twice.setdefault(dest_vid, set()).update(tw)
+                        mine.update(self.lit_params[op[1]])
                         if self.lit_mixed.get(op[1]):
                             self.lit_mixed[dest_vid] = True
                 if (cur is not None and cur.own == "L" and not cur.call and self.fn.vars[op[1]].mut
@@ -5355,6 +5365,10 @@ class FnCheck:
                     # them.
                     lp = sorted(self.lit_params.get(op[1], ()))
                     if lp and not self.lit_mixed.get(op[1]):
+                        # (a parameter named twice is lent in part: no
+                        # handover of what a caller hands it, as nurlc's
+                        # twicelit says)
+                        self.s_twice |= {self.pidx[b] for b in self.lit_twice.get(op[1], ()) if b in self.pidx}
                         for b in lp:
                             if st.vals[b].own == "P":
                                 mine = {l for l in av.loans | hloans(av.held)
@@ -5729,6 +5743,7 @@ class FnCheck:
                         stores.add((j, hp[:3]) + pl)
         consumes = set(self.s_consumes) | {k for k, m in enumerate(self.fn.modes) if m == "sink"}
         return {"modes": list(self.fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),
+                "twice": sorted(self.s_twice),
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
                 "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
@@ -5872,6 +5887,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "shares", "gone", "mixed", "stale", "credits", "keeps", "catches", "putback"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "shares", "gone", "mixed", "stale", "credits", "keeps", "catches", "putback", "twice"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
