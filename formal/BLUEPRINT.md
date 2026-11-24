@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,139 lines of Lean 4**, **932 theorems**, **1110 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **87 modules**, **81,943 lines of Lean 4**, **3669 theorems**, **4704 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **87 modules**, **82,494 lines of Lean 4**, **3674 theorems**, **4711 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -143,7 +143,7 @@ flowchart BT
   ArcPanicWitness["ArcPanicWitness<br/>(796L, 52 thms)"]
   Basic["Basic<br/>(602L, 47 thms)"]
   Bind["Bind<br/>(188L, 4 thms)"]
-  Call["Call<br/>(4430L, 199 thms)"]
+  Call["Call<br/>(4743L, 203 thms)"]
   CallInv["CallInv<br/>(721L, 21 thms)"]
   CallMem["CallMem<br/>(1639L, 60 thms)"]
   CapClause["CapClause<br/>(76L, 4 thms)"]
@@ -220,12 +220,12 @@ flowchart BT
   ThruGlueWitness["ThruGlueWitness<br/>(446L, 26 thms)"]
   ThruLiftKinds["ThruLiftKinds<br/>(96L, 8 thms)"]
   ThruPre["ThruPre<br/>(247L, 25 thms)"]
-  Typing["Typing<br/>(2602L, 145 thms)"]
+  Typing["Typing<br/>(2655L, 145 thms)"]
   TypingFacts["TypingFacts<br/>(1163L, 65 thms)"]
   Unfresh["Unfresh<br/>(169L, 15 thms)"]
   UnheldFresh["UnheldFresh<br/>(198L, 16 thms)"]
   Values["Values<br/>(1329L, 69 thms)"]
-  Wf["Wf<br/>(1627L, 42 thms)"]
+  Wf["Wf<br/>(1812L, 43 thms)"]
   DtorWitness --> ArcDtorWitness
   Settle --> ArcDtorWitness
   ArcDtorWitness --> ArcPanicWitness
@@ -356,7 +356,7 @@ flowchart BT
 | 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1463 | 69 | 78 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
 | 1. Flow-Sensitive Typing | [`A2/Basic.lean`](A2/Basic.lean) | 602 | 47 | 1 | Foundational lemmas for store updates (upd), value subtrees, and contexts. |
 | 1. Flow-Sensitive Typing | [`A2/Ctx.lean`](A2/Ctx.lean) | 351 | 31 | 0 | Algebraic properties and monotonicity of context operations (kill, exitScope, derive). |
-| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 2602 | 145 | 131 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
+| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 2655 | 145 | 132 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
 | 1. Flow-Sensitive Typing | [`A2/TypingFacts.lean`](A2/TypingFacts.lean) | 1163 | 65 | 1 | Inversion lemmas and structural properties of well-typed statements (StmtT). |
 | 2. Memory Invariant | [`A2/Heap.lean`](A2/Heap.lean) | 211 | 14 | 0 | Preservation of heap disjointness and allocation validity (HeapOK) across store operations. |
 | 2. Memory Invariant | [`A2/Invariant.lean`](A2/Invariant.lean) | 2978 | 193 | 96 | Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views. |
@@ -364,7 +364,7 @@ flowchart BT
 | 2. Memory Invariant | [`A2/SrcKeep.lean`](A2/SrcKeep.lean) | 562 | 25 | 0 | Source typing keeps a borrowed parameter's entry (StmtT.ctxRel), so a destructor's frame gets KeepOut, CtxWF and NameWF of its body without premises on letd (srcCase). |
 | 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 1248 | 83 | 5 | Stability of borrows and views under store and context updates. |
 | 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 1329 | 69 | 2 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
-| 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1627 | 42 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
+| 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1812 | 43 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
 | 3. Proof Infrastructure | [`A2/ArcDtorWitness.lean`](A2/ArcDtorWitness.lean) | 304 | 13 | 4 |  |
 | 3. Proof Infrastructure | [`A2/ArcPanicWitness.lean`](A2/ArcPanicWitness.lean) | 796 | 52 | 15 |  |
 | 3. Proof Infrastructure | [`A2/CapClause.lean`](A2/CapClause.lean) | 76 | 4 | 0 |  |
@@ -420,7 +420,7 @@ flowchart BT
 | 3. Step & Unwinding Lemmas | [`A2/StepFrame.lean`](A2/StepFrame.lean) | 417 | 17 | 1 | Invariant preservation across frame steps and panic unwinding frames. |
 | 3. Step & Unwinding Lemmas | [`A2/Steps.lean`](A2/Steps.lean) | 3971 | 123 | 6 | Preservation lemmas for individual statement steps (letv, assign, push, free, unpair). |
 | 4. Calls & Closures | [`A2/Bind.lean`](A2/Bind.lean) | 188 | 4 | 1 | Binding call arguments (in, inout, sink) from caller context into callee frame. |
-| 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 4430 | 199 | 21 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
+| 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 4743 | 203 | 22 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
 | 4. Calls & Closures | [`A2/CallInv.lean`](A2/CallInv.lean) | 721 | 21 | 0 | Full invariant preservation (callCase, recCase) across function call and recover expansion. |
 | 4. Calls & Closures | [`A2/CallMem.lean`](A2/CallMem.lean) | 1639 | 60 | 2 | Store state and owned trees immediately after binding parameters in a call. |
 | 4. Calls & Closures | [`A2/Closure.lean`](A2/Closure.lean) | 3491 | 116 | 7 | Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness. |
