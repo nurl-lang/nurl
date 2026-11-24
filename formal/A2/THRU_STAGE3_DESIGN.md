@@ -1282,3 +1282,18 @@ So the list must be **canonical**: the runtime frozen lists of the frames above 
 - a catch frame's carried clause is stated at the `Z` of its start, which is the `Z` then, because `Z` is threaded.
 
 This is a signature change at every `Inv` use: mechanical, large, multi-session. It is the next step.
+
+**Option 2, the crux (2026-11-25).** Threading `Z` is mechanical, and it need not touch every `Inv` use: the clause can move out of `Inv` into a predicate `HeldZ m Γ Z s` that `preserve` takes and returns beside it. The hard part is the catch frame.
+
+At `catchP` the post-state is the snapshot `m0` with the typing's end context `Δ`. The clause there is needed at the threaded `Z`: `FCaps (m0.set x) Δ (Z p) d.root`. That is the clause at the frame's start, at the same `Z`, which the start's step (`recCase`) knew.
+
+It must be recorded where both sides meet:
+- **`StmtT.catchR`** has `Δ` but no `Z`. `Z` belongs to no typing.
+- **`HeldZ`** has `Z` but not `Δ`. Recording `∃ Γc, clause m0 Γc Z` leaves `Γc` unrelated to `Δ`.
+
+Ways out, to weigh next session:
+- **(a)** `catchR` carries the start's context in its syntax, `catchR x m0 Γ0 s`. It is a runtime-only form, so only its uses change. The typing then asks `Δ = setE Γ0 x _`, and `HeldZ` records `clause m0 Γ0 Z`.
+- **(b)** `HeldZ`'s record is the liveness of `Δ` against the snapshot (`LiveBack Γc Δ`). That needs the "body kills no older binding" fact again.
+- **(c)** Restrict A2: no `recover` frame inside a route-U frame. This is the coverage cut the owner did not choose.
+
+(a) looks smallest and sound. The rest of the plan (`HeldZ`, the frame's domain `∉ z_p`, the call's `NamesFree` / `NoMutLive` argument) stands.
