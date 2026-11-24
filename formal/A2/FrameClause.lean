@@ -734,4 +734,29 @@ theorem HeldZ.frozenRbind {m : Mem} {Γ : Ctx} {Z : Var → List Var} {x e : Var
   bound := hz.bound
   frames x0 m0 b0 hx := hz.frames x0 m0 b0 (by simpa [Stmt.catchFrames] using hx)
 
+
+/-- AGORA-937 B4: the frame clause holds at some frame lists. -/
+def HZ (m : Mem) (Γ : Ctx) (s : Stmt) : Prop := ∃ Z, HeldZ m Γ Z s
+
+/-- ... at a store with the same slots (a sweep's). -/
+theorem HZ.of_st {m m' : Mem} {Γ : Ctx} {s : Stmt} (h : HZ m Γ s) (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) :
+    HZ m' Γ s := by
+  obtain ⟨Z, hz⟩ := h
+  exact ⟨Z, hz.mapCaps (fun _ _ hc => hc.of_st hst) hnv⟩
+
+theorem HZ.sweepD {m : Mem} {Γ : Ctx} {s : Stmt} (h : HZ m Γ s) : HZ m.sweepD Γ s :=
+  h.of_st rfl (Nat.le_refl _)
+
+theorem HZ.sweep {m : Mem} {Γ : Ctx} {s : Stmt} (h : HZ m Γ s) : HZ m.sweep Γ s :=
+  h.of_st rfl (Nat.le_refl _)
+
+/-- ... and at a source statement in the empty context: there is no borrowed
+    parameter, and no catch frame runs. -/
+theorem HZ.empty {m : Mem} {s : Stmt} (hs : s.src = true) : HZ m (fun _ => none) s :=
+  ⟨fun _ => [],
+    { caps := fun _ _ h => by cases h
+      reach := fun _ _ h => by cases h
+      bound := fun _ _ h => by cases h
+      frames := fun _ _ _ h => by rw [Stmt.catchFrames_src hs] at h; cases h }⟩
+
 end A2
