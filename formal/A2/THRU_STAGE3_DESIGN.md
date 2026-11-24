@@ -1158,3 +1158,8 @@ What preservation needs is one typed read lemma: `RhsT` reads only live bindings
 - `pair`, `inl`, `inr`, `pack`, and `arcNew` / `lockNew` / `cellNew`: recursive.
 
 The recursive ones need the statement strengthened to "the value is `ValCapsInp`, and `LiveCaps m1 Γ1 w` holds after". A component's evaluation changes the store (a move empties its slot), and the next component reads in `Γ1`, as `EvalR.capsInp` does with `SlotsCaps`.
+
+*Plan for the joint lemma `RhsT.liveCaps`:* the value is `ValCapsInp`, and `LiveCaps m1 Γ1 w` holds.
+- **The store side.** `EvalR` changes only the read variable's slot: emptied (`moveOwn`, `takel`/`taker`), its node shrunk (`pop`, `remove`), or a fresh empty node (`take`). Each new tree's subtrees are the old one's, so both the values and the slot-located targets stay `ValCapsInp`.
+- **The block side.** Block changes (`chanSend`/`Recv`, `lock*`) leave the slots alone, and nodes in blocks are clean by `MInv`. So `LiveCaps` speaks of slot-located targets only.
+- **The context side.** It needs `RhsT`'s output to only end bindings, a `LiveLe Γ Γ1` for `RhsT`. Here `kill` is `LiveLe.kill`, and `setE … { live := false }` ends one.

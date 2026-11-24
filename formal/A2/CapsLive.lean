@@ -40,12 +40,16 @@ namespace A2
 
 
 /-- The clause over the live bindings: a live slot's value, and the nodes
-    its handle or view reaches, hold no package that captures `w` but
-    read-only. -/
+    its handle or view reaches in the slots, hold no package that captures
+    `w` but read-only. (A node in a block holds none anyway,
+    `MInv.rdCapsInp`.) -/
 def LiveCaps (m : Mem) (Γ : Ctx) (w : Var) : Prop :=
   ∀ v E o V, Γ v = some E → E.live = true → m.st v = some ⟨o, some V⟩ →
-    ValCapsInp V w ∧ (∀ c n, V = .href c → NodeAt m c n → ValCapsInp n w) ∧
-      (∀ d o' l n, V = .view d o' l → DataAt m d n → ValCapsInp n w)
+    ValCapsInp V w ∧
+    (∀ c, V = .href c → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) ∧
+    (∀ d o' l, V = .view d o' l → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty c es, n = .node ty c d es) → ValCapsInp n w)
 
 theorem LiveCaps.val {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {v : Var} {E : Entry}
     {o : Bool} {V : Val} (hv : Γ v = some E) (hl : E.live = true) (hs : m.st v = some ⟨o, some V⟩) :
