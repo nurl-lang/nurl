@@ -2,8 +2,10 @@
 # What `map-anything serve` adds to recon-kit's service (whose own test,
 # packages/recon-kit/tests/serve_test.sh, covers the routes, uploads, the
 # job lifecycle and 3-D objects): the page shows this model's options, and
-# a start request becomes this CLI's options line. No GPU: the one job's
-# "photo" does not decode, so the CLI fails before any model is loaded.
+# a start request becomes this CLI's options line. No GPU and no download:
+# the checkpoint is a local stand-in (hub_get takes an existing path as it
+# is), and the one job's "photo" does not decode, so the run fails before
+# any model is loaded.
 set -u
 cd "$(dirname "$0")/.."
 REPO_ROOT="$(cd ../.. && pwd)"
@@ -18,7 +20,8 @@ if ! $NURL src/main.nu "$WORK/map-anything" >/dev/null 2>"$WORK/build.err"; then
 fi
 PORT=$(( 20000 + $$ % 20000 ))
 B="http://127.0.0.1:$PORT"
-MAP_ANYTHING_PASSWORD=sekret "$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/serve.log" 2>&1 &
+printf 'not a checkpoint' > "$WORK/model.safetensors"
+MAP_ANYTHING_MODEL="$WORK/model.safetensors" MAP_ANYTHING_PASSWORD=sekret "$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/serve.log" 2>&1 &
 PID=$!
 up=0
 for _ in $(seq 1 50); do curl -s -m 1 -o /dev/null "$B/healthz" && { up=1; break; }; sleep 0.1; done

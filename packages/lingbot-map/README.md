@@ -201,8 +201,14 @@ before it. A shuffled directory reconstructs a different scene.
 ## Serve it
 
 ```
-lingbot-map serve --host 0.0.0.0 --port 8808 --password secret
+lingbot-map serve --host 0.0.0.0 --port 8808 --password secret \
+    --tls-cert cert.pem --tls-key key.pem
 ```
+
+Basic sign-in sends the password with every request, so off loopback it
+needs TLS: these two flags, or a TLS-terminating proxy (an ingress) in
+front of a service bound to `127.0.0.1`. Without `--password` (or
+`$LINGBOT_MAP_PASSWORD`) anyone who can reach the port can use it.
 
 A web page where a browser — a phone too — uploads a video or photos,
 the jobs queue on disk under `~/.lingbot-map/jobs/` and run one at a

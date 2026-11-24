@@ -150,6 +150,14 @@ check "...and the link is dead" 404 "$(code "$B/s/$TOK")"
 check "...its cloud too" 404 "$(code "$B/s/$TOK/cloud.ply")"
 TOK2=$(curl -s $A -X POST "$B/api/jobs/$ID3/share" | sed -n 's/.*"share":"\([0-9a-f]*\)".*/\1/p')
 check "sharing again makes a new link" 1 "$([ -n "$TOK2" ] && [ "$TOK2" != "$TOK" ] && echo 1 || echo 0)"
+# a disk that will not let go of either record: the revocation says so
+# (root ignores the modes, so only an ordinary user can check this)
+if [ "$(id -u)" != 0 ]; then
+    chmod a-w "$WORK/data/shares" "$WORK/data/jobs/$ID3"
+    check "a stop that cannot delete fails" 500 "$(code $A -X DELETE "$B/api/jobs/$ID3/share")"
+    check "...and the link it reports alive is" 200 "$(code "$B/s/$TOK2")"
+    chmod u+w "$WORK/data/shares" "$WORK/data/jobs/$ID3"
+fi
 check "deleting the job" 204 "$(code $A -X DELETE "$B/api/jobs/$ID3")"
 check "...ends its link" 404 "$(code "$B/s/$TOK2")"
 check "...and leaves no record of it" 0 "$(ls "$WORK/data/shares" | wc -l | tr -d ' ')"

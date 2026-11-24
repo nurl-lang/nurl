@@ -681,8 +681,8 @@ i h i w f cmin i stride → v {
 // down) whose caches fit what the device has free once the checkpoint is
 // resident — a portrait phone video at 518 wants ~19 GB of KV cache, and a
 // card shared with another service may not have it. 0 when none fits.
-@ __lm_auto_size GpuKit kit s first i nframes i verbose → i {
-    : i mfree ( gk_mem_free kit )
+// `mfree` is the run's one reading, taken before its first allocation.
+@ __lm_auto_size i mfree s first i nframes i verbose → i {
     : ~ i size LM_SIZE
     ~ >= size 224 {
         ?? ( pp_load first size LM_PATCH ) {
@@ -858,9 +858,13 @@ i h i w f cmin i stride → v {
             // a capture comes out the same size): the scene file wants it
             : ~ s first ``
             ?? ( vec_get [String] . o frames 0 ) { T s0 → { = first ( string_data s0 ) } F → {} }
+            // free memory read once, before any of the run's own buffers:
+            // the auto size and the first-frame check both weigh the same
+            // estimate (which counts every cache, the camera's too) against it
+            : i mfree0 ( gk_mem_free kit )
             : ~ i isz . o imgsize
             ? == isz 0 {
-                = isz ( __lm_auto_size kit first nframes . o verbose )
+                = isz ( __lm_auto_size mfree0 first nframes . o verbose )
                 ? == isz 0 {
                     ( nurl_print `lingbot-map: no input size down to 224 px fits the device's free memory\n` )
                     ( gk_close kit ) ^ 1
@@ -933,7 +937,7 @@ i h i w f cmin i stride → v {
                                         // that cannot fit, every op downstream
                                         // fails without a word about memory.
                                         : i need ( __lm_device_bytes nframes p )
-                                        : i mfree ( gk_mem_free kit )
+                                        : i mfree mfree0
                                         ? & > mfree 0 > + need 268435456 mfree {
                                             ( nurl_print `lingbot-map: this run does not fit on the device.\n` )
                                             ( nurl_print `  frames        ` )

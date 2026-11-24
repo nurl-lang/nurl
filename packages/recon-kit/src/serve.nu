@@ -1225,7 +1225,7 @@ $ `ui.nu`
     : String st ( __rk_state ( string_data id ) )
     ? == ( string_len st ) 0 { = res 1 } {
         ? | ( __rk_eq ( string_data st ) `running` ) ( __rk_state_is_f ( string_data id ) `mesh_state` `running` ) { = res 2 } {
-            ? ( __rk_set_state ( string_data id ) `deleted` ) { ( __rk_unshare ( string_data id ) ) } { = res 3 }
+            ? ( __rk_set_state ( string_data id ) `deleted` ) { : b _gone ( __rk_unshare ( string_data id ) ) } { = res 3 }
         }
     }
     ( __rk_unlock t )
@@ -1491,8 +1491,10 @@ $ `ui.nu`
     ^ id
 }
 
-// Ends a job's link (both records); the caller holds the job lock.
-@ __rk_unshare s id → v {
+// Ends a job's link (both records); the caller holds the job lock. Either
+// deletion alone ends it, so a record already gone is no failure; false
+// only when the token still resolves afterwards (a read-only disk).
+@ __rk_unshare s id → b {
     : String tok ( __rk_read_job id `share` )
     ? ( __rk_token_ok ( string_data tok ) ) {
         : String sf ( __rk_share_file ( string_data tok ) )
@@ -1500,6 +1502,7 @@ $ `ui.nu`
     } {}
     : String jf ( __rk_jfile id `share` )
     ?? ( file_delete ( string_data jf ) ) { T _ → {} F _e → {} }
+    ^ == ( string_len ( __rk_shared_job ( string_data tok ) ) ) 0
 }
 
 @ __rk_share_json s id s token → HttpResponse {
@@ -1550,9 +1553,11 @@ $ `ui.nu`
     : i t ( __rk_lock )
     : String st ( __rk_state sid )
     : b known > ( string_len st ) 0
-    ? known { ( __rk_unshare sid ) } {}
+    : ~ b gone T
+    ? known { = gone ( __rk_unshare sid ) } {}
     ( __rk_unlock t )
     ? known {} { ^ ( __rk_err 404 `no such job` ) }
+    ? gone {} { ^ ( __rk_err 500 `the link could not be ended` ) }
     ^ ( response_status_only 204 )
 }
 

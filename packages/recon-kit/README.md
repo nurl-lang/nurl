@@ -31,6 +31,14 @@ the job, ends the link.
 ```nurl
 $ `deps/recon-kit/src/serve.nu`
 
+// the start request → the model's CLI options, every number clamped
+@ my_opts Json j → String {
+    : String opts ( string_from `--max-views ` )
+    ( string_push_int opts ( rk_jint j `max_views` 0 2000 24 ) )
+    ( rk_push_voxel opts ( rk_jint j `voxel_mm` -1 999 -1 ) )
+    ^ opts
+}
+
 @ my_app → RkApp {
     ^ @ RkApp {
         ( string_from `my-model` )            // name: title, realm, log lines
