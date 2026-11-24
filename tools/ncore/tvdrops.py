@@ -1171,6 +1171,12 @@ def check_function(name, blocks, owning, journal=False):
                     # One id for both is not that: not followed)
                     raise Unsupported(f"{name}: a field of an aggregate that holds an owned value "
                                       f"replaced ({mi.group(1)})")
+                if elt and regid.get(elt) is not None and regid[elt] in lent_ids:
+                    # (a parameter the function only borrows, its own value -
+                    # directly or loaded back from a slot - moved into an
+                    # aggregate: where that aggregate goes is not followed as
+                    # the caller's value)
+                    raise Unsupported(f"{name}: a borrowed parameter moved into an aggregate ({elt})")
                 if elt and elt in regid and elt not in loads and regid[elt] is not None and regid[elt] != a:
                     u = regid[elt]
                     if any(u in ys for ys in via.values()):
@@ -1438,6 +1444,8 @@ def check_function(name, blocks, owning, journal=False):
                             members.append(x)
                             todo.extend(via.get(x, ()))
                     for x in members:
+                        if x in lent_ids:
+                            return f"mismatch: {name} a borrowed parameter handed to a `sink` of {callee} inside an aggregate: {'>'.join(path)}"
                         if x in released:
                             return f"mismatch: {name} a released value handed to a `sink` of {callee} inside an aggregate: {'>'.join(path)}"
                         if x in given:

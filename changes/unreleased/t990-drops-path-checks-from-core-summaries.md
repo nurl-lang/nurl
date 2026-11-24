@@ -236,3 +236,7 @@
   unsupported.
 - An aggregate handed to a `sink` is checked member by member first: one
   already released or handed on is a mismatch.
+- A parameter the function only borrows, moved into an aggregate (directly
+  or loaded back from a slot), is unsupported, and a member of an aggregate
+  handed to a `sink` that is a borrowed parameter is a mismatch. No corpus
+  function does either.

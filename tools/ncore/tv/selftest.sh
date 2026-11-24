@@ -297,6 +297,13 @@ awk '/define i64 @__nurl_fn.keep\(/{m=1} m && /^}/{m=0}
   { if (m && /^  ret /) { print "  %kb = load %Vec__i64, %Vec__i64* %r0"; print "  %kz = call i64 @__nurl_fn.eat(%Vec__i64 %kb)" }
     print }' "$TMP/e.ll" > "$TMP/lents.ll"
 cmut a_borrowed_parameter_loaded_from_its_slot_handed_to_a_sink "$TMP/lents.ll" "$TMP/e.core"
+# ...and moved into an aggregate that is handed to eat's `sink`: the
+# caller's value, carried inside the aggregate (not followed)
+awk '/define i64 @__nurl_fn.keep\(/{m=1} m && /^}/{m=0}
+  { if (m && /^  ret /) { print "  %kb = load %Vec__i64, %Vec__i64* %r0"; print "  %ka = insertvalue { %Vec__i64 } zeroinitializer, %Vec__i64 %kb, 0"; print "  %kz = call i64 @__nurl_fn.eat({ %Vec__i64 } %ka)" }
+    print }' "$TMP/e.ll" > "$TMP/lentagg.ll"
+grep -q "insertvalue { %Vec__i64 } zeroinitializer, %Vec__i64 %kb, 0" "$TMP/lentagg.ll" || { echo "FAIL: the borrowed-into-aggregate edit did not apply"; fail=1; }
+nv a_borrowed_parameter_moved_into_an_aggregate_handed_to_a_sink __nurl_fn.keep "$TMP/lentagg.ll" --sums "$TMP/e.core"
 # (--journal) b stored into the journal-only temporary in place of the
 # `bomb 1` value, registered there, and taken out of the aggregate: b's
 # flag is cleared with b handed nowhere. The journal-only slot is no owner
@@ -410,9 +417,9 @@ nv a_literal_stored_through_a_pointer_a_call_returned_from_the_frames_slot_as_fl
 # question of what the frame turns into integers asks itself (not followed,
 # not a crash)
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kq = call ptr @__nurl_fn.ptr_of(i64 %ki)"; print "  %ki = ptrtoint ptr %kq to i64"
+  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = add i64 0, 0"; print "  %kq = call ptr @__nurl_fn.ptr_of(i64 %ki)"; print "  %kj = ptrtoint ptr %kq to i64"
       print "  store %Two " r ", ptr %kq"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lrec.ll"
-grep -q "ptrtoint ptr %kq to i64" "$TMP/lrec.ll" || { echo "FAIL: the recursive-ptrtoint edit did not apply"; fail=1; }
+grep -q "%kj = ptrtoint ptr %kq to i64" "$TMP/lrec.ll" || { echo "FAIL: the recursive-ptrtoint edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_pointer_whose_ptrtoint_asks_itself __nurl_fn.mk "$TMP/lrec.ll" --sums "$TMP/l.core"
 # field 0, which holds the first clone, replaced in the literal returned:
 # the result does not carry that clone
