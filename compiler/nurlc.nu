@@ -30568,14 +30568,18 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 //   2  possibly part of it (or anything else) — a lent result is copied
 //      and the temporary dropped;
 //   0  never the argument (or the callee keeps it): nothing to decide.
-// Does `fname` hand its argument `ix` back whole on some return (`^ p`,
-// a literal holding p whole) and a part of it on another (`^ ( vec_get
-// … . p kids 0 )`)?
+// Does `fname` hand its argument `ix` back whole on some return (`^ p`)
+// and, on another, what it read through a pointer it reached (`retread`,
+// the walk's "lent by something the parameters lead to": `^ ( vec_get …
+// . p kids 0 )`)? Which of them a run hands back is not known. (A part a
+// parameter explains — `( box_get [N] b )` of its payload — is the
+// owner's own, AGORA-907.) Before scalars stopped counting as lends, this
+// answer came through the function's scalar parameter being "lent" by
+// the same read.
 @ __lends_whole_and_part s fname i ix → b {
     : s a ( nurl_str_int ix )
     : b whole | ( nurl_sym_has_word g_fn_ret_alias fname a ) ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retlend##` fname ) a )
-    : b part | ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retpart##` fname ) a ) ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retread##` fname ) a )
-    ^ & whole part
+    ^ & whole ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retread##` fname ) a )
 }
 
 // …the call just compiled, for the argument that is the binding `name`.
