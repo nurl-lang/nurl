@@ -279,10 +279,8 @@ theorem takeB_viewsOK {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
     (hvs : ViewsOK m (.vec t) (.node t c d es) Ex.held) :
     ViewsOK (m.set o ⟨true, some T'⟩) t e Ex.held := by
   intro s v hin
-  obtain ⟨d0, o0, l0, rfl, hvo⟩ := hvs s v (ViewIn.child he hin)
-  rcases hvo.symm with hsv | ⟨dep, hd, ha⟩
-  · exact ⟨d0, o0, l0, rfl, .inr (by sview_keep hsv)⟩
-  refine ⟨d0, o0, l0, rfl, .inl ⟨dep, hd, ?_⟩⟩
+  obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hvs s v (ViewIn.child he hin)
+  refine ⟨d0, o0, l0, rfl, dep, hd, ?_⟩
   obtain ⟨r, k⟩ := dep
   by_cases hro : r = o
   · subst hro
@@ -334,9 +332,9 @@ theorem takeBV_out {m1 : Mem} {Γ1 : Ctx} {Ex : Entry} {t : Ty} {e : Val}
         rotate_left
         · obtain ⟨hc, o', l', hv⟩ := hn.views_of (Or.inr rfl) (fun _ h => by cases h)
           exact hpv hc i o' l' hv
-        obtain ⟨d', o', l', heq, hvo⟩ := hvs s _ ViewIn.here
+        obtain ⟨d', o', l', heq, dep, hd, ha⟩ := hvs s _ ViewIn.here
         cases heq
-        exact ValOK.of_viewOr hvo
+        exact ValOK.view ⟨dep, hd, ha⟩
     | _ => simp [Ty.owning] at ho
   | true =>
     rw [compE_ownView ho hhv] at hnames hwfc ⊢

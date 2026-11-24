@@ -20,8 +20,6 @@ decides the hole probes without any code per surface spelling.
 | `diagcmp.py` | the engine's diagnostics against the walk's goldens (compiler/tests): the same line, another, none |
 | `run.py` | runs probes and compares the verdict with each probe's `// map:` line |
 | `openprobes/` | probes written from open hole tickets |
-| `tolean.py` | nurlc's core IR as a program of formal/A2's calculus, for the verified checker of formal/C (AGORA-975); first subset: integer functions with calls, `if` and early returns |
-| `certify.sh` | one program through `--emit-core`, `tolean.py` and the verified checker (`C.progOK2B`, `C.checkA2`): `accepted`, `refused` or `unsupported: …` |
 
 `fromnurlc.py` reads the core IR nurlc itself builds
 (`nurlc --emit-core`, [docs/dev/CORE_IR.md](../../docs/dev/CORE_IR.md)):

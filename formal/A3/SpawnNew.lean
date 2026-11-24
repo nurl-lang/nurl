@@ -266,6 +266,11 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
         cases hc
       · cases hl
     pkgs := fun v sl T hsl hT => hpk T (hmem hsl hT)
+    noPkg := fun v E sl T hv hsl hT hfn => by
+      rcases sigCtx_spawn hpar hv with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩
+      · exact fun _ _ _ _ _ hs => (hwf v T _ (spawnSt_val hsl hT).1 hp).no_pkg hfn hs
+      · have h0 : spawnSt fn vs fn.params.length = some sl := hsl
+        rw [spawnSt_res] at h0; cases h0; cases hT
     armed := fun v E sl hv _ => ArmOK.of_dbind (sigCtx_flags hv).2
     shares := fun v E sl T hv hsl _ hT => by
       rcases sigCtx_spawn hpar hv with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩

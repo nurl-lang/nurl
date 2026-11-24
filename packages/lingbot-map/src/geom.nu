@@ -2,8 +2,8 @@
 //
 // The model predicts, per frame, a 9-vector "pose encoding":
 //
-//     [0:3]  T      translation, world→camera
-//     [3:7]  quat   rotation, world→camera, XYZW (scalar LAST)
+//     [0:3]  T      the camera's position in world coordinates
+//     [3:7]  quat   rotation, camera→world, XYZW (scalar LAST)
 //     [7]    fov_h
 //     [8]    fov_w
 //
@@ -15,7 +15,14 @@
 // Conventions, kept exactly as the reference has them because they are
 // the kind of thing that silently mirrors a reconstruction:
 //   * OpenCV camera axes: x right, y down, z forward.
-//   * Extrinsics are world→camera ("camera from world"), [R|t], 3x4.
+//   * The decoded pose is CAMERA→WORLD ("world from camera"), [R|t], 3x4:
+//     p_world = R·p_cam + t, t the camera centre. The reference's
+//     pose_encoding_to_extri_intri performs no inversion; demo.py inverts
+//     it to world→camera only because its viewer's unprojection inverts
+//     what it is given. (Upstream said world→camera in its docstrings
+//     until b9dd1b1; reading it that way rotates every frame the wrong
+//     way round its own camera — invisible on a walk straight ahead, a
+//     fan of copies of the room on a camera turning in place.)
 //   * The quaternion is scalar-LAST (i, j, k, r), not scalar-first.
 //   * The principal point is assumed to be the image centre.
 //
@@ -111,7 +118,8 @@ $ `stdlib/std/float.nu`
 
 // ── pose encoding → camera matrices ─────────────────────────────────
 
-// Extrinsics [R|t], world→camera, 3x4 row-major (12 doubles).
+// The pose [R|t], camera→world, 3x4 row-major (12 doubles) — exactly
+// what the reference's pose_encoding_to_extri_intri returns.
 @ pose_enc_to_extri ( Slice f ) pe ( Slice f ) out → v {
     : ( Vec f ) r__v ( vec_zeroed [f] 9 )
     : ( Slice f ) r ( slice_from_vec [f] r__v )
@@ -189,8 +197,8 @@ $ `stdlib/std/float.nu`
     ( slice_put [f] out 15 1.0 )
 }
 
-// Camera-to-world 4x4 from a pose encoding: build [R|t] world→camera,
-// lift to 4x4, invert.
+// Camera-to-world 4x4 from a pose encoding: the decoded [R|t] already is
+// camera→world, so it is lifted to 4x4 as it stands — no inversion.
 @ pose_enc_to_c2w ( Slice f ) pe ( Slice f ) out → v {
     : ( Vec f ) e__v ( vec_zeroed [f] 16 )
     : ( Slice f ) e ( slice_from_vec [f] e__v )
@@ -199,7 +207,8 @@ $ `stdlib/std/float.nu`
     ( slice_put [f] e 13 0.0 )
     ( slice_put [f] e 14 0.0 )
     ( slice_put [f] e 15 1.0 )
-    ( se3_inverse e out )
+    : ~ i j 0
+    ~ < j 16 { ( slice_put [f] out j ( slice_at [f] e j ) ) = j + j 1 }
 }
 
 // One pixel of a depth map → a world-space point.

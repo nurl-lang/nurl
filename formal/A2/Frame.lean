@@ -27,18 +27,17 @@ theorem ViewsOK.keep_except {m m' : Mem} {x : Var} {τ : Ty} {T U : Val}
     (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) :
     ViewsOK m' τ' U H := by
   intro s v hin
-  obtain ⟨d, o, l, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := hv s v (hsub s v hin)
-  · refine ⟨d, o, l, rfl, .inl ⟨dep, hd, ?_⟩⟩
-    obtain ⟨r, k⟩ := dep
-    by_cases hrx : r = x
-    · subst hrx
-      by_cases hks : k = .share
-      · subst hks
-        obtain ⟨o', ho'⟩ := hx'
-        exact vkeep_share hb (RootMem.own ho') d o l s ha
-      · exact (viewAt_not_self hT hsf (hsub s _ hin) hks ha).elim
-    · exact hk ⟨r, k⟩ hd hrx d o l s ha
-  · exact ⟨d, o, l, rfl, .inr (hsv.blkLe hb)⟩
+  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv s v (hsub s v hin)
+  refine ⟨d, o, l, rfl, dep, hd, ?_⟩
+  obtain ⟨r, k⟩ := dep
+  by_cases hrx : r = x
+  · subst hrx
+    by_cases hks : k = .share
+    · subst hks
+      obtain ⟨o', ho'⟩ := hx'
+      exact vkeep_share hb (RootMem.own ho') d o l s ha
+    · exact (viewAt_not_self hT hsf (hsub s _ hin) hks ha).elim
+  · exact hk ⟨r, k⟩ hd hrx d o l s ha
 
 /-! ### The general frame lemma -/
 
@@ -285,7 +284,7 @@ theorem SlotOK.keepLive {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
   · obtain ⟨h1, h2, h3⟩ := hown hos
     refine ⟨h1, h2, fun hl => ?_⟩
     obtain ⟨T, hT, hv⟩ := h3 hl
-    refine ⟨T, hT, hv.keep (hb := BlkLe.of_eq hb) fun dep hd => (hk hl dep ?_).1⟩
+    refine ⟨T, hT, hv.keep fun dep hd => (hk hl dep ?_).1⟩
     simp [Entry.vdeps, hos, hd]
   · obtain ⟨v, hv, hok⟩ := hbor hos hl
     refine ⟨v, hv, hok.keep (fun dep hd => hk hl dep ?_) (fun dep hd => hk hl dep ?_) hb⟩
@@ -296,6 +295,16 @@ theorem SlotOK.keep {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
     (hk : ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep) (hb : m'.blk = m.blk := by rfl) :
     SlotOK m' E sl :=
   h.keepLive (fun _ => hk) hb
+
+/-- AGORA-937 B4: what `MInv.noPkg` asks of a slot: a binding whose type
+    holds no closure that captures by name holds only packages capturing
+    nothing by name. -/
+def NoPkgS (E : Entry) (sl : Slot) : Prop :=
+  E.ty.hasFn = false → ∀ T, sl.val = some T → ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) T → cs = []
+
+/-- ... which a well-formed tree of the binding's type has (`WFv.no_pkg`). -/
+theorem NoPkgS.of_wfv {E : Entry} {sl : Slot} (h : ∀ T, sl.val = some T → WFv E.ty T) : NoPkgS E sl :=
+  fun hf T hT _ _ _ _ _ hs => (h T hT).no_pkg hf hs
 
 /-- What the slot of the changed binding holds afterwards, if anything. -/
 def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Prop
@@ -317,7 +326,9 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
       -- A3.1: the shares its tree holds name live blocks
       (sl.own = true → ∀ T, sl.val = some T → SharesOK m' Ex'.ty T) ∧
       -- Agora #909: a fresh borrow reaches only the frame's own blocks
-      FreshE (upd Γ0 x (some Ex')) Ex'
+      FreshE (upd Γ0 x (some Ex')) Ex' ∧
+      -- AGORA-937 B4: it holds no package capturing by name unless its type says so
+      NoPkgS Ex' sl
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -1023,7 +1034,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     cases ox with
     | none => rw [hrem rfl]; exact hi.fresh.remove hv x
     | some Ex' =>
-      obtain ⟨_, _, _, _, hmx, _, _, _, _, _, _, _, _, _, _, hfx⟩ := hox
+      obtain ⟨_, _, _, _, hmx, _, _, _, _, _, _, _, _, _, _, hfx, _⟩ := hox
       exact (hi.fresh.kill e hv x).setE hfx (fun Ek hEk hm => by
         simp [A2.kill, hx] at hEk; rw [← hEk, killE_mode] at hm; rw [hmx]; exact hm)
   · intro v E' sl T hv' hl hsl hT
@@ -1048,6 +1059,16 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         rw [hsl'] at hsl; cases hsl
         exact hpk T hT
     · rw [hst v hvx] at hsl; exact hi.pkgs v sl T hsl hT
+  · -- AGORA-937 B4: a slot holds no package capturing by name unless its type says so
+    intro v E' sl T hv' hsl hT hfn
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, _, _, _, hnp⟩ := hox
+      rw [hsl'] at hsl; cases hsl; exact hnp hfn T hT
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [hst v hvx] at hsl
+      exact hi.noPkg v E sl T hE hsl hT (by rw [killE_ty] at hfn; exact hfn)
   · -- A2-drop.2: no view of an armed binding is one the change ends (`DtorSafe`)
     intro v E' sl hv' hsl
     by_cases hvx : v = x
@@ -1059,7 +1080,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hst v hvx] at hsl
       refine ArmOK.entry (killE_dbind ..) (killE_ty ..) (killE_mode ..) (fun h => by rw [killE_dtor]; exact h)
         (by rw [killE_held]; exact fun d hd => (List.mem_filter.mp hd).1) ?_
-      refine (hi.armed v E sl hE hsl).keep (hb := BlkLe.of_eq hblk) fun hdt hd hos dep hdm => ?_
+      refine (hi.armed v E sl hE hsl).keep fun hdt hd hos dep hdm => ?_
       have hdm' := List.mem_filter.mp hdm
       have hnm : dep.kind.isName = false := by simpa using hdm'.2
       have hdv : dep ∈ E.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1
@@ -1351,7 +1372,7 @@ theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     cases ox with
     | none => rw [hrem rfl]; exact hi.fresh.remove hv x
     | some Ex' =>
-      obtain ⟨_, _, _, _, hmx, _, _, _, _, _, _, _, _, _, _, hfx⟩ := hox
+      obtain ⟨_, _, _, _, hmx, _, _, _, _, _, _, _, _, _, _, hfx, _⟩ := hox
       exact (hi.fresh.kill e hv x).setE hfx (fun Ek hEk hm => by
         simp [A2.kill, hx] at hEk; rw [← hEk, killE_mode] at hm; rw [hmx]; exact hm)
   · intro v E' sl T hv' hl hsl hT
@@ -1376,6 +1397,16 @@ theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         rw [hsl'] at hsl; cases hsl
         exact hpk T hT
     · rw [hst v hvx] at hsl; exact hi.pkgs v sl T hsl hT
+  · -- AGORA-937 B4: a slot holds no package capturing by name unless its type says so
+    intro v E' sl T hv' hsl hT hfn
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, _, _, _, hnp⟩ := hox
+      rw [hsl'] at hsl; cases hsl; exact hnp hfn T hT
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [hst v hvx] at hsl
+      exact hi.noPkg v E sl T hE hsl hT (by rw [killE_ty] at hfn; exact hfn)
   · -- A2-drop.2: no view of an armed binding is one the change ends (`DtorSafe`)
     intro v E' sl hv' hsl
     by_cases hvx : v = x
@@ -1387,7 +1418,7 @@ theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hst v hvx] at hsl
       refine ArmOK.entry (killE_dbind ..) (killE_ty ..) (killE_mode ..) (fun h => by rw [killE_dtor]; exact h)
         (by rw [killE_held]; exact fun d hd => (List.mem_filter.mp hd).1) ?_
-      refine (hi.armed v E sl hE hsl).keep (hb := BlkLe.of_eq hblk) fun hdt hd hos dep hdm => ?_
+      refine (hi.armed v E sl hE hsl).keep fun hdt hd hos dep hdm => ?_
       have hdm' := List.mem_filter.mp hdm
       have hnm : dep.kind.isName = false := by simpa using hdm'.2
       have hdv : dep ∈ E.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1

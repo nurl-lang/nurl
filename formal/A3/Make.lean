@@ -333,6 +333,7 @@ theorem MInv.unbind {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (a : Nat → Bool) (ha
   fresh _ _ h := by cases h
   held _ _ _ _ h := by cases h
   pkgs _ _ _ h := by cases h
+  noPkg _ _ _ _ h := by cases h
   armed _ _ _ h := by cases h
   shares _ _ _ _ h := by cases h
   blocks := hi.blocks

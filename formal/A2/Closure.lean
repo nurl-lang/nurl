@@ -264,6 +264,16 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       simp only [Mem.set, upd_same, Option.some.injEq] at hsl; subst hsl
       simp only [Option.some.injEq] at hT; subst hT; exact hvpkgs
     · rw [Mem.set_st, upd_ne _ _ hwx] at hsl; exact hi.pkgs w sl T hsl hT
+  · intro w Ew sl T hw hsl hT hfn
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+      simp only [Mem.set, upd_same, Option.some.injEq] at hsl; subst hsl
+      simp only [Option.some.injEq] at hT; subst hT
+      exact fun _ _ _ _ _ hs => hok.no_pkg hfn hs
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      rw [Mem.set_st, upd_ne _ _ hwx] at hsl
+      exact hi.noPkg w Ew sl T hw hsl hT hfn
   · intro w Ew sl hw hsl
     by_cases hwx : w = x
     · subst hwx
@@ -634,6 +644,9 @@ theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) wh
       intro c hc; rw [hnm] at hc; cases hc
     · rw [clean_id (Or.inl hint) hl]; exact hi.held v E0 sl T h0 hl hsl hT
   pkgs v sl T hsl hT := hi.pkgs v sl T hsl hT
+  noPkg v E sl T hv hsl hT hfn := by
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    rw [clean_ty] at hfn; exact hi.noPkg v E0 sl T h0 hsl hT hfn
   dom v := by rw [← hi.dom v]; simp [cleanC]
   slot v E hv := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
@@ -2336,6 +2349,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   -- and the environment shares each of those
   have hpfE : ∀ i, PkgNames mn Γ (envE c Ec te cs) (lendOf env) i → PkgFreeId mn i := by
     intro i hn
+    exfalso
     have hshP : ∀ dep ∈ (envE0 c Ec te cs).path ++ (envE0 c Ec te cs).held, dep.kind.isName = false →
         RootMem m dep.root → ¬ CleanDeps Γ (envE c Ec te cs).path := by
       intro dep hd hnm hrm hc
@@ -2356,18 +2370,14 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1.elim (fun hk => hk rfl) fun hh => hh.noMem hi.toMInv hrm
     rcases hn with ⟨_, hc, ⟨c', hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ |
         ⟨_, hc, c', r, T, t, d, es, hb, hT, hs, o, l, hv⟩ | ⟨h, _⟩
-    -- AGORA-980: but a static literal's text, which no owned tree holds
     · obtain ⟨dep, hd, _, _, _, hl, _⟩ := hval00.bare_href_held c' hb
-      exact (hshP dep hd hl.notName hl.rootMem hc).elim
-    · rcases hval00.bare_view_in i o l (by rw [hv]; exact Bare.refl _) with ⟨dep, hd, _, _, _, _, hl, _⟩ | ⟨_, hsv⟩
-      · exact (hshP dep hd hl.notName hl.rootMem hc).elim
-      · exact hi.heap.pkgFree_of_pay hsv.payAddr
-    · rcases hval00.bare_view_in i o l hb with ⟨dep, hd, _, _, _, _, hl, _⟩ | ⟨_, hsv⟩
-      · exact (hshP dep hd hl.notName hl.rootMem hc.left).elim
-      · exact hi.heap.pkgFree_of_pay hsv.payAddr
-    · rcases hval00.named_view_held hi.heap hb hT hs hv with ⟨dep, hd, hnm, hrm⟩ | ⟨_, hsv⟩
-      · exact (hshH dep hd hnm hrm hc).elim
-      · exact hi.heap.pkgFree_of_pay hsv.payAddr
+      exact hshP dep hd hl.notName hl.rootMem hc
+    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l (by rw [hv]; exact Bare.refl _)
+      exact hshP dep hd hl.notName hl.rootMem hc
+    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l hb
+      exact hshP dep hd hl.notName hl.rootMem hc.left
+    · obtain ⟨dep, hd, hnm, hrm⟩ := hval00.named_view_held hi.heap hb hT hs hv
+      exact hshH dep hd hnm hrm hc
     · cases h
   have hie : MInv (envMem m env) (setE Γ m.nv (envE c Ec te cs)) :=
     hin.addRootb hΓe0 (Nat.lt_succ_self _) rfl rfl hteok hval hEw

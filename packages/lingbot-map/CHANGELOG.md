@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.13.0] — 2026-11-23
+
+### Fixed
+
+- **The camera poses were applied inverted.** The pose encoding decodes to
+  camera→world (upstream corrected its docstrings to say so); the port read it as
+  world→camera and inverted it, so every frame was rotated the wrong way round its
+  own camera. A walk straight ahead hid it; a camera turning in place gave a fan of
+  rotated copies of the room, and the courthouse's facades tangled. The test
+  oracles had the same misreading (which is why they agreed) and now invert the pose
+  before the reference's unprojection, as `demo.py` does. The README's picture is
+  re-rendered from the courthouse example with the fix.
+
+### Added
+
+- `lingbot-map serve`: the recon-kit web service — upload a video or photos from a
+  browser or a phone, jobs queue on disk and run one at a time, the cloud opens in
+  the viewer or downloads, and a region of it becomes a 3-D object (`.glb`). The
+  page shows this model's options: frames spread over the capture, input size
+  (auto), confidence threshold, pixel stride, voxel fusion.
+- `lingbot-map mesh <scene> -o object.glb [--box ...] [--res N]`, and `--scene FILE`
+  to keep every frame's camera, depth, confident pixels and colours for it.
+- `--max-views N`: N frames spread over the whole capture, the sharpest of each run,
+  in order; a video is sampled across its length with three candidates per frame.
+- `--image-size auto`: the largest input size that fits the device's free memory (a
+  portrait video at 518 wants ~19 GB of KV cache).
+- `--voxel M|auto`: fuse the cloud on a grid, one averaged point per cell.
+- `-o` as a short `--out`.
+- In the service: sharing (a read-only link without the sign-in), and limits that
+  keep a cloud — confidence threshold 1.0–10 (10 keeps an eighth of the courthouse,
+  20 almost nothing), pixel stride 1–4. `tests/app_test.sh` checks the options
+  line and the limits.
+
 ## [0.12.3] — 2026-10-21
 
 ### Fixed

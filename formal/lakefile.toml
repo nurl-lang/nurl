@@ -1,5 +1,5 @@
 name = "NurlFormal"
-defaultTargets = ["A1", "A2", "A3", "B", "C", "D"]
+defaultTargets = ["A1", "A2", "A3"]
 
 [[lean_lib]]
 name = "A1"
@@ -9,12 +9,3 @@ name = "A2"
 
 [[lean_lib]]
 name = "A3"
-
-[[lean_lib]]
-name = "B"
-
-[[lean_lib]]
-name = "C"
-
-[[lean_lib]]
-name = "D"

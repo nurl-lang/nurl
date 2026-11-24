@@ -280,10 +280,16 @@ stating, because both are silent:
 * The reference builds its pixel grid with `np.arange(W)` — **integer**
   pixel coordinates, not sample centres. Half a pixel of offset is not
   visible in any single number.
-* `unproject_depth_map_to_point_map` takes the **world-from-camera**
-  extrinsic that the pose encoding decodes to and inverts it itself.
-  Handing it the already-inverted one gives a plausible-looking cloud
-  that is in the wrong frame.
+* The pose encoding decodes to **camera-to-world** (the camera's centre
+  and rotation in the world; `pose_encoding_to_extri_intri` does not
+  invert), while `unproject_depth_map_to_point_map` takes
+  **world-to-camera** and inverts it itself. So `demo.py` inverts the
+  decoded pose before handing it over.
+  Reading the decoded pose as world→camera (as this port and its test
+  oracle did until 0.13.0, after upstream's own docstrings) rotates every
+  frame the wrong way round its camera: invisible on a walk straight
+  ahead, a fan of rotated copies of the room on a camera turning in
+  place.
 
 Output is `binary_little_endian` PLY, which every viewer reads, with
 `--ascii` for the text form. Binary is the default because ASCII is not

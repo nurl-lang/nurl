@@ -103,6 +103,13 @@ seq_ "${fall_clo:-__closure_none}" "a closure body's tail join is what it return
 caps=$(awk -F'\t' '$1 == "fn" { p = ($2 ~ /^__closure_/) } p && $1 == "v" && $3 == 3 { n++ } END { print n + 0 }' "$WORK/a.core")
 if [ "$caps" -ge 2 ]; then note "a closure body's captures are variables" "ok ($caps)"; else bad "a closure body's captures are variables" "found $caps"; fi
 
+# A closure returned where it is made owns its handle captures (flag 2048,
+# CORE_VF_ENVOWN); one that stays in its frame does not (AGORA-978).
+envown=$(awk -F'\t' '$1 == "fn" { p = ($2 ~ /^__closure_/) } p && $1 == "v" && $3 == 3 && $9 == "%Vec__i64" && int($5 / 2048) % 2 == 1 { n++ } END { print n + 0 }' "$WORK/a.core")
+if [ "$envown" -eq 1 ]; then note "a returned closure's env owns its Vec capture" "ok"; else bad "a returned closure's env owns its Vec capture" "found $envown"; fi
+stays=$(awk -F'\t' '$1 == "fn" { p = ($2 ~ /^__closure_/) } p && $1 == "v" && $3 == 3 && $9 == "%String" && int($5 / 2048) % 2 == 1 { n++ } END { print n + 0 }' "$WORK/a.core")
+if [ "$stays" -eq 0 ]; then note "a closure that stays in its frame owns no capture" "ok"; else bad "a closure that stays in its frame owns no capture" "found $stays"; fi
+
 # The type table lists what the IR mentions.
 tys=$(grep -cE '^ty	' "$WORK/a.core")
 if [ "$tys" -gt 5 ]; then note "the types are listed" "ok ($tys)"; else bad "the types are listed" "found $tys"; fi

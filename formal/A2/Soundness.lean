@@ -189,6 +189,7 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   fresh _ _ h := by cases h
   held _ _ _ _ h := by cases h
   pkgs _ _ _ h := by cases h
+  noPkg _ _ _ _ h := by cases h
   armed _ _ _ h := by cases h
   shares _ _ _ _ h := by cases h
   blocks _ _ h := by cases h

@@ -74,15 +74,10 @@ theorem ViewAt.dataAt {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} (h : ViewAt m
 theorem ViewsOK.region_viewAt {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H)
     {s : Ty} {d o l : Nat} (hv : ViewIn τ T s (.view d o l)) :
     RegionViewAt m (ViewAddr τ T) .view d o l s := by
-  obtain ⟨d', o', l', heq, ⟨dep, -, hva⟩ | hsv⟩ := h s _ hv
-  · cases heq
-    obtain ⟨c, es, hd, hle, hw⟩ := hva.dataAt
-    exact ⟨c, es, by decide, ⟨_, ⟨d, ⟨s, o, l, hv⟩, hd⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hle, hw⟩
-  · -- AGORA-980: a static literal's text is a node in memory too, its block's
-    cases heq
-    obtain ⟨rfl, k, bl, c, es, hk, _, hs, hle, hw⟩ := hsv
-    exact ⟨c, es, by decide, ⟨_, ⟨d, ⟨.int, o, l, hv⟩, .inr ⟨k, bl, hk, hs, .int, c, es, rfl⟩⟩,
-      Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hle, hw⟩
+  obtain ⟨d', o', l', heq, dep, -, hva⟩ := h s _ hv
+  cases heq
+  obtain ⟨c, es, hd, hle, hw⟩ := hva.dataAt
+  exact ⟨c, es, by decide, ⟨_, ⟨d, ⟨s, o, l, hv⟩, hd⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hle, hw⟩
 
 /-- ... and each address of the region reaches a node. -/
 theorem ViewsOK.region_node {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H)
@@ -141,20 +136,17 @@ theorem RegionLanded.landed {m : Mem} {D : Nat → Prop} {S : List Dep}
 /-- ... and the hypothesis holds of an argument's region at the call's entry:
     every node at an address of a view the argument stores, valid as the
     invariant says, lands through what the argument holds (the heap makes
-    the node at an address unique), or (AGORA-980) is a static literal's
-    text, which needs no dependency. -/
+    the node at an address unique). -/
 theorem ViewsOK.region_landed {m : Mem} (hh : HeapOK m) {τ : Ty} {T : Val} {H : List Dep}
-    (h : ViewsOK m τ T H) : ∀ d n0, ViewAddr τ T d → DataAt m d n0 →
-      (∃ dep ∈ H, Landed m dep n0) ∨ ∃ o l s, SViewAt m d o l s := by
+    (h : ViewsOK m τ T H) : ∀ d n0, ViewAddr τ T d → DataAt m d n0 → ∃ dep ∈ H, Landed m dep n0 := by
   intro d n0 hd hn0
   obtain ⟨s, o, l, hv⟩ := hd
-  obtain ⟨d', o', l', heq, ⟨dep, hdep, hva⟩ | hsv⟩ := h s _ hv
-  · cases heq
-    obtain ⟨c, es, -, hL, -, -⟩ := hva
-    have := RegionNode.unique hh hn0 (hL.inMem.dataAt rfl)
-    subst this
-    exact .inl ⟨dep, hdep, hL⟩
-  · cases heq; exact .inr ⟨o, l, s, hsv⟩
+  obtain ⟨d', o', l', heq, dep, hdep, hva⟩ := h s _ hv
+  cases heq
+  obtain ⟨c, es, -, hL, -, -⟩ := hva
+  have := RegionNode.unique hh hn0 (hL.inMem.dataAt rfl)
+  subst this
+  exact ⟨dep, hdep, hL⟩
 
 /-! ### The kinds-composed substitution
 

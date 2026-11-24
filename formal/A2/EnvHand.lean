@@ -152,6 +152,12 @@ theorem MInv.addUnset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     · subst hwx; simp only [Mem.set_st, upd_same, Option.some.injEq] at hsl; subst hsl; exact (by cases hT)
     · simp only [Mem.set_st, upd_ne _ _ hwx] at hsl
       exact hi.pkgs w sl T hsl hT
+  · intro w Ew sl T hw hsl hT hfn
+    by_cases hwx : w = x
+    · subst hwx; simp only [Mem.set_st, upd_same, Option.some.injEq] at hsl; subst hsl; exact (by cases hT)
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      simp only [Mem.set_st, upd_ne _ _ hwx] at hsl
+      exact hi.noPkg w Ew sl T hw hsl hT hfn
   · intro w Ew sl hw hsl
     by_cases hwx : w = x
     · subst hwx

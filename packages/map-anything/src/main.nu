@@ -51,11 +51,12 @@ $ `heads.nu`
 $ `geom.nu`
 $ `preproc.nu`
 $ `sky.nu`
-$ `voxel.nu`
-$ `sharp.nu`
-$ `scene.nu`
-$ `mesh.nu`
-$ `serve.nu`
+$ `deps/recon-kit/src/voxel.nu`
+$ `deps/recon-kit/src/sharp.nu`
+$ `deps/recon-kit/src/scene.nu`
+$ `deps/recon-kit/src/mesh.nu`
+$ `deps/recon-kit/src/serve.nu`
+$ `app.nu`
 $ `stdlib/core/slice.nu`
 
 : s MA_DEFAULT_REF `facebook/map-anything-apache`
@@ -476,8 +477,8 @@ $ `stdlib/core/slice.nu`
 // ── main ────────────────────────────────────────────────────────────
 
 @ main → i {
-    ? & > ( nurl_argc ) 1 ( __ma_streq ( nurl_argv 1 ) `serve` ) { ^ ( mas_main ) } {}
-    ? & > ( nurl_argc ) 1 ( __ma_streq ( nurl_argv 1 ) `mesh` ) { ^ ( ms_main ) } {}
+    ? & > ( nurl_argc ) 1 ( __ma_streq ( nurl_argv 1 ) `serve` ) { ^ ( rk_serve ( ma_app ) ) } {}
+    ? & > ( nurl_argc ) 1 ( __ma_streq ( nurl_argv 1 ) `mesh` ) { ^ ( ms_main `map-anything` ) } {}
     : Opts o ( __ma_parse )
     ? == . o bad 2 {
         ( __ma_usage )

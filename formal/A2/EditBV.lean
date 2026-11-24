@@ -313,49 +313,6 @@ theorem WFv.node_holdsView {τ : Ty} {T : Val} (hw : WFv τ T) {u : Ty} {c d : N
         | _ => have := ih hsx; rw [(hq.send rfl).1] at this; cases this
   | dtor _ _ ih => exact ih hs
 
-/-- A3.5b: a value of a type that holds no closure holding bindings by name
-    holds only Send packages, each capturing nothing by name. -/
-theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {fs : List Nat} {te : Ty}
-    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
-  induction hw with
-  | int => cases hs
-  | view => cases hs
-  | arc => cases hs
-  | rguard => cases hs
-  | lk => cases hs
-  | cell => cases hs
-  | node hes ih =>
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | elem hx => exact ih x hx (by simpa [Ty.hasFn] using hf) hsx
-  | pair _ _ iha ihb =>
-    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | fst => exact iha hf.1 hsx
-      | snd => exact ihb hf.2 hsx
-  | inl _ ih =>
-    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | inl => exact ih hf.1 hsx
-  | inr _ ih =>
-    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h
-    · cases hc with
-      | inr => exact ih hf.2 hsx
-  | pkg _ hq ih =>
-    obtain ⟨_, hf', hcs⟩ := hq.send hf
-    rcases hs.cases' with h | ⟨x, hc, hsx⟩
-    · cases h; exact hcs
-    · cases hc with
-      | pkg => exact ih hf' hsx
-  | dtor _ _ ih => exact ih hf hs
-
 /-- A view the rewritten tree stores is one the old tree stored, or one that
     the replacement stores and the hole did not (`Q`). -/
 theorem NSE_viewIn' {n n' T T' : Val} (hr : Repl n n' T T') {Q : Ty → Val → Prop} :
@@ -462,9 +419,9 @@ theorem PushedN.view_free {m1 : Mem} {Γ1 : Ctx} (hi : MInv m1 Γ1) {t : Ty} {v 
     CleanDeps Γ1 D → PkgFreeId m1 i ∧ ¬ FreshAddr m1 i := fun hc => by
   refine ⟨h.pf hc i o l hv, fun ⟨h1, h2⟩ => ?_⟩
   obtain ⟨s, hin⟩ := h.wf.viewIn hv
-  obtain ⟨d0, o0, l0, hvv, hvo⟩ := h.vs s _ hin
+  obtain ⟨d0, o0, l0, hvv, dep, _, hva⟩ := h.vs s _ hin
   cases hvv
-  rcases viewOr_home hi.heap hvo with ⟨r, U, hU, hiU⟩ | hp
+  rcases hva.home hi.heap with ⟨r, U, hU, hiU⟩ | hp
   · exact h1 r U hU hiU
   · exact h2 hp
 
@@ -584,7 +541,7 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     (hr : Repl (.node t c d es) (.node t c d' es') T T') (hw' : WFv (.vec t) (.node t c d' es'))
     (hnew : ∀ s w, ViewIn (.vec t) (.node t c d' es') s w → ViewIn (.vec t) (.node t c d es) s w ∨
-      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ((∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s) ∨ SViewAt m1 d0 o0 l0 s))
+      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s)
     (hblk : m'.blk = m1.blk) (hsh' : SharesOK m' (.vec t) (.node t c d' es')) :
     NewSlot m' (A2.kill .drop true o Γ1) o Eo (some ((killE .drop true o Eo).hold D)) := by
   have hos : Eo.mode.ownSlot = true := by rw [hmo]; rfl
@@ -599,7 +556,7 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
   -- the rewritten tree: well-formed, and its views are the old tree's or the stored values'
   have hwT' : WFv Eo.ty T' := NSE_wf hr hwT (fun τ0 h0 => h0.node_hole hw')
   have hvin : ∀ s w, ViewIn Eo.ty T' s w → ViewIn Eo.ty T s w ∨
-      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ((∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s) ∨ SViewAt m1 d0 o0 l0 s) := fun s w hin =>
+      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s := fun s w hin =>
     NSE_viewIn' hr hwT (fun τ0 h0 s w hin => by
       rw [← ViewIn.undtor_iff, h0.node_ty] at hin; rw [← ViewIn.undtor_iff, h0.node_ty]; exact hnew s w hin) hin
   have hlive : (killE .drop true o Eo).live = true → Eo.live = true := fun h => by
@@ -610,17 +567,13 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     obtain ⟨T1, hT1, hv1⟩ := hlv0 hl
     cases hT1
     intro s w hin
-    rcases hvin s w hin with hin0 | ⟨d0, o0, l0, rfl, ⟨dep, hd, ha⟩ | hsv⟩
-    rotate_right
-    · exact ⟨d0, o0, l0, rfl, .inr (by sview_keep hsv)⟩
-    · obtain ⟨d0, o0, l0, rfl, hvo⟩ := hv1 s w hin0
-      rcases hvo.symm with hsv | ⟨dep, hd, ha⟩
-      · exact ⟨d0, o0, l0, rfl, .inr (by sview_keep hsv)⟩
-      exact ⟨d0, o0, l0, rfl, .inl ⟨dep, List.mem_append_left _ hd,
+    rcases hvin s w hin with hin0 | ⟨d0, o0, l0, rfl, dep, hd, ha⟩
+    · obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hv1 s w hin0
+      exact ⟨d0, o0, l0, rfl, dep, List.mem_append_left _ hd,
         keepV hi hanch hoF hT hst hT' hblk (wf_held hi ho hl hnint dep.root (List.mem_map_of_mem hd)) ha
-          (fun _ _ => hin0.sub)⟩⟩
-    · refine ⟨d0, o0, l0, rfl, .inl ⟨dep, List.mem_append_right _ hd,
-        keepV hi hanch hoF hT hst hT' hblk (hDr dep.root (List.mem_map_of_mem hd)) ha (fun h => ?_)⟩⟩
+          (fun _ _ => hin0.sub)⟩
+    · refine ⟨d0, o0, l0, rfl, dep, List.mem_append_right _ hd,
+        keepV hi hanch hoF hT hst hT' hblk (hDr dep.root (List.mem_map_of_mem hd)) ha (fun h => ?_)⟩
       exact absurd (by rw [← h]; exact List.mem_map_of_mem hd) hoD
   have hdb' : ((killE .drop true o Eo).hold D).dbind = false := by rw [Entry.hold_dbind, killE_dbind, hdb]
   have hm' : ((killE .drop true o Eo).hold D).mode = .own := by rw [Entry.hold_mode, killE_mode, hmo]
@@ -631,7 +584,8 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     by rw [Entry.hold_mode, killE_mode], fun hl' _ r hr' => ?_, ht', fun hl' _ => ?_, fun hl' U hU => ?_,
     fun U hU => ?_, fun h => absurd (h.symm.trans hdb') (by decide), fun h => ?_,
     fun h => absurd (h.symm.trans hdb') (by decide), fun h => absurd (h.symm.trans hdb') (by decide), ?_,
-    FreshE.of_ownSlot (by simpa [killE_mode] using hos)⟩
+    FreshE.of_ownSlot (by simpa [killE_mode] using hos),
+    NoPkgS.of_wfv fun U hU => by cases hU; rw [ht']; exact hwT'⟩
   · cases hU; rw [ht']; exact hwT'
   · -- the views of the live owner
     rw [Entry.hold_live] at hl'
@@ -715,7 +669,7 @@ theorem MInv.edit_dropV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     (hr : Repl (.node t c d es) (.node t c d' es') T T') (hw' : WFv (.vec t) (.node t c d' es'))
     (hnew : ∀ s w, ViewIn (.vec t) (.node t c d' es') s w → ViewIn (.vec t) (.node t c d es) s w ∨
-      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ((∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s) ∨ SViewAt m1 d0 o0 l0 s))
+      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s)
     (hblk : m'.blk = m1.blk) (hsh' : SharesOK m' (.vec t) (.node t c d' es'))
     (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i)
     (hvf : ∀ i o l, Sub (.view i o l) (.node t c d' es') → Sub (.view i o l) (.node t c d es) ∨
@@ -864,6 +818,12 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
       exact (hi.held v E sl T hE hl hsl hT).mono (List.subset_append_left _ _)
     · rw [ite_eq_right hvr] at hl ⊢; exact hi.held v E sl T hE hl hsl hT
   pkgs := hi.pkgs
+  noPkg v E' sl T h hsl hT hfn := by
+    obtain ⟨E, hE, rfl⟩ := holdOn_get h
+    refine hi.noPkg v E sl T hE hsl hT ?_
+    by_cases hvr : v ∈ rs
+    · rw [ite_eq_left hvr, Entry.hold_ty] at hfn; exact hfn
+    · rw [ite_eq_right hvr] at hfn; exact hfn
   armed v E' sl h hsl := by
     obtain ⟨E, hE, rfl⟩ := holdOn_get h
     by_cases hvr : v ∈ rs
@@ -1053,7 +1013,7 @@ theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
       (⟨cc.1, .name cc.2.1.bound cc.2.2⟩ : Dep) ∈ Ex.held)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es'))
     (hnew : ∀ s w, ViewIn (.vec t) (.node t c d' es') s w → ViewIn (.vec t) (.node t c d es) s w ∨
-      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ((∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s) ∨ SViewAt m1 d0 o0 l0 s))
+      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s)
     (hown : MInv m' (A2.holdOn [dep.root] D (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).rvec)
       (argE Γ1 dep.root).ty.holdsView dep.root Γ1)))
     (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i)
@@ -1074,17 +1034,13 @@ theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
   cases hsame
   have hV' : ViewsOK m' (.vec t) (.node t c d' es') (Ex.held ++ D) := by
     intro s w hin
-    rcases hnew s w hin with hin0 | ⟨d0, o0, l0, rfl, ⟨dp, hdp, ha⟩ | hsv⟩
-    rotate_right
-    · exact ⟨d0, o0, l0, rfl, .inr (by sview_keep hsv)⟩
-    · obtain ⟨d0, o0, l0, rfl, hvo⟩ := hvs0 s w hin0
-      rcases hvo.symm with hsv | ⟨dp, hdp, ha⟩
-      · exact ⟨d0, o0, l0, rfl, .inr (by sview_keep hsv)⟩
-      exact ⟨d0, o0, l0, rfl, .inl ⟨dp, List.mem_append_left _ hdp,
+    rcases hnew s w hin with hin0 | ⟨d0, o0, l0, rfl, dp, hdp, ha⟩
+    · obtain ⟨d0, o0, l0, rfl, dp, hdp, ha⟩ := hvs0 s w hin0
+      exact ⟨d0, o0, l0, rfl, dp, List.mem_append_left _ hdp,
         keepV hi hanch hoF hT0 hst hT' hblk (wf_held hi hx hl hnint dp.root (List.mem_map_of_mem hdp)) ha
-          (fun _ _ => hin0.sub.trans hsub)⟩⟩
-    · refine ⟨d0, o0, l0, rfl, .inl ⟨dp, List.mem_append_right _ hdp,
-        keepV hi hanch hoF hT0 hst hT' hblk (hDr dp.root (List.mem_map_of_mem hdp)) ha (fun h => ?_)⟩⟩
+          (fun _ _ => hin0.sub.trans hsub)⟩
+    · refine ⟨d0, o0, l0, rfl, dp, List.mem_append_right _ hdp,
+        keepV hi hanch hoF hT0 hst hT' hblk (hDr dp.root (List.mem_map_of_mem hdp)) ha (fun h => ?_)⟩
       exact absurd (by rw [← h]; exact List.mem_map_of_mem hdp) hoD
   have hN' : NamesIn (.node t c d' es') (Ex.held ++ D) := fun cc hcc => List.mem_append_left _ (by
     rcases hnx cc hcc with h | h
@@ -1104,12 +1060,8 @@ theorem PushedN.views_out {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
     ∀ d0 o0 l0, Sub (.view d0 o0 l0) v → (∀ u c es, ¬ Sub (.node u c d0 es) T) ∧ d0 < m1.nid := by
   intro d0 o0 l0 hs
   obtain ⟨s, hin⟩ := hp.wf.sub_view hs
-  obtain ⟨d1, o1, l1, hv1, hvo⟩ := hp.vs s _ hin
+  obtain ⟨d1, o1, l1, hv1, dep, hd, ha⟩ := hp.vs s _ hin
   cases hv1
-  -- AGORA-980: a static literal's text is in no owned tree, and below `nid`
-  rcases hvo.symm with hsv | ⟨dep, hd, ha⟩
-  · exact ⟨fun u c es hn => hi.heap.notPay hT (hn.ids _ (by simp)) hsv.payAddr,
-      (hi.heap.payAlloc hsv.payAddr).2⟩
   refine ⟨viewAt_not_in hi hanch hoF hT (hp.root dep.root (List.mem_map_of_mem hd))
     (fun e => hoD (by rw [← e]; exact List.mem_map_of_mem hd)) ha, ?_⟩
   rcases ha.owned hi.heap with ⟨ox, U, hU, hdU⟩ | hpa
@@ -1124,9 +1076,9 @@ theorem MInv.views_owned {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {o : Var} {Eo : E
   obtain ⟨T1, h1, hwT, hvsT⟩ := hi.own_val ho hl hos
   rw [hT] at h1; cases h1
   obtain ⟨s, hin⟩ := hwT.sub_view hs
-  obtain ⟨_, _, _, hv1, hvo⟩ := hvsT s _ hin
+  obtain ⟨_, _, _, hv1, _, _, ha⟩ := hvsT s _ hin
   cases hv1
-  exact hvo.elim (fun ⟨_, _, ha⟩ => ha.owned hi.heap) (fun hsv => .inr hsv.payAddr)
+  exact ha.owned hi.heap
 
 /-- A push through a borrow, of a value that may hold views, its buffer
     kept or moved to a fresh one: through a copy of a same-typed root's
@@ -1174,7 +1126,7 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
       · simp only [List.mem_singleton] at h; subst h; exact hp.wf
   have hsh' : SharesOK m' (.vec t) (.node t c d' (es ++ [v])) := hsh0.node_push hp.sh rfl
   have hnew : ∀ s w, ViewIn (.vec t) (.node t c d' (es ++ [v])) s w → ViewIn (.vec t) (.node t c d es) s w ∨
-      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ((∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s) ∨ SViewAt m1 d0 o0 l0 s) := by
+      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s := by
     intro s w hin
     cases hin with
     | child he hin' =>
@@ -1298,7 +1250,7 @@ theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
   have hsh' : SharesOK m' (.vec t) (.node t c d es') :=
     hsh0.node_mem (fun e he => (hes e he).imp id (fun h => h.1.sh)) rfl
   have hnew : ∀ s w, ViewIn (.vec t) (.node t c d es') s w → ViewIn (.vec t) (.node t c d es) s w ∨
-      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ((∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s) ∨ SViewAt m1 d0 o0 l0 s) := by
+      ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s := by
     intro s w hin
     cases hin with
     | child he hin' =>

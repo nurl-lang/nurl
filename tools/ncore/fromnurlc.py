@@ -354,6 +354,7 @@ class Reader:
             v.agglend = bool(flags & 1024)  # a returned literal codegen made without copying a lent field: a lend of what it borrows (agora #907)
             v.cpcopy = bool(flags & 512)   # a value codegen copied into a by-pointer capture where its call lent (agora #872, #884); a raw string binding codegen gave a copy of its own (AGORA-953)
             v.slot = bool(flags & 256)     # a call's option temporary whose payload codegen takes out of the slot it read (vec_get)
+            v.envown = bool(flags & 2048)  # a handle capture of a closure returned where it is made: its env owns the value (moved in, or a copy where the binding borrows); the engine does not ask it (AGORA-978)
             fn.vars[vid] = v
             if kind == 3:
                 # a closure body's capture: a parameter the closure itself hands it

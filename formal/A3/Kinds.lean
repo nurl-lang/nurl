@@ -258,10 +258,6 @@ theorem EvalR.kinds_of {κ : Nat → Bool} {m m' : Mem} {r : Rhs} {v : Val} {o :
   | borrowBor hy => exact ⟨hk, hk.st _ _ _ hy⟩
   | «at» h hv _ => exact ⟨hk, ((hk.vecOf hv).node_elem (List.getElem_mem h)).lendOf⟩
   | view _ => exact ⟨hk, .view⟩
-  | slit _ =>
-    -- AGORA-980: a static literal's block holds integers only
-    exact ⟨(hk.updBlk _ (fun w hw => by
-      cases hw; exact .node fun e he => by rw [List.eq_of_mem_replicate he]; exact .int)).of_eq rfl rfl rfl, .view⟩
   | sat h _ _ _ _ hd => exact ⟨hk, ((hk.dataAt hd).node_elem (List.getElem_mem h)).lendOf⟩
   | pop hy _ _ =>
     have hT := hk.st _ _ _ hy
@@ -804,6 +800,7 @@ theorem mix_globsTyped (P : Prog) : GlobsTyped P mixG where
     fresh := fun _ _ h => by cases h
     held := fun _ _ _ _ h => by cases h
     pkgs := fun _ _ _ h => by cases h
+    noPkg := fun _ _ _ _ h => by cases h
     pkgFree := fun _ _ _ _ h => by cases h
     armed := fun _ _ _ h => by cases h
     shares := fun _ _ _ _ h => by cases h

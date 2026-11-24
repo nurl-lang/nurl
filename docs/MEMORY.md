@@ -230,6 +230,12 @@ unsafe @ name_add s n → v {
 }
 ```
 
+A global that never changes (no `~`) is its first value for the whole
+run, so it may not start as zero bytes that are not a value of its type:
+`: ( Vec i ) g 0` would stay a null control block, and a push through it
+would write through null (AGORA-987). Make it mutable and fill it as
+above, or set it at start.
+
 A value that is there or not is an option global (`: ~ ?Model g_model 0`,
 zero is `F`): `= g_model @ ?Model { F }` lets the old one go.
 `( mem_addr g )` (`unsafe`) is a `*T` to any mutable global: a struct
@@ -2863,6 +2869,23 @@ are dropped, moved and copied by the same rules:
   field, so the literal owns every field; with every field borrowed it
   stays a lend and nothing is copied. A borrowed field that cannot be
   copied beside a field of the literal's own is an error (agora #635).
+- **An `in` parameter handed back in a literal** (`^ @ K { p }`, `^ @ E {
+  V p }`, a literal nested in one, or in an option or a result literal:
+  `^ @ ?K { T @ K { p } }`) is lent, as `^ p` is: the caller keeps its
+  argument, and the result borrows it. That holds for a value that cannot
+  be copied as well, since nothing is copied. Beside a value of the
+  literal's own (`^ @ P { p ( vec_new ) }`) the literal takes the
+  parameter over instead, because a struct is dropped whole: the caller
+  hands its argument in. A function that is meant to take its argument
+  over says so with `sink` (D4c, AGORA-995).
+- **A local handed back whole through a call** (`^ ( id s )`, `^ ( wrap
+  s )`, or `: K k ( wrap s )` and then `^ k`, where the callee hands its
+  argument back whole) leaves with the result on the runs the call lent:
+  nothing is copied, `s` is not released, and a value that cannot be
+  copied is not refused. This applies where the callee is compiled
+  already and lends on every return, or answers per call. It does not
+  apply under a `;` block, which still reads `s`, or in a closure's body
+  (AGORA-995).
 - **A call's result read for a field it cannot give up** — the struct has
   a `% Drop` of its own, or the field cannot be copied — gets an owner of
   its own for the rest of the scope, which drops it, and the field is lent

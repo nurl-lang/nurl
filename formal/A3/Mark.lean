@@ -458,12 +458,10 @@ theorem CParts.ctouch {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) (hR : Restr
       have hnr : ¬ Reached (C.put q m' s').roots m'.blk k := fun hr => hlive (.inr ⟨k, bl, hk, hak, hr⟩)
       -- A3.2: the same block's payload owned it before the step, or the
       -- thread did (a new block's, or a lock's given back)
-      rcases Step.payAt hst (hbo.of_st rfl) k a ⟨bl, hk, hak⟩ with ⟨bl0, hk0, hak0⟩ | h1 | ⟨_, hr⟩
+      rcases Step.payAt hst (hbo.of_st rfl) k a ⟨bl, hk, hak⟩ with ⟨bl0, hk0, hak0⟩ | h1
       · exact .inr ⟨k, bl0, hk0, hak0, .inr fun hr =>
           hnr (hr.step hst (fun v hv => Cfg.rootsBut_put (Step.gl hst) hv) (fun v hv => Cfg.put_vals hq hv))⟩
       · exact .inl (owned_part hto h1)
-      · -- AGORA-980: a static literal's new block is reached from the step's own slots
-        exact (hnr (hr.roots fun v hv => Cfg.put_vals hq hv)).elim
     · exact (hlive (.inl hp)).elim
 
 /-- **No race**: two threads never touch one address, one of them writing.

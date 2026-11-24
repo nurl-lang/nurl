@@ -126,12 +126,6 @@ theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
         m.taken⟩)
     rw [union_alloc2]
     exact EvalR.new
-  | slit hfr =>
-    show EvalR _ _ (.ok _ _
-      ⟨union (upd (upd m.alloc m.nid true) (m.nid + 1) true) a2, m.nid + 3, m.nv, m.st, _, m.gl,
-        m.taken⟩)
-    rw [union_alloc2]
-    exact EvalR.slit hfr
   | moveOwn hy => exact EvalR.moveOwn hy
   | take hy =>
     show EvalR _ _ (.ok _ _ (Mem.set

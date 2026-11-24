@@ -1492,10 +1492,8 @@ theorem ViewsOK.dropSelf {m : Mem} {x : Var} {T : Val} (hT : m.st x = some ⟨tr
     (hsf : SelfFree T) {τ : Ty} {H : List Dep} (h : ViewsOK m τ T H) :
     ViewsOK m τ T (H.filter (fun d => d.root != x || d.kind == .share)) := by
   intro s v hin
-  obtain ⟨d, o, l, rfl, hvo⟩ := h s v hin
-  rcases hvo.symm with hsv | ⟨dep, hd, ha⟩
-  · exact ⟨d, o, l, rfl, .inr (by sview_keep hsv)⟩
-  refine ⟨d, o, l, rfl, .inl ⟨dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩⟩
+  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hin
+  refine ⟨d, o, l, rfl, dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩
   by_cases hrx : dep.root = x
   · by_cases hks : dep.kind = .share
     · simp [hks]
@@ -1611,6 +1609,11 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
       names := ?_
       held := fun w E sl T hw hl hsw hT => ?_
       pkgs := hi.pkgs
+      noPkg := fun w E sl T hw hsw hT hfn => by
+        by_cases hwx : w = x
+        · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+          exact hi.noPkg w Ex sl T hx hsw hT hfn
+        · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noPkg w E sl T hw hsw hT hfn
       pkgFree := hpf
       armed := fun w E sl hw hsw => ?_ }
   · by_cases hwx : w = x
@@ -1744,6 +1747,10 @@ theorem MInv.rearm {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} (
       names := fun w Ew hw hlw hnw => ?_
       held := fun w Ew sl T hw hlw hsw hT => ?_
       pkgs := hi.pkgs
+      noPkg := fun w Ew sl T hw hsw hT hfn => by
+        rcases hcase w Ew hw with ⟨rfl, rfl⟩ | ⟨_, hw'⟩
+        · exact hi.noPkg w E sl T hx hsw hT hfn
+        · exact hi.noPkg w Ew sl T hw' hsw hT hfn
       armed := fun w Ew sl hw hsw => ?_ }
   · by_cases hwx : w = x
     · subst hwx; have := hi.dom w; rw [hx] at this; simpa [setE] using this
@@ -1999,7 +2006,7 @@ theorem SlotOK.keepRoots {m m1 : Mem} {E : Entry} {sl : Slot} (hs : SlotOK m E s
     · obtain ⟨hown, hwf, hv⟩ := h2 ho
       refine ⟨hown, hwf, fun hl => ?_⟩
       obtain ⟨T, hT, hvs⟩ := hv hl
-      exact ⟨T, hT, hvs.keep (hb := BlkLe.of_eq hb) fun h hh => (hk' h (by simp [Entry.vdeps, ho, hh])).1⟩
+      exact ⟨T, hT, hvs.keep fun h hh => (hk' h (by simp [Entry.vdeps, ho, hh])).1⟩
     · obtain ⟨v, hv, hok⟩ := h3 ho hl
       exact ⟨v, hv, hok.keep (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd]))
         (fun dep hd => hk' dep (by simp [Entry.vdeps, ho, hd])) hb⟩
@@ -2082,7 +2089,7 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
     exact ⟨hi.dtorIn.1 Ex hx hdb hos (Or.inl hnint) d hdv hnm,
       hi.wf.dtor x Ex hx hdb hos (Or.inl hnint) d hdv hnm⟩
   have hvs1 : ViewsOK m1 Ex.ty v0 (Ex.revive x).held := by
-    refine (revive_views hi.toMInv hx hos hdbv hslm).keep (hb := BlkLe.of_eq hblk) fun d hd => ?_
+    refine (revive_views hi.toMInv hx hos hdbv hslm).keep fun d hd => ?_
     have hdv : d ∈ (Ex.revive x).vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hd
     obtain ⟨hrs, Er, hEr, hro⟩ := hxd d hdv
     exact (rootKeep_frame_sp hi.toMInv hanch hpin hF hEr hrs hro (hout _ hrs) (BlkLe.of_eq hblk)).vkeep
@@ -2170,6 +2177,7 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
       names := ?_
       held := fun w E sl T hw hl hsw hT => ?_
       pkgs := fun w sl T hsw hT => ?_
+      noPkg := fun w E sl T hw hsw hT hfn => ?_
       armed := fun w E sl hw hsw => ?_
       shares := fun w E sl T hw hsw hown hT => ?_
       blocks := fun k' bl hk' => ?_ }
@@ -2293,6 +2301,14 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
   · by_cases hwk : w ∈ k.spine
     · rw [hin w hwk] at hsw; cases hsw
     · exact hi.pkgs w sl T (by rw [← hout w hwk]; exact hsw) hT
+  · -- AGORA-937: the revived binding's value is of its type; the others' as they were
+    by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw
+      rw [hwx, hsl] at hsw; cases hsw; cases hT
+      exact fun _ _ _ _ _ hs => hwfv.no_pkg hfn hs
+    · obtain ⟨hwk, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      refine hi.noPkg w E0 sl T h0 (by rw [← hout w hwk]; exact hsw) hT ?_
+      rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hfn
   · -- A2-drop.2: an armed binding outside the frame views nothing the unwind ended
     by_cases hwk : w ∈ k.spine
     · rw [unwindCtx_sp hwk] at hw; cases hw
@@ -2301,7 +2317,7 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
       intro hd; simp [Entry.revive] at hd
     · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
       rw [hout w hwk] at hsw
-      have hE0 : ArmOK m1 E0 sl := (hi.armed w E0 sl h0 hsw).keep (hb := BlkLe.of_eq hblk) fun _ hd hos dep hdm => by
+      have hE0 : ArmOK m1 E0 sl := (hi.armed w E0 sl h0 hsw).keep fun _ hd hos dep hdm => by
         have hdm' := List.mem_filter.mp hdm
         have hnm : dep.kind.isName = false := by simpa using hdm'.2
         have hdv : dep ∈ E0.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1

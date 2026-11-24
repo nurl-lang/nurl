@@ -308,18 +308,6 @@ theorem covers_evalR {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (hc : Covers m)
     · have hne : k' ≠ m.nid := fun e => by rw [e, hfr] at hk'; cases hk'
       exact Or.inl (Or.inr ⟨k', bl, by simp [upd, hne, hk'], hik⟩)
   | rwTryReadNone _ _ | rwTryWrite _ _ _ | rwTryWriteNone _ _ => exact Or.inl (hc i hi)
-  | @slit n hfr =>
-    -- AGORA-980: the literal's node is the new static block's payload; every
-    -- other address is covered as it was
-    simp only at hi
-    by_cases hnew : i = m.nid ∨ i = m.nid + 1
-    · refine Or.inl (Or.inr ⟨m.nid + 2, ⟨.vec .int, .static, some (.node .int m.nid (m.nid + 1) (List.replicate n (.int 0)))⟩, by simp [upd], ?_⟩)
-      rcases hnew with h | h <;> subst h <;> simp [Blk.tree, ids_node]
-    · rw [upd_ne _ _ (fun h => hnew (Or.inr h)), upd_ne _ _ (fun h => hnew (Or.inl h))] at hi
-      rcases hc i hi with h | ⟨k', bl, hk', hik⟩
-      · exact Or.inl (Or.inl h)
-      · have hne : k' ≠ m.nid + 2 := fun e => by rw [e, hfr] at hk'; cases hk'
-        exact Or.inl (Or.inr ⟨k', bl, by simp [upd, hne, hk'], hik⟩)
   | @atomic _ _ _ _ _ k n _ _ _ hk _ _ =>
     rcases hc i hi with h | ⟨k', bl, hk', hik⟩
     · exact Or.inl (Or.inl h)

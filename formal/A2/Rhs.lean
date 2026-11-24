@@ -111,7 +111,7 @@ theorem rootNode_st {m m' : Mem} (h : m'.st = m.st) {r : Var} {n : Val} (hn : Ro
     ⟨v, k, h1, ht, hn⟩
   · exact Or.inl ⟨T, by rw [h]; exact h1, ht⟩
   · exact Or.inr (Or.inl ⟨v, c, by rw [h]; exact h1, ht, hnode c _ hn⟩)
-  · exact Or.inr (Or.inr (Or.inl ⟨v, d, o, l, by rw [h]; exact h1, ht, hn.mono hown hb⟩))
+  · exact Or.inr (Or.inr (Or.inl ⟨v, d, o, l, by rw [h]; exact h1, ht, hdata d _ hn⟩))
   · exact Or.inr (Or.inr (Or.inr (Or.inl ⟨v, k, q, by rw [h]; exact h1, ht, hn⟩)))
   · exact Or.inr (Or.inr (Or.inr (Or.inr ⟨v, k, by rw [h]; exact h1, ht, hn⟩)))
 
@@ -139,7 +139,8 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   fresh := hi.fresh
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
-  armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep (hb := BlkLe.of_eq hb) fun _ _ _ dep _ =>
+  noPkg v E sl T hE hsl hT := hi.noPkg v E sl T hE (by rw [h] at hsl; exact hsl) hT
+  armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
     (RootKeep.of_st (r := dep.root) h (BlkLe.of_eq hb)).vkeep (BlkLe.of_eq hb)
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).of_blk hb
   blocks k bl hk := by
@@ -157,7 +158,7 @@ theorem HrefAt.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
     {t : Ty} {H : List Dep} (h : HrefAt m dep c t H) : HrefAt m' dep c t H := by
   obtain ⟨d, es, hla, hw, hv, hn, hsh⟩ := h
   exact ⟨d, es, hla.keep (RootKeep.of_st hst hb) hb, hw,
-    hv.keep (fun dep _ => (RootKeep.of_st (r := dep.root) hst hb).vkeep hb) hb, hn,
+    hv.keep (fun dep _ => (RootKeep.of_st (r := dep.root) hst hb).vkeep hb), hn,
     hsh.grow hb⟩
 
 theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {τ : Ty} {v : Val}
@@ -182,7 +183,6 @@ theorem ValOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) {
     obtain ⟨dep, hd, ha⟩ := h
     exact .view ⟨dep, hd, (RootKeep.of_st (r := dep.root) hst hb).vkeep hb
       _ _ _ _ ha⟩
-  | sview h => exact .sview (h.blkLe hb)
   | pair _ _ ihx ihy => exact .pair ihx ihy
   | inl _ ih => exact .inl ih
   | inr _ ih => exact .inr ih
@@ -196,7 +196,7 @@ theorem SlotOK.grow {m m' : Mem} (hst : m'.st = m.st) (hb : BlkLe m.blk m'.blk) 
   obtain ⟨h1, h2, h3⟩ := hs
   refine ⟨h1, fun ho => ?_, fun ho hl => ?_⟩
   · obtain ⟨a, b, c⟩ := h2 ho
-    exact ⟨a, b, fun hl => by obtain ⟨T, hT, hv⟩ := c hl; exact ⟨T, hT, hv.keep (fun dep _ => hvk dep) hb⟩⟩
+    exact ⟨a, b, fun hl => by obtain ⟨T, hT, hv⟩ := c hl; exact ⟨T, hT, hv.keep (fun dep _ => hvk dep)⟩⟩
   · obtain ⟨v, hv, hok⟩ := h3 ho hl
     exact ⟨v, hv, hok.grow hst hb⟩
 
@@ -270,7 +270,8 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
   fresh := hi.fresh
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
-  armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep (hb := hb) fun _ _ _ dep _ =>
+  noPkg v E sl T hE hsl hT := hi.noPkg v E sl T hE (by rw [h] at hsl; exact hsl) hT
+  armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
     (RootKeep.of_st (r := dep.root) h hb).vkeep hb
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
   blocks := hB
@@ -306,7 +307,6 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
     | lock => exact absurd rfl hl
     | dead => exact absurd rfl hd
     | arc => rfl
-    | static => rfl
     | view => rfl
   have hR : ∀ v, mb.vals v → mb.vals v := fun _ h => h
   have hslot : ∀ x sl, m.st x = some sl → mb.st x = some sl := fun _ _ h => h
@@ -327,11 +327,12 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
     fresh := hi.fresh
     held := fun v E sl T hE hl hsl hT => hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
     pkgs := fun v sl T hsl hT => hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
+    noPkg := fun v E sl T hE hsl hT => hi.noPkg v E sl T hE (by rw [h] at hsl; exact hsl) hT
     armed := fun v E sl hE hsl => by
       have hsl0 : m.st v = some sl := by rw [h] at hsl; exact hsl
-      have h1 : ArmOK mb E sl := (hi.armed v E sl hE hsl0).keep (hb := hb1) fun _ _ _ dep _ =>
+      have h1 : ArmOK mb E sl := (hi.armed v E sl hE hsl0).keep fun _ _ _ dep _ =>
         (RootKeep.of_st (m := m) (m' := mb) (r := dep.root) rfl hb1).vkeep hb1
-      exact (h1.sweep hR (Kept.of_slot hR (hslot v sl hsl0))).keep (hb := hb2) fun _ _ _ dep _ =>
+      exact (h1.sweep hR (Kept.of_slot hR (hslot v sl hsl0))).keep fun _ _ _ dep _ =>
         (RootKeep.of_st (r := dep.root) hst2 hb2).vkeep hb2
     shares := fun v E sl T hE hsl hown hT => by
       have hsl0 : m.st v = some sl := by rw [h] at hsl; exact hsl
@@ -361,6 +362,21 @@ structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop 
   /-- AGORA-901: a `Vec` handle lent names a node no package holds, when it
       reaches memory through clean roots only and no share (`MInv.pkgFree`). -/
   pkgFree : ∀ i, PkgNames m1 Γ1 E v i → PkgFreeId m1 i
+
+/-- AGORA-937: a right-hand side's value of a type that holds no closure
+    holding bindings by name holds only packages capturing nothing by name. -/
+theorem RhsOut.noPkg {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
+    (hout : RhsOut m1 Γ1 E v o) (hf : E.ty.hasFn = false) {fs : List Nat} {te : Ty}
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
+  rcases hout.mode with h | h
+  · exact (hout.valOwn h).2.1.no_pkg hf hs
+  · exact (hout.valBor h).no_pkg hf hs
+
+/-- AGORA-937: so a slot holding it passes `NoPkgS` for an entry of its type. -/
+theorem RhsOut.noPkgS {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
+    (hout : RhsOut m1 Γ1 E v o) {E' : Entry} (hty : E'.ty = E.ty) {o' : Bool} :
+    NoPkgS E' ⟨o', some v⟩ :=
+  fun hf T hT _ _ _ _ _ hs => by cases hT; exact hout.noPkg (by rw [← hty]; exact hf) hs
 
 /-- The context and memory after a right-hand side, and how they relate to
     before. -/
@@ -423,11 +439,11 @@ theorem RhsOut.pkgFree_set {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E : Entry} {v 
     obtain ⟨_, hwv, hvsv, _, _, hdisj, _, hnp⟩ := hout.valOwn hown
     obtain ⟨_, o', l, hvi⟩ := hn0.own hos
     obtain ⟨s', hin⟩ := hwv.viewIn hvi
-    obtain ⟨d0, o0, l0, hvv, hvo⟩ := hvsv s' _ hin
+    obtain ⟨d0, o0, l0, hvv, dep, _, hva⟩ := hvsv s' _ hin
     cases hvv
     have hsT := hN.trans ((Sub.pkg (Sub.refl _)).trans hP)
     have hfr : i ∉ v.ids := fun hiv => by
-      rcases viewOr_home hi.heap hvo with ⟨r', U, hU, hiU⟩ | hp
+      rcases hva.home hi.heap with ⟨r', U, hU, hiU⟩ | hp
       · exact hdisj r' U hU i hiv hiU
       · exact hnp i hiv hp
     exact ⟨fun h1 => hfr (h1 ▸ hsT.ids c (by simp [Val.ids])), fun h2 => hfr (h2 ▸ hsT.ids d (by simp [Val.ids]))⟩
@@ -448,12 +464,10 @@ theorem RhsOut.named_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E : Entry} {v :
     rcases hlan.home with ⟨x, T, hT, hsT⟩ | hp
     · exact Or.inl ⟨x, T, hT, hsT.ids _ (by simp [Val.ids])⟩
     · exact Or.inr (hp.payAddr hi.heap _ (by simp [Val.ids]))
-  · rcases (hbor hm).bare_view i o' l (.refl _) with ⟨dep, t, hva⟩ | ⟨t, hsv⟩
-    · exact hva.home hi.heap
-    · exact .inr hsv.payAddr
-  · rcases (hbor hm).bare_view i o' l hb with ⟨dep, t, hva⟩ | ⟨t, hsv⟩
-    · exact hva.home hi.heap
-    · exact .inr hsv.payAddr
+  · obtain ⟨dep, t, hva⟩ := (hbor hm).bare_view i o' l (.refl _)
+    exact hva.home hi.heap
+  · obtain ⟨dep, t, hva⟩ := (hbor hm).bare_view i o' l hb
+    exact hva.home hi.heap
   · obtain ⟨dep, t', H', d', es', hlan, hwn, hvs, _⟩ := (hbor hm).bare_href c hb
     have heq : Val.node t' c d' es' = .node t c d es := by
       rcases hlan.home with ⟨x, T', hT', hsT'⟩ | hp
@@ -461,18 +475,18 @@ theorem RhsOut.named_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E : Entry} {v :
       · exact (hi.heap.notPay hT (hsn.ids c (by simp [Val.ids])) (hp.payAddr hi.heap c (by simp [Val.ids]))).elim
     rw [← heq] at hv
     obtain ⟨s, hin⟩ := hwn.viewIn hv
-    obtain ⟨d0, o0, l0, hvv, hvo⟩ := hvs s _ hin
+    obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvs s _ hin
     cases hvv
-    exact viewOr_home hi.heap hvo
+    exact hva.home hi.heap
   · have hown : E.mode = .own := by
       rcases hout.mode with h | h
       · exact h
       · rw [h] at hos; cases hos
     obtain ⟨_, hwv, hvsv, _⟩ := hout.valOwn hown
     obtain ⟨s, hin⟩ := hwv.viewIn hv
-    obtain ⟨d0, o0, l0, hvv, hvo⟩ := hvsv s _ hin
+    obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvsv s _ hin
     cases hvv
-    exact viewOr_home hi.heap hvo
+    exact hva.home hi.heap
 
 /-- The fresh value a right-hand side hands over has addresses no owned
     tree and no payload holds. -/
@@ -960,7 +974,6 @@ theorem valOK_cell_sub {m : Mem} {k : Nat} {τ : Ty} {w : Val} {P H : List Dep}
   | int => cases hs
   | href _ => cases hs
   | view _ => cases hs
-  | sview _ => cases hs
   | arc _ _ _ _ => cases hs
   | rguard _ _ _ _ => cases hs
   | lk _ => cases hs
@@ -1211,14 +1224,10 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
       exact derive_hrefAt (hroot' ·) (fun h => by rw [h] at hisroot; cases hisroot)
         (by rw [hty]; rfl) (Or.inl ⟨rfl, rfl⟩) hw hvs hns hshv
     | slice t =>
-      obtain ⟨d, o, l, c, es, hs, _, _, hlen, hw, hstat⟩ := hi.slice_node hy hl hty
+      obtain ⟨d, o, l, c, es, hs, _, _, hlen, hw, hroot', _⟩ := hi.slice_node hy hl hty
       have hvv : v = .view d o l := by
         rcases hv with hv | ⟨_, _, _, _, hv, _⟩ <;> rw [hv] at hs <;> cases hs; rfl
       refine valOK_slice.mpr ⟨d, o, l, hvv, ?_⟩
-      -- AGORA-980: a static literal's view stays one
-      rcases hstat with hsv | ⟨hroot', _⟩
-      · exact .inr hsv
-      refine .inl ?_
       have hder : derive y E .self = derive y E .view := by
         unfold derive; rw [hisroot, hty]; rfl
       rw [hder]
@@ -1382,9 +1391,9 @@ theorem lend_valOK' {m : Mem} {H : List Dep} {τ : Ty} {e : Val} (hw : WFv τ e)
   | cell => intro _ P _ _ hc _ _ hsh _; exact .cell hsh.cell (hc _ (Top.refl _))
   | @view t d o l =>
     intro _ P _ _ _ _ _ _ hs
-    obtain ⟨d', o', l', hv, hvo⟩ := hs t rfl t _ ViewIn.here
+    obtain ⟨d', o', l', hv, dep, hd, ha⟩ := hs t rfl t _ ViewIn.here
     cases hv
-    exact ValOK.of_viewOr hvo
+    exact .view ⟨dep, hd, ha⟩
   | @node t c d es hes =>
     intro _ P hn _ _ hv hnm hsh _
     obtain ⟨dep, hd, hla⟩ := hn t c d es (Top.refl _)
@@ -1463,7 +1472,6 @@ theorem ValOK.lend {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m �
   | cell => rfl
   | href => rfl
   | view => rfl
-  | sview => rfl
   | pair _ _ ihx ihy => simp [lendOf, ihx, ihy]
   | inl _ ih => simp [lendOf, ih]
   | inr _ ih => simp [lendOf, ih]
@@ -1569,9 +1577,9 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     | slice s =>
       cases hwe with
       | view =>
-        obtain ⟨d', o', l', hv', hvo⟩ := hvs s _ (ViewIn.child hmem ViewIn.here)
+        obtain ⟨d', o', l', hv', dep, hd, ha⟩ := hvs s _ (ViewIn.child hmem ViewIn.here)
         cases hv'
-        exact ValOK.of_viewOr hvo
+        exact .view ⟨dep, hd, ha⟩
     | vec s =>
       cases hwe with
       | node hes =>
@@ -1736,7 +1744,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     | dtor f a => exact wf_append (wf_derive hi hy hl hnint _) (wf_held (E := E) hi hy hl hnint)
   valOwn h := by rw [elemE_mode] at h; cases h
   valBor _ := by
-    obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, hstat⟩ := hi.slice_node hy hl hty
+    obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, hroot, hbor⟩ := hi.slice_node hy hl hty
     rw [hv] at hs0; cases hs0
     have heq := dataAt_unique hi.heap hda0 hda
     cases heq
@@ -1747,9 +1755,6 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     have hwe : WFv t es[o + n] := hw.elem rfl hmem
     have hpke : PkgsOK es[o + n] := (hi.dataAt_pkgs hda).elem hmem
     generalize es[o + n] = e at hmem hwe hpke ⊢
-    -- AGORA-980: a static literal's element is an integer
-    rcases hstat with ⟨rfl, -⟩ | ⟨hroot, hbor⟩
-    · cases hwe with | int => exact .int
     have hbor'' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node t c d es) := fun h => by
       have hb : E.mode = .bor := by cases hm : E.mode <;> simp_all [Mode.isRoot]
       obtain ⟨dep, hd, _, hla⟩ := hbor hb
@@ -1817,7 +1822,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         (by rw [hty]; rfl)
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
-    obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, _⟩ := hi.slice_node hy hl hty
+    obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, _, _⟩ := hi.slice_node hy hl hty
     rw [hv] at hs0; cases hs0
     have heq := dataAt_unique hi.heap hda0 hda
     cases heq
@@ -1826,7 +1831,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     exact NamesIn.noView (hw.elem rfl (List.getElem_mem hn)) hok.2 _
   pkgs := ((hi.dataAt_pkgs hda).elem (List.getElem_mem hn)).lendOf
   pkgFree := by
-    obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, _⟩ := hi.slice_node hy hl hty
+    obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, _, _⟩ := hi.slice_node hy hl hty
     rw [hv] at hs0; cases hs0
     have heq := dataAt_unique hi.heap hda0 hda
     cases heq
@@ -2547,7 +2552,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
       fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun hd _ hn dep hdd hnm => ?_,
       fun h => by simp at h, fun hd => hi.wf.view y E hy hd, ArmOK.of_none rfl, fun _ T h => by simp at h,
-      FreshE.of_ownSlot hos⟩
+      FreshE.of_ownSlot hos, fun _ T h => by simp at h⟩
     obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor y E hy hd hos (Or.inl hn) dep hdd hnm
     by_cases hry : dep.root = y
     · exact Or.inl ⟨hry, Mode.isRoot_of_ownSlot hos⟩
@@ -2853,16 +2858,16 @@ theorem Evolve.perm_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : 
     rcases hkk with ⟨hs, heq⟩ | ⟨hvw, heq⟩ | ⟨hin, hbl⟩
     · cases heq
       exact ⟨d, es', Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨hs, rfl⟩⟩, hw.perm hp,
-        (hv.keep hH (BlkLe.of_eq hb)).perm hp, hn.perm hp, hsh'⟩
+        (hv.keep hH).perm hp, hn.perm hp, hsh'⟩
     · cases heq
       exact ⟨d, es', Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inl ⟨hvw, rfl⟩)⟩, hw.perm hp,
-        (hv.keep hH (BlkLe.of_eq hb)).perm hp, hn.perm hp, hsh'⟩
+        (hv.keep hH).perm hp, hn.perm hp, hsh'⟩
     · obtain ⟨e, hc, hs⟩ := hbl
       cases hc with
       | elem he =>
         exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
-          Or.inr (Or.inr ⟨hin, e, Child.elem (hp.subset he), hs⟩)⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
-  · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn,
+          Or.inr (Or.inr ⟨hin, e, Child.elem (hp.subset he), hs⟩)⟩, hw, hv.keep hH, hn, hsh.of_blk hb⟩
+  · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH, hn,
       hsh.of_blk hb⟩
 
 theorem killE_none (hv : Bool) (x : Var) (E : Entry) : killE .none hv x E = E := by
@@ -2966,7 +2971,8 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
       fun hl hn r hr => ?_, rfl, fun hl hn => by rw [hupd]; exact hi.names x Ex hx hl hn,
       fun hl T hT' => ?_, fun T hT' => ?_, fun hd hos' hn dep hdd hnm => ?_,
       fun hd => hi.wf.arm x Ex hx hd, fun hd => hi.wf.view x Ex hx hd, ?_,
-      fun _ T hT' => by cases hT'; rw [hty]; exact hshN, FreshE.of_ownSlot hos⟩
+      fun _ T hT' => by cases hT'; rw [hty]; exact hshN, FreshE.of_ownSlot hos,
+      NoPkgS.of_wfv fun U hU => by cases hU; rw [hty]; exact hwT'⟩
     · obtain ⟨T, hT0, hvs⟩ := hlv hl
       cases hT0; rw [hty] at hvs ⊢
       exact hviews _ rfl (fun dep hd hne => hkeepR dep hd hne fun _ =>
@@ -3170,7 +3176,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF ⟨_, hm1y⟩),
         fun _ T hT' => by
           simp only [Option.some.injEq] at hT'; subst hT'; rw [killE_ty, hty]; exact hshS,
-        FreshE.of_ownSlot (by rw [killE_mode]; exact hos)⟩
+        FreshE.of_ownSlot (by rw [killE_mode]; exact hos),
+        NoPkgS.of_wfv fun U hU => by cases hU; rw [killE_ty, hty]; exact hwS⟩
       rw [killE_vdeps] at hr
       rw [killE_ty] at hn
       obtain ⟨Er, hEr, hroot⟩ := hi.wf y E hy hl (Or.inl hn) r hr
@@ -3222,11 +3229,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
           (fun h => nomatch h) (hpf _ (Or.inr rfl) rfl)
         · show ∀ r ∈ roots (E.held ++ E.held), _
           exact wf_append hwfH hwfH
-        · obtain ⟨d', o', l', hv', hvo⟩ := hvsT s _ (ViewIn.child hemem ViewIn.here)
+        · obtain ⟨d', o', l', hv', dep, hd, ha⟩ := hvsT s _ (ViewIn.child hemem ViewIn.here)
           cases hv'
-          -- AGORA-980: a static literal's view needs no dependency
-          rcases hvo.symm with hsv | ⟨dep, hd, ha⟩
-          · exact .sview (hsv.of_blk rfl)
           obtain ⟨r, k⟩ := dep
           by_cases hry : r = y
           · subst hry

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.0] — 2026-11-23
+
+### Added
+
+- Sharing (recon-kit's): "Share" on a finished job gives a link that opens without
+  the sign-in — view and download the cloud and the 3-D object, nothing else.
+
+### Changed
+
+- Sensible limits on the page and in the service: "drop least confident %" 0–50
+  (was 0–95), pixel stride 1–4 (was 1–16).
+
+- The service, 3-D objects, voxel fusion and frame choice live in the new
+  `recon-kit` package, so other model packages (lingbot-map) offer the same service.
+  `map-anything serve` and `map-anything mesh` behave as before; this package keeps
+  only what is its own — the option fields its page shows and how they become its
+  command line (`src/app.nu`). Its service tests moved to recon-kit, and
+  `tests/app_test.sh` checks the options line.
+- A pick of files on the upload page now invalidates any older pick's read before it
+  can return, so an earlier, slower read can no longer restore a refused selection.
+
 ## [0.10.0] — 2026-11-23
 
 ### Added

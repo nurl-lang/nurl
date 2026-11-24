@@ -203,11 +203,11 @@ $ `stdlib/std/utf8.nu`
     ^ @ Json { JObj v }
 }
 
-@ json_arr ( Vec Json ) v → Json {
+@ json_arr sink ( Vec Json ) v → Json {
     ^ @ Json { JArr v }
 }
 
-@ json_obj ( Vec Json ) v → Json {
+@ json_obj sink ( Vec Json ) v → Json {
     ^ @ Json { JObj v }
 }
 

@@ -248,7 +248,6 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   cases hr with
   | expr _ => exact ⟨h, fun _ => rfl, same, fun _ hn => by simp [intE] at hn⟩
   | new _ => exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
-  | slit => exact ⟨h, fun _ => rfl, same, fun _ _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr⟩
   | @moveOwn y Ey hy hl hm _ _ =>
     have hwf : CtxWF (A2.setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
       h.moveOut hy .replace false

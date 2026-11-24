@@ -178,12 +178,6 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F V : List Var} {r : Rhs} {E : En
   | view hy hl ht _ =>
     obtain ⟨c, d, es, hvec, _⟩ := hi.vec_node hy hl ht
     exact ⟨_, EvalR.view hvec⟩
-  | slit =>
-    -- AGORA-980: a block's key is below `nid`, so `nid + 2` is free
-    refine ⟨_, EvalR.slit (n := _) ?_⟩
-    cases hk : m.blk (m.nid + 2) with
-    | none => rfl
-    | some bl => have := hi.heap.bkey _ bl hk; omega
   | sat hy hl ht hi' =>
     obtain ⟨d, o, l, c, es, hs, hda, had, hlen, _⟩ := hi.slice_node hy hl ht
     obtain ⟨n, hn⟩ := eval_exists hi hi'

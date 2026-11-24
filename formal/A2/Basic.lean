@@ -119,6 +119,88 @@ theorem Sub.cases' {v t : Val} (h : Sub v t) : v = t ∨ ∃ e, Child e t ∧ Su
   | inr hs => exact Or.inr ⟨_, Child.inr, hs⟩
   | pkg hs => exact Or.inr ⟨_, Child.pkg, hs⟩
 
+/-- A3.5b: a value of a type that holds no closure holding bindings by name
+    holds only Send packages, each capturing nothing by name. -/
+theorem WFv.no_pkg {τ : Ty} {v : Val} (hw : WFv τ v) (hf : τ.hasFn = false) {fs : List Nat} {te : Ty}
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
+  induction hw with
+  | int => cases hs
+  | view => cases hs
+  | arc => cases hs
+  | rguard => cases hs
+  | lk => cases hs
+  | cell => cases hs
+  | node hes ih =>
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | elem hx => exact ih x hx (by simpa [Ty.hasFn] using hf) hsx
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | fst => exact iha hf.1 hsx
+      | snd => exact ihb hf.2 hsx
+  | inl _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inl => exact ih hf.1 hsx
+  | inr _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inr => exact ih hf.2 hsx
+  | pkg _ hq ih =>
+    obtain ⟨_, hf', hcs⟩ := hq.send hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h; exact hcs
+    · cases hc with
+      | pkg => exact ih hf' hsx
+  | dtor _ _ ih => exact ih hf hs
+
+/-- A3.5b: a lent value of a type that holds no closure holding bindings by
+    name holds only Send packages, each capturing nothing by name. -/
+theorem ValOK.no_pkg {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK m τ v P H) (hf : τ.hasFn = false) {fs : List Nat} {te : Ty}
+    {ms : List Nat} {e : Val} {cs : List (Var × PMode × Ty)} (hs : Sub (.pkg fs te ms e cs) v) : cs = [] := by
+  induction hv with
+  | int => cases hs
+  | href => cases hs
+  | view => cases hs
+  | arc => cases hs
+  | rguard => cases hs
+  | lk => cases hs
+  | cell => cases hs
+  | pair _ _ iha ihb =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | fst => exact iha hf.1 hsx
+      | snd => exact ihb hf.2 hsx
+  | inl _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inl => exact ih hf.1 hsx
+  | inr _ ih =>
+    simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h
+    · cases hc with
+      | inr => exact ih hf.2 hsx
+  | pkg _ hq ih =>
+    obtain ⟨_, hf', hcs⟩ := hq.send hf
+    rcases hs.cases' with h | ⟨x, hc, hsx⟩
+    · cases h; exact hcs
+    · cases hc with
+      | pkg => exact ih hf' hsx
+  | dtor _ ih => exact ih hf hs
+
 theorem Sub.ids {a b : Val} (h : Sub a b) : ∀ i ∈ a.ids, i ∈ b.ids := by
   induction h with
   | refl => exact fun i hi => hi
@@ -163,7 +245,6 @@ theorem Blk.rd_keeps (bl : Blk) : bl.rd = bl.keeps ∨ bl.rd = .int 0 := by
   obtain ⟨t, k, p⟩ := bl
   cases k with
   | arc => exact Or.inl rfl
-  | static => exact Or.inl rfl
   | lock => exact Or.inr rfl
   | view => exact Or.inl rfl
   | dead => exact Or.inr rfl
@@ -209,7 +290,6 @@ theorem Blk.sub_tree {bl : Blk} {n : Val} (h : Sub n bl.tree) :
     cases k with
     | view => exact Or.inr h.int_eq
     | arc => exact Or.inl ⟨p, rfl, h⟩
-    | static => exact Or.inl ⟨p, rfl, h⟩
     | lock => exact Or.inl ⟨p, rfl, h⟩
     | dead => exact Or.inl ⟨p, rfl, h⟩
 
@@ -222,10 +302,6 @@ theorem Blk.sub_rd {bl : Blk} {n : Val} (h : Sub n bl.rd) :
   | lock => exact Or.inr h.int_eq
   | dead => exact Or.inr h.int_eq
   | arc =>
-    cases p with
-    | none => exact Or.inr h.int_eq
-    | some q => exact Or.inl ⟨by simp, q, rfl, h⟩
-  | static =>
     cases p with
     | none => exact Or.inr h.int_eq
     | some q => exact Or.inl ⟨by simp, q, rfl, h⟩
@@ -289,7 +365,6 @@ theorem ViewsAt.rd_ids {B : Nat → Option Blk} (hv : ViewsAt B) {k : Nat} {bl :
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | arc => exact ⟨k, _, hk, h⟩
-  | static => exact ⟨k, _, hk, h⟩
   | lock => simp [Blk.rd] at h
   | dead => simp [Blk.rd] at h
   | view =>
@@ -311,7 +386,6 @@ theorem ViewsAt.rd_reached {B : Nat → Option Blk} (hv : ViewsAt B) {R : Val �
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | arc => exact ⟨k, _, hk, h, hr⟩
-  | static => exact ⟨k, _, hk, h, hr⟩
   | lock => simp [Blk.rd] at h
   | dead => simp [Blk.rd] at h
   | view =>
@@ -471,7 +545,6 @@ theorem HeapOK.rd_sub {m : Mem} (hh : HeapOK m) {k : Nat} {bl : Blk} (hk : m.blk
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | arc => exact ⟨k, _, hk, h⟩
-  | static => exact ⟨k, _, hk, h⟩
   | lock => rw [Blk.rd_lock] at h; rw [h.int_eq] at hi; simp [Val.head] at hi
   | dead => rw [Blk.rd_dead] at h; rw [h.int_eq] at hi; simp [Val.head] at hi
   | view =>

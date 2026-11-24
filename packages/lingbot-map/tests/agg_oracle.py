@@ -103,16 +103,18 @@ def main():
     dump("depth_conf", depth_conf)
 
     # World points, which is what the CLI turns into a point cloud. The
-    # extrinsic handed in is the raw world-from-camera one the pose
-    # encoding decodes to; unproject_depth_map_to_point_map inverts it
-    # itself.
+    # pose encoding decodes to camera->world; unproject_depth_map_to_point_map
+    # takes world->camera and inverts it itself, so the pose is inverted
+    # first, as demo.py's postprocess does.
     from lingbot_map.utils.geometry import (                       # noqa: E402
         unproject_depth_map_to_point_map)
     from lingbot_map.utils.pose_enc import (                       # noqa: E402
         pose_encoding_to_extri_intri)
+    from lingbot_map.utils.geometry import closed_form_inverse_se3  # noqa: E402
     ext, ins = pose_encoding_to_extri_intri(poses[-1], images.shape[-2:])
+    w2c = closed_form_inverse_se3(ext[0].float())[:, :3]
     wp = unproject_depth_map_to_point_map(
-        depth[0].float(), ext[0].float(), ins[0].float())
+        depth[0].float(), w2c, ins[0].float())
     dump("world_points", torch.from_numpy(wp))
 
     if os.environ.get("LINGBOT_DPT_TRACE"):
