@@ -1241,4 +1241,11 @@ theorem LiveCaps.nodeOf {m : Mem} {Γ : Ctx} {w x o : Var} {E : Entry} {T : Val}
   · exact (h _ E true _ hx hl ho).1
   · exact (h x E false _ hx hl hsx).2 c (Sub.refl _) o T _ ho hs ⟨t, d, es, rfl⟩
 
+
+theorem LiveBack.exitScope (x : Var) (Γ : Ctx) : LiveBack Γ (A2.exitScope x Γ) := fun v E1 h hl => by
+  by_cases hvx : v = x
+  · subst hvx; simp [A2.exitScope, upd] at h
+  · simp only [A2.exitScope, upd_ne _ _ hvx] at h
+    exact LiveBack.kill Γ _ _ _ v E1 h hl
+
 end A2
