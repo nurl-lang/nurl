@@ -14,11 +14,28 @@
   The button is hidden on touch screens. `?fly=1` opens the page in game mode.
   Because ctrl+w closes the tab and no page can block it, the browser asks for
   confirmation before leaving the page in game mode.
+- `ply_read` reads a PLY point cloud into memory. It handles ascii and
+  binary little-endian files, x/y/z of any scalar type, and optional colours
+  (integers 0..255, floats 0..1). Other properties are skipped and faces
+  after the vertices are ignored. Big-endian files, list properties in the
+  vertex element and short bodies are refused with the reason.
+- `?tiles=URL` streams an OGC 3D Tiles tileset instead of one cloud.
+  - The tree is walked from the eye every frame. Tiles in view are drawn,
+    and children are fetched while their geometric error would show larger
+    than 16 px (CesiumJS's default).
+  - Up to four fetches run at a time, most-needed first.
+  - Past a GPU point budget (14 M, 3 M on touch screens), the tiles unused
+    for longest go first, then the least needed.
+  - It reads box volumes, ADD and REPLACE refinement, and point content.
+    `?sse=` and `?budget=` override the threshold and the budget. `?probe=`
+    draws the root tile for a headless test.
 
 ### Fixed
 
 - Panning no longer moves the centre that the far-trim slider measures from.
   The orbit target was the same array as that centre until the first reset.
+- A flight that starts from an orbit zoomed far out no longer clips the
+  whole scene: the far plane adds the eye's distance from the centre.
 
 ## [0.4.0] — 2026-11-23
 

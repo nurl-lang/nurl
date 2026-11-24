@@ -25,6 +25,7 @@ $ `deps/glb/src/glb.nu`
 | `glb_vertex_count m`, `glb_tri_count m` | sizes |
 | `glb_bytes m generator → !( Vec u ) String` | the file in memory |
 | `glb_write m path generator → !v String` | the file on disk |
+| `glb_points_bytes m generator`, `glb_points_write m path generator` | the vertices as a point cloud |
 
 Normals and colours are all-or-nothing: give every vertex one, or none. A mesh
 with some, or with a triangle naming a vertex that does not exist, is refused
@@ -37,6 +38,13 @@ becomes `(x, -y, -z)`.
 The file is one scene node holding one mesh with one primitive: POSITION (f32,
 with min/max), NORMAL (f32, unit), COLOR_0 (u8 normalised, VEC4), u32 indices,
 under a double-sided white PBR material so vertex colours show unchanged.
+
+**Point clouds.** Give vertices and no triangles, and write with
+`glb_points_write`. The primitive is POINTS (mode 0) with no indices, under an
+unlit material (`KHR_materials_unlit`): points have no normals to light, so
+their colours show as they are. This is the form 3D Tiles point content takes.
+A mesh with triangles is refused here, and a point cloud is refused by
+`glb_write`.
 
 `tests/glb_test.sh` checks the output without dependencies (container, chunks,
 accessor bounds, indices, min/max, unit normals, winding against normals) and,

@@ -1,0 +1,9 @@
+[package]
+name = "tiles3d"
+version = "0.1.0"
+nurl-version = "0.73.0"
+description = "OGC 3D Tiles 1.1 tilesets in pure NURL: the tileset.json that streams large 3-D data — a tree of tiles, each with a bounding box, a geometric error and optional glTF content — to CesiumJS, Cesium for Unreal and Cesium for Unity. Build a Tileset tile by tile (ts_tile with its parent, ts_content, ts_refine ADD/REPLACE, ts_transform), then ts_write it. Before anything is written the specification's rules are checked: one root, every parent made before its child, the root's refine stated, geometric errors never rising from parent to child and the tileset's at least the root's, every number finite. The format only: what goes into the tiles is the caller's (glb writes point and mesh content). Checked by its own dependency-free test and by CesiumGS's 3d-tiles-validator and Khronos's glTF validator: no errors, no warnings. No dependencies."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang"
+
+[dependencies]

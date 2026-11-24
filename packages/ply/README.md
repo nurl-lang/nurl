@@ -36,6 +36,25 @@ hand. A writer whose last owner lets go of it without `ply_finish` is
 finished then (flushed, count patched, closed) — call `ply_finish` to
 learn whether the file can be trusted.
 
+## Reading
+
+```
+$ `deps/ply/src/read.nu`
+
+?? ( ply_read `cloud.ply` ) {
+    T c → { /* . c n points; . c xyz 3 a point; . c rgb 3 bytes a point, or empty */ }
+    F e → { ( nurl_print ( string_data e ) ) }
+}
+```
+
+`ply_read` reads a whole PLY point cloud into memory. It accepts ascii or
+binary little-endian files whose vertex element comes first; a mesh's faces
+after the vertices are ignored. x, y and z may be any scalar type.
+Colours (`red`/`green`/`blue` or `diffuse_*`) are read when present: integers
+as 0..255, floats as 0..1. Other properties are skipped. Big-endian files, a
+list property in the vertex element, and a body shorter than the header
+declares are refused with the reason.
+
 ## The viewer
 
 One self-contained WebGL2 page, compiled into the binary (an installed
@@ -88,6 +107,15 @@ The viewer page also takes:
 
 - `?glb=URL` — show a triangle mesh from a binary glTF (vertex colours, lit),
   instead of a cloud;
+- `?tiles=URL` — stream an OGC 3D Tiles tileset (what [pctiles](../pctiles) writes)
+  instead of one cloud. The tree is walked every frame from the eye. A tile in
+  view is drawn, and its children are fetched while its geometric error would
+  show larger than 16 px (CesiumJS's default too). Fetches run four at a time, most-needed first. Past
+  a budget of points on the GPU (14 M, 3 M on touch screens), the tiles unused
+  for longest are let go, then the least needed. `?sse=` and `?budget=`
+  override the two numbers. Box volumes, ADD and REPLACE, and point content are
+  read; tile transforms and external tilesets are not yet. Game mode flies
+  through a tileset as it does through a cloud.
 - `?crop=URL` — over a cloud, a region box with sliders; "make 3-D object"
   POSTs `{"box": [x0, y0, z0, x1, y1, z1], "res": n}` to URL and polls GET URL
   for `{state, progress, url, view}` (the protocol `map-anything serve`

@@ -1,0 +1,13 @@
+[package]
+name = "pctiles"
+version = "0.1.0"
+nurl-version = "0.73.0"
+description = "A point cloud as an OGC 3D Tiles 1.1 tileset, in pure NURL: `pctiles build cloud.ply -o dir` puts the points in a level-of-detail octree (octree), writes each node's own points as a POINTS glb tile (glb) and the tree as tileset.json (tiles3d), refining by ADD. A tile's box is the tight bounds of its subtree, its geometric error its sampling spacing times 8, so the 16 px default of CesiumJS and Cesium for Unreal and Unity refines until the gaps are about 2 px. A client — CesiumJS, Cesium for Unreal or Unity, the ply viewer — then loads only the tiles the camera can see at the detail it can see them, so a cloud far larger than memory or bandwidth allows still opens at once. The library entry pct_build takes positions and colours from anywhere."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang"
+
+[dependencies]
+ply = { path = "../ply", version = "^0.4.1" }
+octree = { path = "../octree", version = "^0.1" }
+tiles3d = { path = "../tiles3d", version = "^0.1" }
+glb = { path = "../glb", version = "^0.2" }
