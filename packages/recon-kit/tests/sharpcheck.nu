@@ -1,4 +1,4 @@
-// packages/map-anything/tests/sharpcheck.nu — the focus measure ranks a
+// packages/recon-kit/tests/sharpcheck.nu — the focus measure ranks a
 // frame above a blurred copy of itself, and sh_pick keeps the sharp one.
 //
 //   nurl tests/sharpcheck.nu /tmp/sc && /tmp/sc <sharp.jpg> <blurred.jpg> [frame...]

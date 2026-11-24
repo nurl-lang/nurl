@@ -360,7 +360,8 @@ function parseGlb(buf) {
   function eq(a, b) { for (var k = 0; k < b.length; k++) if (Math.abs(a[k] - b[k]) > 1e-9) return false; return true; }
   function moves(nd) {
     if (nd.matrix && !eq(nd.matrix, [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1])) return true;
-    if (nd.rotation && !eq(nd.rotation, [0, 0, 0, 1])) return true;
+    /* q and -q are the same rotation: [0,0,0,-1] is the identity too */
+    if (nd.rotation && !eq(nd.rotation, [0, 0, 0, 1]) && !eq(nd.rotation, [0, 0, 0, -1])) return true;
     if (nd.scale && !eq(nd.scale, [1, 1, 1])) return true;
     if (nd.translation && !eq(nd.translation, [0, 0, 0])) return true;
     return false;

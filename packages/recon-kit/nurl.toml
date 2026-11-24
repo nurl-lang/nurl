@@ -1,0 +1,14 @@
+[package]
+name = "recon-kit"
+version = "0.1.0"
+nurl-version = "0.73.0"
+description = "Everything around a 3-D reconstruction model except the model, in pure NURL: a web service (`<model> serve`) where a browser uploads photos or a video, jobs queue on disk and run one at a time on the GPU as children of the model's own executable, and the finished point cloud opens in the ply viewer or downloads as a PLY — phone uploads, sign-in, restart and shutdown that lose nothing; 3-D objects from a region of the reconstruction (the views kept as a scene file, fused in a box with a TSDF, extracted by marching tetrahedra, written as binary glTF); voxel fusion of a cloud on a metric grid; and choosing the sharpest frames across a whole capture. A model package hands rk_serve an RkApp — its name, its option fields, and how the page's options become its CLI's — and answers two command lines; map-anything and lingbot-map are built on it."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang"
+
+[dependencies]
+http = { path = "../http", version = "^0.7" }
+ply = { path = "../ply", version = "^0.4" }
+video = { path = "../video", version = "^0.3" }
+image = { path = "../image", version = "^0.7" }
+glb = { path = "../glb", version = "^0.1" }

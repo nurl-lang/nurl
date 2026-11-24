@@ -20,8 +20,9 @@ with the same property order.
 
 Two conventions are load-bearing and are the reference's, not choices
 made here: the pixel grid is integer coordinates (np.arange, not sample
-centres), and the unprojection takes the WORLD-FROM-CAMERA extrinsic and
-inverts it itself.
+centres), and the decoded pose is camera->world while the unprojection
+wants world->camera and inverts it itself — so the pose is inverted first,
+exactly as demo.py's postprocess does.
 
 Timing is reported on stderr as `ref_seconds <total> <load> <inference>`
 so a caller can compare it against the port's own total.
@@ -42,6 +43,7 @@ from lingbot_map.utils.load_fn import load_and_preprocess_images   # noqa: E402
 from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri  # noqa: E402
 from lingbot_map.utils.geometry import (                          # noqa: E402
     unproject_depth_map_to_point_map,
+    closed_form_inverse_se3,
 )
 
 DTYPES = {"float32": torch.float32, "fp32": torch.float32,
@@ -126,13 +128,13 @@ def main():
     sync()
     t_inf = time.time() - t_inf0
 
-    # demo.py's postprocess: pose encoding -> extrinsics/intrinsics. It
-    # then inverts w2c to c2w for the viewer; the unprojection helper wants
-    # the world-from-camera one and inverts it itself, so the raw w2c
-    # extrinsic is what goes in.
+    # demo.py's postprocess: the pose encoding decodes to camera->world
+    # (no inversion), which is inverted to world->camera, because the
+    # unprojection helper takes world->camera and inverts it itself.
     h, w = images.shape[-2:]
     extri, intri = pose_encoding_to_extri_intri(preds["pose_enc"], (h, w))
     extri = extri[0].float().cpu().numpy()
+    extri = np.stack([closed_form_inverse_se3(e[None])[0][:3] for e in extri])
     intri = intri[0].float().cpu().numpy()
     depth = preds["depth"][0].float().cpu().numpy()          # [S, H, W, 1]
     conf = preds["depth_conf"][0].float().cpu().numpy()      # [S, H, W]

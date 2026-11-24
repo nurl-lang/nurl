@@ -1,4 +1,4 @@
-// packages/map-anything/src/scene.nu — the reconstruction's views, kept.
+// packages/recon-kit/src/scene.nu — the reconstruction's views, kept.
 //
 // A point cloud throws away what made it: which camera saw which pixel at
 // what depth. A mesh wants exactly that (TSDF fusion carves free space
@@ -56,7 +56,7 @@ $ `stdlib/std/floatbits.nu`
 @ sc_create s path i h i w → !ScW String {
     ?? ( file_create path ) {
         F _e → {
-            : String m ( string_from `map-anything: cannot create the scene file ` )
+            : String m ( string_from `cannot create the scene file ` )
             ( string_push_str m path )
             ^ @ !ScW String { F m }
         }
@@ -117,7 +117,7 @@ $ `stdlib/std/floatbits.nu`
 }
 
 @ __sc_bad s why → !Scene String {
-    : String m ( string_from `map-anything: not a usable scene file: ` )
+    : String m ( string_from `not a usable scene file: ` )
     ( string_push_str m why )
     ^ @ !Scene String { F m }
 }
@@ -127,7 +127,7 @@ $ `stdlib/std/floatbits.nu`
     ?? ( read_file_bytes path ) {
         T v → { = raw v }
         F _e → {
-            : String m ( string_from `map-anything: cannot read ` )
+            : String m ( string_from `cannot read ` )
             ( string_push_str m path )
             ^ @ !Scene String { F m }
         }
