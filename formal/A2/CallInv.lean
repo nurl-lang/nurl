@@ -542,7 +542,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
   rw [hf] at hf'; cases hf'
   exact {
     dsafe := hds
-    thru := fun ht => callR_nil_of_regions hi.noRegion (hg (ThruFn.of_body hf ht))
+    thru := fun ht => (hg (ThruFn.of_body hf ht)).imp_left (callR_nil_of_regions hi.noRegion)
     prog := hP
     fnok := hP fn (List.mem_of_getElem? hf)
     len := hlen
@@ -599,7 +599,8 @@ theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {ba
       · exact h.Flt v hv
       · exact hG v hv
     anch := h.anch.mono fun _ hv => List.mem_append_left _ hv
-    nfree := fun d hd => by simp [mutNames, argNames] at hd }
+    nfree := fun d hd => by simp [mutNames, argNames] at hd
+    thru := fun _ => Or.inl (by simp [callR]) }
 
 /-- The `recover` case of preservation. -/
 theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by

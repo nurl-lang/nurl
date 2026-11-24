@@ -78,19 +78,37 @@ theorem callR_vv : 0 ∈ callR K [1] := by
 theorem callR_vv_s2 : 0 ∈ callR K [1, 2] := by
   simp [callR, argE, K, Evv, Es2, roots, memDeps, Kind.isName, vsv, svv, vvi]
 
-/-- **AGORA-933's call is refused**: `( f vv s2 )`, `s2` viewing what `vv`'s
-    slice views, has no typing. -/
-theorem call_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 0 [1, 2] E Γ' := fun h => by
-  have hm := callR_vv_s2
-  rw [CallT.thru h K_noRegion f_thru] at hm
-  cases hm
+/-- `s2` reaches `w` inside its elements, at `.inner`. -/
+theorem s2_inner : (⟨0, .inner⟩ : Dep) ∈ (argE K 2).vdeps := by
+  simp [argE, K, Es2, Entry.vdeps, Mode.ownSlot]
 
-/-- ... and so is `( f1 vv )` alone (AGORA-932 is to type it, ending the
-    caller's views of `w` at the call, as nurlc does). -/
+/-- **AGORA-933's call is refused**: `( f vv s2 )`, `s2` viewing what `vv`'s
+    slice views, has no typing. `w` is no region, and route U
+    (`CallThruOK`) asks every argument to reach `w` at a view, its handle or
+    by name, which `s2`, a view inside `w`'s elements, does not. -/
+theorem call_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 0 [1, 2] E Γ' := fun h => by
+  rcases CallT.thru h K_noRegion rfl f_thru with hm | hc
+  · have := callR_vv_s2; rw [hm] at this; cases this
+  · have := (hc.2.2.2 0 callR_vv_s2).2.1 2 (by simp) _ s2_inner rfl
+    simp [Kind.isName] at this
+
+/-- `s2` is live after `( f1 vv )` and ends where `w`'s elements change. -/
+theorem s2_hit : callPost K f1 [1] 2 = some Es2 ∧ Es2.live = true ∧ hits .dropIn false 0 Es2 = true := by
+  refine ⟨?_, rfl, ?_⟩
+  · simp [callPost, callPostAux, f1, killNames, mutNames, argNames, nameDeps, argE, K, Evv,
+      Entry.vdeps, Mode.ownSlot, Kind.isName]
+  · decide
+
+/-- ... and so is `( f1 vv )` alone while `s2` is live: the callee's change
+    inside `w`'s elements ends `s2` (AGORA-937, route U). Typing it, as
+    nurlc does, takes `s2` ended first (weakening), as the call's typing
+    with `s2` dead shows below. -/
 theorem call_alone_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 1 [1] E Γ' := fun h => by
-  have hm := callR_vv
-  rw [CallT.thru h K_noRegion f1_thru] at hm
-  cases hm
+  rcases CallT.thru h K_noRegion rfl f1_thru with hm | hc
+  · have := callR_vv; rw [hm] at this; cases this
+  · obtain ⟨hp, hl, hh⟩ := s2_hit
+    have := (hc.2.2.2 0 callR_vv).2.2.1 2 Es2 hp hl
+    rw [hh] at this; cases this
 
 /-! ### AGORA-937 stage 3a: the call's entry kill
 

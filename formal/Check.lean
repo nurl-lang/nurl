@@ -829,7 +829,7 @@ import A3
 #print axioms A2.callR_clean_regions
 #print axioms A2.RegionThruWitness.callR_region
 #print axioms A2.RegionThruWitness.call_region_ok
-#print axioms A2.RegionThruWitness.call_root_refused
+#print axioms A2.RegionThruWitness.call_root_not_region
 -- AGORA-937 (turn-on 3): FnOK's end checks let a result or an inout parameter hold views of a
 -- parameter's region (isRegionIdx); the call substitutes what the argument holds views of,
 -- which the caller's result and inout argument hold (heldOfArgs: CallH.σ_held), so the

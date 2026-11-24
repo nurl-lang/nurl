@@ -5580,7 +5580,9 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
   refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hexA hvs hnf,
     CallDtorSafe.canon h hab hexA hlen (fun i hi => by
       obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds hvs, rfl, rfl,
-      fun ht => callR_canon h hab (hR ht) (hg ht) hvs⟩, ?_,
+      fun ht => (hg ht).imp (fun hg' => callR_canon h hab (hR ht) hg' hvs)
+        (fun _ => sorry /- WIP scaffold (AGORA-937 B4, never merged): CallThruOK lifted
+          where a call places its callee (`S.R = []`) -/)⟩, ?_,
     fun x => callRes_lift h hab hlr hex hvs x⟩
   · obtain ⟨Ea, hEa, hl, hok, hmv, _⟩ := hargs i hi
     have hia : i < args.length := hlen ▸ hi

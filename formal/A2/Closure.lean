@@ -779,7 +779,8 @@ theorem CallT.clean {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : L
   obtain ⟨fn', hf', hlen, hargs, hnf, hds, _, _, hg⟩ := hc
   rw [hf] at hf'; cases hf'
   refine ⟨fn, hf, hlen, fun i hi => ?_, fun d hd => ?_, hds.clean, rfl, rfl,
-    fun ht => callR_clean_regions (hg ht)⟩
+    fun ht => (hg ht).imp callR_clean_regions
+      (fun _ => sorry /- WIP scaffold (AGORA-937 B4, never merged): CallThruOK cleaned -/)⟩
   rotate_left
   · simp only [argE_clean, clean_mode, clean_ty]
     obtain ⟨hcan, hvec, hnF, hnA, huniq, hnh⟩ := hnf d (mutNames_clean Γ args hd)
@@ -2107,10 +2108,12 @@ theorem mutNames_open {Γ : Ctx} {e c : Var} {Ec : Entry} {te : Ty} {zs : List V
 /-- The `ThruFn` guard of a call (Agora #295): into code that changes
     elements through a borrow, no argument holds views. -/
 theorem CallT.thru {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
-    {Γ' : Ctx} (h : CallT P Γ F f args E Γ') (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) :
-    ThruFn P f → callR Γ args = [] := by
-  obtain ⟨_, _, _, _, _, _, _, _, h⟩ := h
-  exact fun ht => callR_nil_of_regions hnr (h ht)
+    {Γ' : Ctx} (h : CallT P Γ F f args E Γ') (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region)
+    {fn : Fn} (hf : P[f]? = some fn) :
+    ThruFn P f → callR Γ args = [] ∨ CallThruOK P Γ F fn args := by
+  obtain ⟨fn', hf', _, _, _, _, _, _, h⟩ := h
+  rw [hf] at hf'; cases hf'
+  exact fun ht => (h ht).imp_left (callR_nil_of_regions hnr)
 
 /-- AGORA-395: the call of a package's code holds no views where the call
     through the package did not: the environment holds what the receiver
@@ -2449,8 +2452,11 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   -- opened call — the environment holds what the receiver does, and what
   -- it captures by name holds nothing (AGORA-395)
   have hthru : ThruFn P f → callR (setE Γ m.nv (envE c Ec te cs)) (m.nv :: zs ++ cs.map (·.1)) = [] :=
-    fun ht => open_pkg_callR hc hnint hEe hargE hze hkne hcapv (CallT.thru hcT0 hi.noRegion (hthr ht).1)
-  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, fun ht => callR_regions_of_nil (hthru ht)⟩
+    fun ht => open_pkg_callR hc hnint hEe hargE hze hkne hcapv
+      (((CallT.thru hcT0 hi.noRegion hσ (hthr ht).1)).resolve_right
+        (fun _ => sorry /- WIP scaffold (AGORA-937 B4, never merged): a package call into
+          through-changing code that passes views of real memory -/))
+  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, fun ht => Or.inl (callR_regions_of_nil (hthru ht))⟩
   · simp [hplen]; omega
   rotate_left
   · -- what the opened call's closures may change is changed by it

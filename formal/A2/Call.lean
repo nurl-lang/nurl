@@ -480,8 +480,10 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
       `letd` binding that holds views. -/
   dsafe   : CallDtorSafe Γ fn.params args
   /-- Agora #295: a body that changes elements through a borrow, or calls
-      a function that may, is handed no argument that holds views. -/
-  thru    : fn.body.Thru P → callR Γ args = []
+      a function that may, is handed no argument that holds views, or
+      (AGORA-937, route U) only views of memory it changes strictly inside
+      its elements (`CallThruOK`). -/
+  thru    : fn.body.Thru P → callR Γ args = [] ∨ CallThruOK P Γ F fn args
 
 theorem derive_roots_cases {y : Var} {E : Entry} {k : Kind} {r : Var} (hr : r ∈ roots (derive y E k)) :
     (r = y ∧ E.mode.isRoot = true) ∨ (E.mode.isRoot = false ∧ r ∈ roots E.vdeps) := by
@@ -4333,9 +4335,20 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
     its argument holds views of. So the body's own calls, which may pass
     views of the regions to through-changing code, pass none where the call
     places them (`RSetup.callR_canon`). -/
-theorem σ_nil_of_thru (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (v : Var) :
+theorem σ_nil_of_thru (h : CallH P Γ F x fn args base) (hR : callR Γ args = []) (v : Var) :
     (callS Γ F fn args base x).σ v = [] :=
-  RSetup.σ_nil_of_R h.sOK (h.thru ht) v
+  RSetup.σ_nil_of_R h.sOK hR v
+
+/-- AGORA-937 (3d, route U): a call that passes views of memory its callee
+    changes strictly inside the elements sets the body up ready for it. -/
+theorem thruReady (h : CallH P Γ F x fn args base) (hc : CallThruOK P Γ F fn args) :
+    (callS Γ F fn args base x).ThruReady := by
+  sorry -- WIP scaffold (AGORA-937 B4, never merged): ThruReady from CallThruOK
+
+/-- ... so the rename's `ThruOrReady` holds for the body. -/
+theorem thruOrReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) :
+    (callS Γ F fn args base x).ThruOrReady P fn.body :=
+  (h.thru ht).imp id fun hc => ⟨h.thruReady hc, hc.1⟩
 
 /-- The inside of the call is well-typed where the call was. -/
 theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
@@ -4345,7 +4358,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
     ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh, hEr0⟩, hio⟩ := h.fnok
   have hΔd : ∀ v E, Δa v = some E → E.dtor = false := fun v E h => (hΔf v E h).1
   obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn) (sigCtx_freshOK fn)
-    (fun ht => Or.inl (h.thru ht)) (fun v hv => callS_isReg_lt (h.fnok.2.2.1 v hv))
+    (fun ht => h.thruOrReady ht) (fun v hv => callS_isReg_lt (h.fnok.2.2.1 v hv))
   have hdt := StmtT.domTy hbody hsrc
   have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root := by
     intro d0 hd0
