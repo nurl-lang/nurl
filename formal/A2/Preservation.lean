@@ -2582,10 +2582,11 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
     (hxF : x ∉ F) {ξb : Exits} (hs : StmtT P ξb Γ F k Δ1) (hpx : EndOK Δ1 x) (hKO : KeepOut Γ Δ1 k.spine)
     (hWd : CtxWF Δ1) (hNd : NameWF Δ1) (hFd : FreshOK Δ1) (hdbv : Ex.ty.holdsView = true → Ex.dbind = true)
     (hself : DSelf Γ x) {m m' : Mem} (hiS : Inv m Γ F (.scope x k)) (hp : Step P m k (.panic m'))
-    {v : Val} (hsl : m'.st x = some ⟨true, some v⟩) :
+    {v : Val} (hsl : m'.st x = some ⟨true, some v⟩) (Z : Var → List Var) (hz : HeldZ m Γ Z (.scope x k)) :
     ∃ Γ', StmtT P ξ Γ' F (.seq (.scopeD x f .skip) .panic) (exitScope x Δ1) ∧
       Inv m' Γ' F (.seq (.scopeD x f .skip) .panic) ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.scope x k) (.seq (.scopeD x f .skip) .panic) ∧ Frz F m m' := by
+      Keep Γ Γ' (.scope x k) (.seq (.scopeD x f .skip) .panic) ∧ Frz F m m' ∧
+      ∃ Z', HeldZ m' Γ' Z' (.seq (.scopeD x f .skip) .panic) ∧ ZKeep Γ Z Z' := by
   have hxsp : x ∉ k.spine := by
     have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
   have hos : Ex.mode.ownSlot = true := by rw [hmo]; rfl
@@ -2723,7 +2724,25 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
   refine ⟨setE (unwindCtx k.spine x Γ) x (Ex.reviveD x), StmtT.seq rfl hsc hpan, ?_,
     by show m.nv ≤ m'.nv; rw [hnv1]; exact Nat.le_refl _,
     ⟨?_, ?_, (DKeep.unwind _ fun w hw h => hw (by simp [Stmt.spine, h])).setE
-      fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩, ?_⟩
+      fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩, ?_, Z, ?_, ZKeep.refl _ _⟩
+  rotate_right
+  · -- (AGORA-937 B4: the panicking step writes no slot, `Step.panic_st`; the
+    -- unwound context's borrowed parameters are old ones, off the body's spine)
+    refine
+      { caps := fun q E hq hmq d hd hb hh => ?_
+        reach := fun q E hq hmq w hw => ?_
+        bound := fun q E hq hmq w hw => ?_
+        frames := fun x0 m0 h => by simp [Stmt.catchFrames] at h }
+    · obtain ⟨_, _, h0⟩ := hrbU' q E hq hmq
+      exact (hz.caps q E h0 hmq d hd hb hh).of_shrink hp.panic_st
+    · obtain ⟨hqx, hqk, h0⟩ := hrbU' q E hq hmq
+      have hqs : q ∉ (Stmt.seq (.scopeD x f .skip) .panic).spine := by simp [Stmt.spine, hqx]
+      rw [Stmt.under_off hqs] at hw
+      simp [Stmt.killVars] at hw
+      subst hw
+      exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqk, Stmt.killVars])
+    · obtain ⟨_, _, h0⟩ := hrbU' q E hq hmq
+      rw [hnv1]; exact hz.bound q E h0 hmq w hw
   · exact
     { toMInv := hMu'
       nvS := fun w hw => by
@@ -4285,7 +4304,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hsl' : m'.st x = some ⟨true, some v⟩ := by
         rw [hout x hxsp, hsl0]; rw [hout x hxsp, hsl0] at hsl; cases hsl; simp at hv; rw [hv]
       exact pres_unwindD hx hmo htx (by rw [hty]; exact hfn) hdrop hstr hxF hs hpx hKO hWd hNd hFd
-        (fun h => by rw [hvx] at h; cases h) hself hiS hp hsl'
+        (fun h => by rw [hvx] at h; cases h) hself hiS hp hsl' Z (hz.scopeLIn.scopeOut fun q E hq hmq hqk =>
+          hz.reach q E hq hmq _ (by simp [Stmt.under, hqk, Stmt.killVars]))
     | scopeLIn hst' =>
       have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
       obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ihs hs hcd hi0 hst' Z hz.scopeLIn
@@ -4870,7 +4890,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | scopeDP hp hsl _ | scopeDPDrain hp hsl =>
       -- A2-drop.3b: a panic stops at the frame (Agora #790: of any destructor
       -- value, not only a `Vec`'s): it is left at its end, then the panic goes on
-      exact pres_unwindD hx hmo htx hhf hdtor hstr hxF hs hpx hKO hWd hNd hFd hdbv hself hiS hp hsl
+      exact pres_unwindD hx hmo htx hhf hdtor hstr hxF hs hpx hKO hWd hNd hFd hdbv hself hiS hp hsl Z
+        (hz.scopeDIn.scopeOut fun q E hq hmq hqk => hz.reach q E hq hmq _ (by simp [Stmt.under, hqk, Stmt.killVars]))
   | @rbind ξ Γ Δ1 F p k Ep hp hm hl hroots hpF hs hrr ihs =>
     intro m m' s' hcd hi hst Z hz
     have hpsp : p ∉ k.spine := by
