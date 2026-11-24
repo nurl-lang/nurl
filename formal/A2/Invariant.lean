@@ -2393,8 +2393,10 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (h12 : StmtT P (ξ.under x) (setE Γ1 x (recvRes c Ec E)) F k Δ)
       (h13 : EndOK Δ x)
       -- (an interface that is code changing elements through a borrow is
-      -- called with no argument that holds views, `CallT`; the code that
-      -- runs is so only where its interface is, `Implements`; AGORA-395)
+      -- called by `CallT`'s `ThruFn` premise on `c :: zs`: views of regions
+      -- only, or route U's `CallThruOK`; the code that runs is so only where
+      -- its interface is, and its environment holds no views, `te.holdsView =
+      -- false`, `Implements`; AGORA-395)
       -- (A2-drop.3a: as `letcall`'s)
       (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
         by dtor_head) :
@@ -2874,7 +2876,7 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
     fn.outHolds ⊆ sig.outHolds ∧
     -- a closure's code changes elements through a borrow (Agora #295) only
     -- where the interface is code that does so too — a call through it then
-    -- passes no argument that holds views, `CallT` — its environment holds no
+    -- meets `CallT`'s `ThruFn` premise on its explicit arguments — its environment holds no
     -- views, and it takes it lent (AGORA-395; an environment handed over,
     -- `StmtT.callcE`, goes to no such code); what it captures by name holds nothing
     -- (`CapsOK`), so every borrow its body changes through is rooted in its

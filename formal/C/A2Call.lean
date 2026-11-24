@@ -182,7 +182,11 @@ theorem regionsB_sound {Γ : Ctx} {args : List Var} (h : regionsB Γ args = true
   | none => intro h; cases h
   | some E => intro h; exact ⟨E, rfl, of_decide_eq_true h⟩
 
-/-- A2's `CallT`, decided: the result entry and the context after. -/
+/-- A2's `CallT`, decided: the result entry and the context after. Sound,
+    not complete: for a through-changing callee it checks only the
+    regions-only branch of the `ThruFn` premise, not route U's `CallThruOK`.
+    So it refuses `( f1 vv )` in `HeldViewThruWitness.K2`, which `call_ok`
+    types. The rejection is conservative on purpose. -/
 def callB2 (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) : Option (Entry × Ctx) :=
   match P[f]? with
   | some fn =>

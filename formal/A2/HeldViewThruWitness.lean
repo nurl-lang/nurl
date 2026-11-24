@@ -123,6 +123,10 @@ bindings that reach `w` (`thruPre`, `A2/THRU_STAGE3_DESIGN.md`). Here: `s2`, a
 view of `w`'s element, is ended, while `vv`, the argument, and `w`, the owner,
 are kept. -/
 
+/-! `thruPre` is a step of its own, taken before the call, and not an effect
+of `CallT`: `call_alone_refused` refuses the call in `K`, and the call
+accepted in `K2`, `call_ok`, leaves `K2` as it is, `post_K2`. -/
+
 theorem pre_s2_dead : ∃ E', thruPre K [1] 2 = some E' ∧ E'.live = false :=
   thruPre_dead (r := 0) rfl (by decide) callR_vv rfl
 

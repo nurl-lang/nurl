@@ -135,9 +135,11 @@ theorem Step.held_not_killVarsZ {P : Prog} {m m' : Mem} {Γ : Ctx} {Z : Var → 
 
 /-! ### The frame clause across slot changes -/
 
-/-- **The frame clause across slot changes**: a changed slot in the domain
-    holds a clean value; a node a changed owned slot holds is clean, or is
-    what an old node at the same handle became, clean if that one was. -/
+/-- **The frame clause across slot changes**: a changed slot outside `D`
+    holds a clean value. A slot inside `D` is not checked as a whole, but a
+    node it holds that a handle from outside `D` reaches is: such a node is
+    clean, or is what an old node at the same handle became, clean if that
+    one was. -/
 theorem FrameCaps.of_changeR {m m' : Mem} {D : List Var} {w : Var} (h : FrameCaps m D w)
     (hval : ∀ x o V', x ∉ D → m'.st x = some ⟨o, some V'⟩ → m'.st x ≠ m.st x →
       ValCapsInp V' w ∧ ∀ c, Sub (.href c) V' → False)
@@ -162,8 +164,9 @@ theorem FrameCaps.of_changeR {m m' : Mem} {D : List Var} {w : Var} (h : FrameCap
 
 /-- **A change through a borrow keeps the frame clause**: the owner `r`'s
     tree `T` becomes `T'`, one node `n` in it replaced by `n'`. Where the
-    owner is in the domain its tree was clean, and stays so; a node of the new
-    tree is at an old node's address, clean if that one was. -/
+    owner is outside `D`, its tree was clean and stays so. A node of the new
+    tree is proved clean directly, or is at an old node's address, clean if
+    that one was. -/
 theorem FrameCaps.repl {m m' : Mem} {D : List Var} {w r : Var} {T T' n n' : Val}
     (h : FrameCaps m D w) (hT : m.st r = some ⟨true, some T⟩)
     (hrp : Repl n n' T T') (hr' : m'.st r = some ⟨true, some T'⟩) (hne : ∀ x, x ≠ r → m'.st x = m.st x)

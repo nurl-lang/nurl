@@ -14,9 +14,12 @@ A closure's code that changes elements through a borrow (`ThruFn`, Agora
 AGORA-395 `Implements` refused such code outright (`¬ ThruFn P f`) and
 `StmtT.callc` refused such an interface.  Now the code implements an
 interface that is through-changing itself, its environment holding no views
-and taken lent; a call through the package passes no argument that holds
-views (`CallT`'s `ThruFn P σ → callR … = []`), and `Stmt.calls` names the
-interface, so `ThruFn` follows the call.
+and taken lent. A call through the package passes no argument that holds
+views. That is not the general `CallT` rule, which since AGORA-937 B4 also
+admits route U's `CallThruOK`. The receiver is function-typed, and
+`CallThruOK` takes no closure argument, so a package call meets only the
+regions-only branch, and in a context with no region it has `callR … = []`.
+`Stmt.calls` names the interface, so `ThruFn` follows the call.
 
 A program of two functions:
 

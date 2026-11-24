@@ -329,42 +329,8 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
 
 
 
-/-- Setting a slot to a value no part of which captures `w` but read-only,
-    and whose handles reach clean nodes, keeps the clause: the live values
-    and the targets in the other slots are as they were, and every node in
-    the new value is clean. -/
-theorem LiveCaps.set {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {y : Var} {o : Bool}
-    {v : Option Val} (hv : ∀ V, v = some V → (∀ n, Sub n V → ValCapsInp n w) ∧
-      (∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
-        (∃ ty d es, n = .node ty c d es) → ValCapsInp n w)) :
-    LiveCaps (m.set y ⟨o, v⟩) Γ w := by
-  intro x E o1 V hx hl hs
-  -- a target in the slots after the set: in `y`'s new value, or where it was
-  have htgt : ∀ x' t n, (m.set y ⟨o, v⟩).st x' = some ⟨true, some t⟩ → Sub n t →
-      (m.st x' = some ⟨true, some t⟩) ∨ ValCapsInp n w := by
-    intro x' t n hx' hsn
-    by_cases hxy : x' = y
-    · subst hxy; simp at hx'; obtain ⟨_, rfl⟩ := hx'; exact Or.inr ((hv t rfl).1 n hsn)
-    · simp [upd_ne _ _ hxy] at hx'; exact Or.inl hx'
-  have hcl : ∀ V', (∀ c, Sub (.href c) V' → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
-      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) →
-      ∀ c, Sub (.href c) V' → ∀ x t n, (m.set y ⟨o, v⟩).st x = some ⟨true, some t⟩ → Sub n t →
-        (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
-    intro V' h2 c hc x' t n hx' hsn hnd
-    rcases htgt x' t n hx' hsn with hx'' | hn
-    · exact h2 c hc x' t n hx'' hsn hnd
-    · exact hn
-  by_cases hxy : x = y
-  · subst hxy
-    simp at hs; obtain ⟨_, rfl⟩ := hs
-    obtain ⟨hsub, hnh⟩ := hv V rfl
-    exact ⟨hsub V (Sub.refl _), hcl V hnh⟩
-  · simp [upd_ne _ _ hxy] at hs
-    obtain ⟨h1, h2⟩ := h x E o1 V hx hl hs
-    exact ⟨h1, hcl V h2⟩
-
-/-- ... and so does setting the slot of a binding the context changes:
-    every other live binding was a live one before. -/
+/-- Setting the slot of a binding the context changes keeps the clause,
+    where every other live binding was a live one before. -/
 theorem LiveCaps.setG {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) {y : Var} {o : Bool}
     {v : Option Val}
     (hb : ∀ x E1, x ≠ y → Γ' x = some E1 → E1.live = true → ∃ E0, Γ x = some E0 ∧ E0.live = true)
@@ -396,6 +362,17 @@ theorem LiveCaps.setG {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) {
     obtain ⟨E0, h0, hl0⟩ := hb x E hxy hx hl
     obtain ⟨h1, h2⟩ := h x E0 o1 V h0 hl0 hs
     exact ⟨h1, hcl V h2⟩
+
+/-- ... and so does setting a slot to a value no part of which captures `w` but read-only,
+    and whose handles reach clean nodes, keeps the clause: the live values
+    and the targets in the other slots are as they were, and every node in
+    the new value is clean. -/
+theorem LiveCaps.set {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {y : Var} {o : Bool}
+    {v : Option Val} (hv : ∀ V, v = some V → (∀ n, Sub n V → ValCapsInp n w) ∧
+      (∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+        (∃ ty d es, n = .node ty c d es) → ValCapsInp n w)) :
+    LiveCaps (m.set y ⟨o, v⟩) Γ w :=
+  h.setG (fun x E1 _ hx hl => ⟨E1, hx, hl⟩) hv
 
 theorem LiveCaps.set_none {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (y : Var) (o : Bool) :
     LiveCaps (m.set y ⟨o, none⟩) Γ w :=
@@ -1621,10 +1598,14 @@ theorem RhsT.readsCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : 
 
 /-! ### The frame clause (AGORA-937 B4, frame-relative)
 
-A borrowed parameter's held anchor `w` is captured but read-only by no
-package in any slot of the parameter's frame (outside the frame's frozen
-list `D`), live or dead: the frame's code never names `w`, so it makes no
-package capturing it inout (`THRU_STAGE3_DESIGN.md`). -/
+A borrowed parameter watches two sets of roots (`Watch`, FrameClause.lean):
+its held anchors' roots, and every name of its frame list `D = Z p`, even one
+it holds no anchor on. At each such root `w`, no package in a slot outside
+`D`, live or dead, captures `w` but read-only. For a listed name, that keeps
+a call through such a package from changing a listed binding behind the
+frame's back. Apart from this, the statement under the parameter names
+nothing in `D`: `HeldZ.reach`, over `(s.under p).killVars`
+(`THRU_STAGE3_DESIGN.md`). -/
 
 /-- **The frame clause**: every slot outside `D` meets `LiveGood m w`. -/
 def FrameCaps (m : Mem) (D : List Var) (w : Var) : Prop :=

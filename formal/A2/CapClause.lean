@@ -3,9 +3,10 @@ import A2.KillVarsStep
 namespace A2
 
 /-! AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
-root (not lent out) is captured by no package in the store but read-only,
-so a call through a package never hands it to an `inout` parameter of the
-code (`CapInout`), and a step names it as no new killable name. By
+root is captured by no package in a live slot but read-only (a dead slot may
+keep a package with an `inout` capture). So a call through a package whose
+receiver is live (`hlive`) never hands the root to an `inout` parameter of
+the code (`CapInout`), and a step names it as no new killable name. By
 claude-expert. -/
 
 /-- AGORA-937 B2 (AGORA-963): an opened call's argument at a capture's

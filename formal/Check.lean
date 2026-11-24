@@ -620,7 +620,8 @@ import D
 #print axioms A2.InoutViewArgWitness.main_no_leak
 #print axioms A2.InoutViewArgWitness.call_refused
 -- (A2/HeldViewThruWitness.lean, AGORA-933): a callee changing a Vec reached through a slice its
--- parameter holds is through-changing, and no call of it passes an argument holding views
+-- parameter holds is through-changing; a call of it is refused with `s2` live, alongside the
+-- argument or after the call (`call_ok` below types `( f1 vv )` with `s2` dead)
 #print axioms A2.HeldViewThruWitness.call_refused
 #print axioms A2.HeldViewThruWitness.call_alone_refused
 -- (A2/ThruPre.lean, AGORA-937 stage 3a): what a through-changing call that passes views of real
@@ -825,8 +826,9 @@ import D
 #print axioms A2.RSetup.outHeld_canon_fix
 #print axioms A2.RSetup.callT_ren
 -- AGORA-937 (turn-on 2): CallT's ThruFn premise asks only that the arguments' roots are
--- regions; where no binding is a region (MInv.noRegion) it is the old one, so a call of a
--- through-changing function passes no views and its regions stand for nothing; the lift
+-- regions or (route U, AGORA-937 B4) meet CallThruOK; where no binding is a region
+-- (MInv.noRegion), its regions-only branch is the old premise, so such a call passes no views and
+-- its regions stand for nothing (`call_root_not_region` refutes that branch only); the lift
 -- of a call in the body that passes views of regions passes none (A2/RegionThruWitness.lean)
 #print axioms A2.thru_call
 #print axioms A2.callR_regions_of_nil

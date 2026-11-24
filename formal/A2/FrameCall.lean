@@ -5,6 +5,20 @@ namespace A2
 
 /-! ### The call opens a frame meeting the clause -/
 
+/-- What an argument holds by a name that may change its binding is among
+    the call's `mutNames`. -/
+theorem mutNames_of_held {Γ : Ctx} {args : List Var} {a : Var} {d0 : Dep} (ha : a ∈ args)
+    (hat : (argE Γ a).ty ≠ .int) (hd0 : d0 ∈ (argE Γ a).held) (hb : d0.kind.bound ≠ .none) :
+    d0 ∈ mutNames Γ args := by
+  have hname : d0.kind.isName = true := by
+    cases hk : d0.kind <;> simp_all [Kind.bound, Kind.isName]
+  simp only [mutNames, List.mem_filter]
+  refine ⟨?_, by simpa using hb⟩
+  simp only [argNames, List.mem_flatMap]
+  refine ⟨a, ha, ?_⟩
+  simp only [hat, ↓reduceIte, nameDeps, List.mem_filter]
+  exact ⟨by simp [Entry.vdeps, hd0], hname⟩
+
 /-- **No argument holds a mutating name on a root another argument
     depends on with no bound** (`NamesFree`): a mutating name on it would be
     a root of `mutNames`, whose every argument dependency on it has its bound. -/
@@ -18,15 +32,7 @@ theorem NamesFree.noMut {Γ : Ctx} {F : List Var} {ps : List (PMode × Ty)} {arg
   | none => rfl
   | _ =>
     exfalso
-    have hname : d0.kind.isName = true := by
-      cases hk : d0.kind <;> simp_all [Kind.bound, Kind.isName]
-    have hmem : d0 ∈ mutNames Γ args := by
-      simp only [mutNames, List.mem_filter]
-      refine ⟨?_, by simp [hb]⟩
-      simp only [argNames, List.mem_flatMap]
-      refine ⟨a, ha, ?_⟩
-      simp only [hat, ↓reduceIte, nameDeps, List.mem_filter]
-      exact ⟨by simp [Entry.vdeps, hd0], hname⟩
+    have hmem : d0 ∈ mutNames Γ args := mutNames_of_held ha hat hd0 (by rw [hb]; simp)
     obtain ⟨_, _, _, _, hsame, _⟩ := hnf d0 hmem
     have := hsame vv hvv (Or.inl hvt) d hd (hr ▸ rfl)
     rw [hdk, hb] at this; cases this
@@ -119,20 +125,6 @@ theorem mem_callZ {Γ : Ctx} {fn : Fn} {args : List Var} {base : Nat} {v : Var}
     v < base ∧ v ∉ inoutArgs fn.params args ∧ v ∉ (mutNames Γ args).map (·.root) := by
   obtain ⟨h1, h2⟩ := List.mem_filter.mp hv
   refine ⟨List.mem_range.mp h1, fun h => ?_, fun h => ?_⟩ <;> simp_all
-
-/-- What an argument holds by a name that may change its binding is among
-    the call's `mutNames`. -/
-theorem mutNames_of_held {Γ : Ctx} {args : List Var} {a : Var} {d0 : Dep} (ha : a ∈ args)
-    (hat : (argE Γ a).ty ≠ .int) (hd0 : d0 ∈ (argE Γ a).held) (hb : d0.kind.bound ≠ .none) :
-    d0 ∈ mutNames Γ args := by
-  have hname : d0.kind.isName = true := by
-    cases hk : d0.kind <;> simp_all [Kind.bound, Kind.isName]
-  simp only [mutNames, List.mem_filter]
-  refine ⟨?_, by simpa using hb⟩
-  simp only [argNames, List.mem_flatMap]
-  refine ⟨a, ha, ?_⟩
-  simp only [hat, ↓reduceIte, nameDeps, List.mem_filter]
-  exact ⟨by simp [Entry.vdeps, hd0], hname⟩
 
 /-- **An argument's value meets the clause at a root outside the call's
     `mutNames`**: it holds it by no name that may change it. -/

@@ -2120,8 +2120,12 @@ theorem mutNames_open {Γ : Ctx} {e c : Var} {Ec : Entry} {te : Ty} {zs : List V
     · cases hda
     · rw [(hcv ci hci).2] at hda; cases hda
 
-/-- The `ThruFn` guard of a call (Agora #295): into code that changes
-    elements through a borrow, no argument holds views. -/
+/-- The `ThruFn` guard of a call (Agora #295), in a context with no region:
+    into code that changes elements through a borrow, either no argument
+    holds views (the regions-only branch, `callR = []`) or the call meets
+    route U's `CallThruOK`, whose `callR` may not be empty
+    (`HeldViewThruWitness.call_ok`, `callR = [0]`). A package call rules
+    out the second branch by its function-typed receiver. -/
 theorem CallT.thru {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
     {Γ' : Ctx} (h : CallT P Γ F f args E Γ') (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region)
     {fn : Fn} (hf : P[f]? = some fn) :

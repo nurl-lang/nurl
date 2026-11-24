@@ -14,9 +14,11 @@ premise it was handed no views, and `π vv` stands for nothing in that
 frame (`CallH.σ_nil_of_thru`); the lift of the inner call passes none
 (`RSetup.callR_canon`).
 
-A real memory root is no region (`call_root_not_region`): in `g`'s body a
-binding `vv2` holding a view of a local `w` is handed to `f` only by route
-U's `CallThruOK` (AGORA-937, `HeldViewThruWitness`). -/
+A real memory root is no region (`call_root_not_region`): `( f vv2 )`, with
+`vv2` holding a view of a local `w`, does not meet the regions-only branch.
+This witness shows only that. It does not show that `f` changes `w` (its body
+uses slots 2 and 3 unbound). The positive `CallT` witness for route U is
+`HeldViewThruWitness.call_ok`. -/
 
 namespace A2.RegionThruWitness
 
@@ -98,9 +100,9 @@ theorem callR_root : 2 ∈ callR K [3] := by
 
 /-- **A view of memory is no region**: `( f vv2 )` does not type by the
     regions-only branch of `CallT`'s `ThruFn` premise, `w` being no region.
-    Before route U this was its refusal. Route U (AGORA-937) types it by
-    `CallThruOK`: `f` changes only inside `w`'s elements, and nothing live
-    after the call reaches inside them. -/
+    Before route U this was its refusal. Whether route U's `CallThruOK`
+    branch types it is not shown here (see `HeldViewThruWitness.call_ok` for
+    a call it types). -/
 theorem call_root_not_region : ¬ ∀ r ∈ callR K [3], ∃ E, K r = some E ∧ E.mode = .region := fun h => by
   obtain ⟨E', hE', hm⟩ := h 2 callR_root
   simp [K, setE, upd] at hE'
