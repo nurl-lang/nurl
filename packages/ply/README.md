@@ -36,6 +36,25 @@ hand. A writer whose last owner lets go of it without `ply_finish` is
 finished then (flushed, count patched, closed) — call `ply_finish` to
 learn whether the file can be trusted.
 
+## Reading
+
+```
+$ `deps/ply/src/read.nu`
+
+?? ( ply_read `cloud.ply` ) {
+    T c → { /* . c n points; . c xyz 3 a point; . c rgb 3 bytes a point, or empty */ }
+    F e → { ( nurl_print ( string_data e ) ) }
+}
+```
+
+`ply_read` reads a whole PLY point cloud into memory. It accepts ascii or
+binary little-endian files whose vertex element comes first; a mesh's faces
+after the vertices are ignored. x, y and z may be any scalar type.
+Colours (`red`/`green`/`blue` or `diffuse_*`) are read when present: integers
+as 0..255, floats as 0..1. Other properties are skipped. Big-endian files, a
+list property in the vertex element, and a body shorter than the header
+declares are refused with the reason.
+
 ## The viewer
 
 One self-contained WebGL2 page, compiled into the binary (an installed
