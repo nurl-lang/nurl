@@ -342,7 +342,12 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   heldCaps p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
-    rw [hwe.fixed (Or.inl hm')]; exact hi.heldCaps p E hE hm'
+    rw [hwe.fixed (Or.inl hm')]
+    -- (a weaker context ends bindings at most: `EntryWeaker.live`)
+    intro hps d hd hb hh hF
+    exact (hi.heldCaps p E hE hm' hps d hd hb hh hF).of_back fun v E1 hv1 hl1 => by
+      obtain ⟨E0, h0, hw0⟩ := hw.get' hv1
+      exact ⟨E0, h0, (hw0.live hl1).1⟩
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf hi.names

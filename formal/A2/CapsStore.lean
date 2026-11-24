@@ -25,17 +25,17 @@ theorem CapsInpAt.pay {m : Mem} {w : Var} (h : CapsInpAt m w) {k : Nat} {bl : Bl
     (hk : m.blk k = some bl) (hp : bl.pay = some V) : ValCapsInp V w :=
   h.2 k bl V hk hp
 
-/-- `HeldCapsInp` is its premises on the held anchor and `CapsInpAt` of its
+/-- `HeldCapsInp` is its premises on the held anchor and `LiveCaps` of its
     root. -/
 theorem heldCapsInp_iff {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} :
     HeldCapsInp m Γ F s ↔
       ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-      ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → CapsInpAt m d.root :=
+      ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → LiveCaps m Γ d.root :=
   Iff.rfl
 
-/-- `HeldCapsInp` from `CapsInpAt` of every root it asks about. -/
+/-- `HeldCapsInp` from `LiveCaps` of every root it asks about. -/
 theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
-    (h : HeldCapsInp m Γ F s) (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ F s :=
+    (h : HeldCapsInp m Γ F s) (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ w) : HeldCapsInp m' Γ F s :=
   fun p E hp hm hps d hd hb hh hF => hc _ (h p E hp hm hps d hd hb hh hF)
 
 /-- ... carried to a step's result where the borrowed parameters outside the
@@ -44,7 +44,7 @@ theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
 theorem HeldCapsInp.step_of {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt}
     (h : HeldCapsInp m Γ F s)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
-    (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ' F s' :=
+    (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ' w) : HeldCapsInp m' Γ' F s' :=
   fun p E hp hm hps d hd hb hh hF => by
     obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
     exact hc _ (h p E h0 hm hps0 d hd hb hh hF)
