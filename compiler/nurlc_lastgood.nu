@@ -47865,7 +47865,10 @@ unsafe @ __is_fall_value_stmt i lex i syms i tt → b {
         ( skip_balanced lex )
         ^ T
     } {}
-    ? | == tt TT_BACKSLASH == tt TT_SIZEOF { ^ F } {}
+    // (`sizeof T` is one value: the keyword and the type it measures, as
+    // __ar_operand reads it.)
+    ? == tt TT_SIZEOF { ( nurl_lex_advance lex ) ( skip_one_type lex ) ^ T } {}
+    ? == tt TT_BACKSLASH { ^ F } {}
     : i n ( __cs_arity lex tt )
     ? < n 0 { ^ F } {}
     ( nurl_lex_advance lex )

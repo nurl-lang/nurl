@@ -318097,8 +318097,8 @@ and_end_2:
 define i1 @__nurl_fn.__skip_one_value__fp2(i64 %lex) sanitize_address {
 entry:
   %r1 = alloca i64
-  %r29 = alloca i64
-  %r32 = alloca i64
+  %r28 = alloca i64
+  %r31 = alloca i64
   %r0 = call i64 @__nurl_fn.nurl_lex_type(i64 %lex)
   store i64 %r0, i64* %r1
   %r2 = load i64, i64* %r1
@@ -318185,53 +318185,56 @@ else_23:
   br label %end_24
 end_24:
   %r22 = load i64, i64* %r1
-  %r23 = icmp eq i64 %r22, 38
-  br i1 %r23, label %or_end_29, label %or_right_28
-or_right_28:
-  %r24 = load i64, i64* %r1
-  %r25 = icmp eq i64 %r24, 36
-  br label %or_end_29
-or_end_29:
-  %r26 = phi i1 [ 1, %end_24 ], [ %r25, %or_right_28 ]
-  br i1 %r26, label %then_30, label %else_31
-then_30:
-  ret i1 0
-else_31:
-  br label %end_32
-end_32:
-  %r27 = load i64, i64* %r1
-  %r28 = call i64 @__nurl_fn.__cs_arity__fp2(i64 %lex, i64 %r27)
-  store i64 %r28, i64* %r29
-  %r30 = load i64, i64* %r29
-  %r31 = icmp slt i64 %r30, 0
-  br i1 %r31, label %then_33, label %else_34
-then_33:
-  ret i1 0
-else_34:
-  br label %end_35
-end_35:
+  %r23 = icmp eq i64 %r22, 36
+  br i1 %r23, label %then_28, label %else_29
+then_28:
   call void @__nurl_fn.nurl_lex_advance(i64 %lex)
-  store i64 0, i64* %r32
-  br label %loop_check_36
-loop_check_36:
-  %r33 = load i64, i64* %r32
-  %r34 = load i64, i64* %r29
-  %r35 = icmp slt i64 %r33, %r34
-  br i1 %r35, label %loop_body_37, label %loop_exit_38
-loop_body_37:
-  %r36 = call i1 @__nurl_fn.__skip_one_value__fp2(i64 %lex)
-  %r37 = xor i1 %r36, 1
-  br i1 %r37, label %then_39, label %else_40
-then_39:
+  call void @__nurl_fn.skip_one_type(i64 %lex)
+  ret i1 1
+else_29:
+  br label %end_30
+end_30:
+  %r24 = load i64, i64* %r1
+  %r25 = icmp eq i64 %r24, 38
+  br i1 %r25, label %then_31, label %else_32
+then_31:
   ret i1 0
-else_40:
-  br label %end_41
-end_41:
-  %r38 = load i64, i64* %r32
-  %r39 = add i64 %r38, 1
-  store i64 %r39, i64* %r32
-  br label %loop_check_36
-loop_exit_38:
+else_32:
+  br label %end_33
+end_33:
+  %r26 = load i64, i64* %r1
+  %r27 = call i64 @__nurl_fn.__cs_arity__fp2(i64 %lex, i64 %r26)
+  store i64 %r27, i64* %r28
+  %r29 = load i64, i64* %r28
+  %r30 = icmp slt i64 %r29, 0
+  br i1 %r30, label %then_34, label %else_35
+then_34:
+  ret i1 0
+else_35:
+  br label %end_36
+end_36:
+  call void @__nurl_fn.nurl_lex_advance(i64 %lex)
+  store i64 0, i64* %r31
+  br label %loop_check_37
+loop_check_37:
+  %r32 = load i64, i64* %r31
+  %r33 = load i64, i64* %r28
+  %r34 = icmp slt i64 %r32, %r33
+  br i1 %r34, label %loop_body_38, label %loop_exit_39
+loop_body_38:
+  %r35 = call i1 @__nurl_fn.__skip_one_value__fp2(i64 %lex)
+  %r36 = xor i1 %r35, 1
+  br i1 %r36, label %then_40, label %else_41
+then_40:
+  ret i1 0
+else_41:
+  br label %end_42
+end_42:
+  %r37 = load i64, i64* %r31
+  %r38 = add i64 %r37, 1
+  store i64 %r38, i64* %r31
+  br label %loop_check_37
+loop_exit_39:
   ret i1 1
 }
 
