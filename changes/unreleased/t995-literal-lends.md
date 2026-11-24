@@ -9,6 +9,10 @@
   - toml's internal `__valresult_ok` and `__keyresult_ok`, and nurldb's `__tok`, take their value as `sink`.
   - The hole probes and compiler tests that tested the take-over (h205, h207, agora #160 and #362) now write `sink`.
 
+- **Breaking: an `in` option's payload handed back by a match is lent** (AGORA-995, D4c). `^ ?? o { T x → x F → ( mk ) }` and `: String r ?? o { … }  ^ r` now lend the caller's option on the path that hands the payload back, and the result is the caller's own on the path that makes a fresh value, as `?? o { T x → { ^ x } … }` written in the arm always did. The caller keeps its option. Before, the parameter was taken over (an inferred `sink`), so reading the option after the call was refused ("use of moved value").
+  - **Migration:** code that released the result (`( string_free s )`) or let it outlive the option is now refused with "'s' is a borrow …" or "'s' borrows from 'o'". Copy it where it must outlive the option, or declare the parameter `sink`.
+  - A `:` binding of a `?` / `??` that lends only what the caller lent, such as `: String r ? c p ( mk )  ^ r` or a join of two parameters' elements, is handed back lent the same way, as the join handed back directly always was. Before, it was copied on the runs it lent. A caller that changes the argument while it holds such a result is now refused; copy the result where it must outlive the change (`( string_from ( string_data r ) )`).
+
 ### Performance
 
 - **A local handed back whole through a lending call is handed over, not copied** (AGORA-995). This covers `^ ( id s )`, `^ ( wrap s )` with `wrap` returning `@ K { p 0 }`, and `: K k ( wrap s ) … ^ k`, where `s` is a local of the function. `s`'s value becomes the result, with no copy and no release. Before, the String or struct was copied and the local released.

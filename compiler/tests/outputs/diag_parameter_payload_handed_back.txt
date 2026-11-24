@@ -1,12 +1,12 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_parameter_payload_handed_back.nu:23:5: error: use of moved value 'o' — a heap handle has exactly one owner, and this one was consumed at line 22 by by_match. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+compiler/tests/diag_parameter_payload_handed_back.nu:26:5: error: 's' borrows from 'o', which ended at line 25 — it was given a new value. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 's' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup s ).
+    ( nurl_println ( string_data s ) )
+    ^
+compiler/tests/diag_parameter_payload_handed_back.nu:32:5: error: use of moved value 'o' — a heap handle has exactly one owner, and this one was consumed at line 31 by by_cursor. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
     ^
-compiler/tests/diag_parameter_payload_handed_back.nu:29:5: error: use of moved value 'o' — a heap handle has exactly one owner, and this one was consumed at line 28 by by_cursor. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
-    ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
-    ^
-compiler/tests/diag_parameter_payload_handed_back.nu:35:5: error: use of moved value 'o' — a heap handle has exactly one owner, and this one was consumed at line 34 by by_generic. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
-    ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
+compiler/tests/diag_parameter_payload_handed_back.nu:38:5: error: 's' is a borrow (a vec_get result, a field read, a view of something another binding owns) and is released or handed over here as if it owned the value. The owner still holds and releases it. Take a copy that is yours where it is bound: ( mem_dup s ), or release the value through its owner — when that owner is a parameter of this function, declare the parameter 'sink' so the function owns it.
+    ( string_free s )
     ^
 error: compilation aborted — 3 borrow-checker violations (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

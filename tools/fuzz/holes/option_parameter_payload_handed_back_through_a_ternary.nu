@@ -1,7 +1,8 @@
 // option_parameter_payload_handed_back_through_a_ternary: as h408, the `??` an arm of a `?` the function hands back.
 // Closed: as h408 (agora #146).
 // v0.80.0: accepted; AddressSanitizer reported heap-use-after-free.
-// map: CallT.sink | A1 | rejected | h411 | as h408, through a ternary
+// Since AGORA-995 (D4c) the payload is lent back, per call, as `^ x` inside the arm is: the caller keeps its option, and releasing the result is refused as a borrow released ("'s' is a borrow … released or handed over").
+// map: §7.6 | A2 | rejected | h411 | as h408, through a ternary
 $ `stdlib/core/string.nu`
 
 @ mk → String { ^ ( string_from `a string long enough to own a heap buffer here` ) }

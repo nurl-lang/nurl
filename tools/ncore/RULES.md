@@ -74,7 +74,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A temporary a call hands back whole is the result's, also where the result holds it as a field (`( wrap ( mk ) )` with `wrap` handing back `@ K { p }`): what the temporary held sits in that field | §1 (temporaries), D4c | `apply_call` (`whole`, `whole_at`) |
 | `^ ( g x )` where `g` lends only `x`, whole, and `x` is a local the function owns: `x` moves into the result, and nothing is copied or refused. Not under a `;` block, and not in a closure's body (nurlc's `__ret_local_hand` / `__bind_hand`) | §7.6 (D4c, AGORA-995) | `ret` (`call_lent_only`) |
 | The literal a `\` try hands its failure on in (variable flag 128) passes a failure that cannot be copied on whole: a lend as the call lent it, as `^` of the call's result would (nurlc's `mem_store_hown`). A literal written `@ !T E { F e }` around such a lend still copies, and is refused | §7.6 (agora #205) | `rvalue` (`agg`: `handon`) |
-| The payload of an `in` parameter's option or result, handed back as the value of the `??` over it, takes the caller's argument: the result is the caller's own on that path. Handed back by name inside the arm, or out of an enum of the program's, it is lent | §7.6 (h408–h415) | `ret` |
+| The payload of an `in` parameter's option or result, handed back as the value of the `??` over it, or by a `:` binding given that value whole, is lent, as `^ x` inside the arm is: the function answers per call (owned on the paths that make a fresh value), and the caller keeps its option (D4c, AGORA-995; before, it took the caller's argument as a `sink` would, h408–h415) | §7.6 | `ret` |
 | A function that hands a parameter to a callee that detaches it detaches its argument | §2.7 | `s_detaches` |
 | A call's effects come before its stores; a consumed argument is moved | §2.1 | `apply_call` |
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
@@ -160,7 +160,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | …and the owners a `ret`'s join or value block moves out (`^ { … l }`, `^ ? c l m`) are still read by the `;` blocks that run before the result leaves the frame, as for `^ l`: a block that releases or changes one is refused | §7.1, §7.2 (agora #197) | `stmt` (`ret`): `ret_watch_selected` |
 | A binding that owns its value by a flag (a store's hand-over, a join) kept by value: the value goes over on the runs that own it and a copy on the others, and the binding goes on holding a handle of where it went or of what it lent. A store's hand-over goes to a reader one of whose places is the place replaced: the handle's identity tells at run time | §7.6 (agora #265) | `apply_call` stores, `handover` |
 | A `?` / `??` bound by `:` that selects fields of a local is a second name of them (the local keeps them), not a move; one whose other arms lend the caller's values moves the whole owners of this frame it selects on their paths and lends on the others (owned by a flag) | §2.2, §7.6 (agora #360, #242) | `stmt` (`let`) |
-| An immutable binding of a `?` / `??` join handed back is copied on the runs where it lends, where its type has a copy (nurlc's owner flag, `cloneif`): the caller is handed its own. Not one that lends a payload (an `in` parameter's option's: h408-h409) | §7.6 (agora #335) | `transfer` (`FX_JOIN_VAR`) |
+| An immutable binding of a `?` / `??` join handed back is copied on the runs where it lends a value of this frame (a local, a part of one: nurlc's `__llocal`), where its type has a copy (nurlc's owner flag, `cloneif`): the caller is handed its own. One that lends only what the caller lent (a parameter, an `in` option's payload) hands it back lent, per call, as the join handed back directly does (D4c, AGORA-995) | §7.6 (agora #335) | `transfer` (`FX_JOIN_VAR`) |
 | A part of an arm's payload of an enum of the program's handed to a callee that takes it is copied, where it has a copy: the match lends the payload, which its enum goes on holding | §7.6 (agora #357, #559) | `apply_call` |
 | A library getter's slot over a parameter's container, named in a literal, is taken out of the slot as one over a local's is (a change to the container's elements); one over a local's container handed back bare, with no copy, is taken out of its slot | §7.6 (agora #204, #209) | `rvalue` (`agg`), `transfer` |
 | A join that is its value block's tail, an arm of which lent a local of the block: the block's end moves the local into the join's value on that arm's path. Such a block handed back is still refused where the value has no copy (agora #188) | §7.6 (agora #807) | `stmt` (`assign` to a block's temporary) |
@@ -330,14 +330,13 @@ answer (its `sum` line) follows how it is written. The checker copies
 each, so that the probes agree; an engine that decides the drops itself
 (stage S3) can give one answer for all of them, and which is D4 too.
 The owner's D4c (#4173) is "lent" in every spelling: the literal
-spellings are lent since AGORA-995, in nurlc and in the checker; the
-`??` payload of an option and the bound literal (`: K k @ K { p }`) are
-the rest of that task.
+spellings and the `??` payload of an option are lent since AGORA-995, in
+nurlc and in the checker; the bound literal (`: K k @ K { p }`) is the
+rest of that task.
 
 | written | nurlc's answer | the caller's argument |
 |---|---|---|
-| `^ p`, `^ . p f`, `?? p { V x → { ^ x } }`, `^ ?? e { V x → x … }` over an enum of the program's, `^ @ ?T { T p }` | lent (`retpart`, `ret_borrow`, per call where another path is fresh) | stays the caller's; the result borrows it |
-| `^ ?? o { T x → x F → … }`, `o` an option or a result | taken (`sink`, `keeps`): h408–h415 | moved into the call |
+| `^ p`, `^ . p f`, `?? p { V x → { ^ x } }`, `^ ?? e { V x → x … }` over an enum of the program's, `^ @ ?T { T p }`; `^ ?? o { T x → x F → … }` and `: r ?? o {…}  ^ r`, `o` an option or a result, D4c since AGORA-995 | lent (`retpart`, `ret_borrow`, per call where another path is fresh) | stays the caller's; the result borrows it |
 | `^ @ K { p }`, `^ @ E { V p }`, `^ @ ?K { T @ K { p } }`, `^ @ KK { @ K { p } }` | lent (`retlend`, `ret_borrow`, lend kind 1), D4c since AGORA-995; kept (`keeps`) where the literal holds a value of its own beside `p` | stays the caller's; moved into the call beside an own field |
 | `: K k @ K { p }` then `^ k`; `( vec_push out @ K { p } )`; `= . o f @ K { p }` | a copy of `p` is made | stays the caller's |
 
