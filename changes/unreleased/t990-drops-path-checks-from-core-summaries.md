@@ -226,3 +226,7 @@
 - A pointer read out of a global is what was stored there, not the global:
   it counts as outside the frame only when every store into that global in
   the function is.
+- An integer handed to a call may be one of the frame's own pointers turned
+  into one (`ptrtoint`): where the frame does that to a pointer not traced
+  outside, the pointer such a call returns is not taken for outside storage.
+  11 corpus functions move from validated to unsupported (98054 / 7888 / 0).

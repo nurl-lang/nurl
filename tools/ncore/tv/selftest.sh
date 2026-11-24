@@ -393,6 +393,13 @@ awk "$lf"'{m=1} m && /^}/{m=0}
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lglob.ll"
 grep -q "load ptr, ptr @.tv_g" "$TMP/lglob.ll" || { echo "FAIL: the global round-trip edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_frame_slot_read_back_out_of_a_global __nurl_fn.mk "$TMP/lglob.ll" --sums "$TMP/l.core"
+# the same store through a pointer a call returned from an integer: the
+# frame's own slot as `ptrtoint`, which the callee may turn back
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = ptrtoint ptr %r7 to i64"; print "  %kp = call ptr @__nurl_fn.ptr_of(i64 %ki)"
+      print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lint.ll"
+grep -q "ptrtoint ptr %r7 to i64" "$TMP/lint.ll" || { echo "FAIL: the ptrtoint edit did not apply"; fail=1; }
+nv a_literal_stored_through_a_pointer_a_call_returned_from_the_frames_slot_as_an_integer __nurl_fn.mk "$TMP/lint.ll" --sums "$TMP/l.core"
 # field 0, which holds the first clone, replaced in the literal returned:
 # the result does not carry that clone
 awk "$lf"'{m=1} m && /^}/{m=0}
