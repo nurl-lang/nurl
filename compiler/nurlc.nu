@@ -9101,6 +9101,9 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // copied whatever the function answers (no lend either way).
     : ~ i __ret_bcopy 0
     : ~ b ret_call_copied F
+    // (…and copied on every run that lent: the result is this function's
+    // own on every run, so it hands back no argument either - agora #1004)
+    : ~ b ret_call_owned_all F
     // (A closure-returning call's result that its callee may have lent is
     // copied on the way out where it was, mem_retclo_own_result's
     // __clo_tmp_settle: this function hands back its own, and lends
@@ -9223,6 +9226,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             = val ( mem_emit_cloneif cg __crt val rb )
             = hbit ( nurl_str_cat `true` `` )
             = ret_call_copied T
+            = ret_call_owned_all T
         } {}
         ? & & ! ret_call_copied ! ( seq hbit `true` ) & != 0 ( nurl_str_len __rll ) ( __clone_supported __crt syms ) {
             : s rb2 ( nurl_cg_reg cg )
@@ -10252,7 +10256,11 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // though the return is not a bare identifier. Ownership only — the
     // §2.8 refdepth summary above deliberately stays on the strict
     // `^ p` form, so no escape diagnostic moves because of this.
-    : ~ s __ra_rest ( nurl_sym_get syms `__last_phi_idents__` )
+    // (…not where the call's result was copied on every run that lent:
+    // what goes back is this function's own, and naming the arguments the
+    // call could hand back made the caller take the copy for a lend of
+    // them, which it never released - agora #1004.)
+    : ~ s __ra_rest ? ret_call_owned_all `` ( nurl_sym_get syms `__last_phi_idents__` )
     ~ != 0 ( nurl_str_len __ra_rest ) {
         : s __ra_w ( str_first_word __ra_rest )
         = __ra_rest ( str_skip_word __ra_rest )
