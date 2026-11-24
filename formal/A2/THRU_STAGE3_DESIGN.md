@@ -1064,3 +1064,29 @@ The liveness clause exists only to let the call establish the store-wide `CapsIn
 - the lift then needs only what the renaming keeps.
 
 So the next piece of work is the frame-relative clause, and the clause's removal from `CallThruOK`.
+
+**The frame-relative clause, as lemmas (plan).** `EvalR.capsInp` reads three kinds of place:
+- slots of the right-hand side's variables;
+- nodes found through a borrow or a view (`SlotsCaps.vecOf` / `.dataAt`), which can lie in any slot's tree;
+- blocks, which are already free (`MInv.rdCapsInp`).
+
+So the clause is "every slot is safe except a set `D`": `CapsExcept m w D := (∀ x ∉ D, ∀ o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w) ∧ blocks`.
+- At a route-U call, `D` is the caller's dead closure-typed slots.
+- Every other slot is safe at entry:
+  - `noPkg` covers types without closures;
+  - `NamesIn` covers live closures, with `CallThruOK`'s "no mutating name on `w`";
+  - `w`'s own tree has no closures, since its type holds no views.
+
+The steps inside the frame keep it:
+- **Writes** go to slots at or above the base, or to `inout` arguments. Both are live, so neither is in `D`.
+- **Reads** never touch `D`:
+  - the statement's variables are callee variables, `inout` arguments, or captured names, and captured names are live (`CapsOK`);
+  - nodes reached through a borrow or view lie in a root the reaching entry depends on (`Landed` / `RootNode`);
+  - a live entry's roots are bound root-mode entries (`CtxWF.live`). Dead closure roots are needed here: a live view of a closure's environment would have to be ended when the closure died. That is the one fact still to check.
+
+Lemmas:
+1. `EvalR.capsExcept`: `EvalR.capsInp` with `SlotsCaps` replaced by `CapsExcept` and a premise that the evaluation reads outside `D` (`EvalR.ReadsOut m r D`).
+2. `RhsT.readsOut`: a typed right-hand side, under `MInv`, reads outside the dead slots.
+3. `Step.capsExcept`, the twin of `Step.slotsCaps`.
+4. `Inv.heldCaps` restated with `∃ D`, all members dead closure-typed slots below the frame. The spine exclusion and `∉ F` go.
+5. Remove `CallThruOK`'s "closure-typed bindings live", then discharge the two scaffolds.
