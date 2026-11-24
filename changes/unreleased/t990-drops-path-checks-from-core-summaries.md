@@ -124,6 +124,53 @@
     both times. Five functions move from validated to unsupported. Three
     read a field (`extractvalue`) of a value still owed, and two are
     clone-only functions whose loop is not followed.
+- **The drop validator no longer accepts eight more codegen mistakes**
+  (#2242 review, fourth round). Where a construct is rare, it is now
+  reported unsupported rather than modelled. Each one is a mutation of real
+  nurlc output in `tools/ncore/tv/selftest.sh`, accepted before and refused
+  now:
+  - A function whose only ownership operation is a release by value
+    (`__dropifv_T`) is checked. Only a function with no drop flag, release,
+    clone, journal entry or `sink` call is skipped.
+  - Two paths whose aggregates carry different values are no longer merged
+    at a join. The state key now holds what every aggregate carries, not
+    only what the ones still owed carry.
+  - A store of an owned value is a hand-on only through a pointer to memory
+    that is not the frame's. That means a parameter (the output or an
+    `inout` one), a pointer read through one or kept in a slot that holds
+    only such pointers, a field of a parameter's aggregate, or a pointer a
+    call returned that was handed none of the frame's own storage. A store
+    into the frame's own storage, a field of a slot included, or through a
+    pointer that is not followed, is reported unsupported.
+  - A field replaced (`insertvalue`) in an aggregate where it held a value
+    the frame owned is reported unsupported. The result used to share the
+    base's identity, so the replaced value's obligation went with it.
+  - One value moved into an aggregate twice (into two fields, or into two
+    aggregates) is a mismatch: both would release it. Distinct clones moved
+    into two fields still validate.
+  - (`--journal`) At a call that may panic, an aggregate still owed a
+    hand-on is held only by a registration of itself. One held by a
+    registration of a single value it carries is reported unsupported: the
+    other values it carries are not all followed.
+  - A release by value under a flag whose value is not known is reported
+    unsupported for any value the frame follows, not only one still owed.
+    It used to pass for a value a `sink` had taken. A flag known false is
+    still no release.
+  - A release by value of a possible clone (a `__nurl_cloneif` whose
+    condition is not known) is reported unsupported. It used to count as
+    the release of the value itself. A release of the value itself, known
+    to be no clone, still counts.
+  - On the 1983-program corpus, the default run goes from 98197 validated,
+    7745 unsupported, 0 mismatches to 98185 / 7757 / 0. `--journal` goes
+    from 97863 / 8079 / 0 to 97852 / 8090 / 0, with 480 journal-checked
+    before and 479 now. Of the 12 functions that move to unsupported in the
+    default run, five store an owned value into the frame's own storage,
+    a result temporary or a field of a slot. Three store through a pointer
+    cast from an integer (`inttoptr`, the btree's raw node blocks). Four
+    release by value an aggregate under a run-time answer (`__nurl_ret_own`).
+    `--journal` loses the same kinds, less two of the btree functions that
+    were unsupported there already, plus one aggregate held at a panic by
+    a registration of the value it carries.
 - **`tools/ncore/tv.sh` stops when a step fails.** If `nurlc --emit-core`,
   `nurlc --g` or `tvir.py` fails, it exits nonzero instead of validating
   with an empty file. It also forwards its arguments without word

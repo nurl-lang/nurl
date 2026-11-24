@@ -323,4 +323,88 @@ case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/panicowed.ll" --sums "$TMP/
   *"mismatch 0") ;; *) echo "FAIL: D0c alone was expected to miss a_cleared_value_across_a_call_that_may_panic"; fail=1 ;; esac
 case "$(mv_ "$TMP/panicowed.ll" | tail -1)" in *"mismatch 1"*) echo "ok: a_cleared_value_across_a_call_that_may_panic caught" ;;
   *) echo "FAIL: a_cleared_value_across_a_call_that_may_panic not caught"; fail=1 ;; esac
+# fourth round of github#2242's review: each edit below validated before.
+# A function whose only release is by value (`__dropifv_T`), with no drop
+# flag: keep releases the parameter it borrows. Such a function is checked,
+# not skipped
+awk '/define i64 @__nurl_fn.keep\(/{m=1} m && /^}/{m=0}
+  { if (m && /^  ret /) print "  call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %v)"; print }' "$TMP/e.ll" > "$TMP/lentv.ll"
+grep -q "__dropifv_Vec__i64(i1 true, %Vec__i64 %v)" "$TMP/lentv.ll" || { echo "FAIL: the by-value release edit did not apply"; fail=1; }
+cmut a_borrowed_parameter_released_by_value_with_no_drop_flag "$TMP/lentv.ll" "$TMP/e.core"
+# (--journal) b registered in the journal-only temporary in place of the
+# `bomb 1` value, and b's flag cleared before late(1): at that call the
+# aggregate owes its hand-on, and the registration holds b, one value it
+# carries, not the `bomb 1` value it carries too. Not claimed
+awk '/define void @__nurl_fn.flat\(/{m=1} m && /^}/{m=0}
+  { if (m && $0 == "  store %Bomb %r8, ptr %j11") { print "  store %Bomb %r6, ptr %j11"; next }
+    if (m && $0 == "  store i1 0, i1* %r3") next
+    if (m && index($0, "call %Bomb @__nurl_fn.late(i64 1)")) print "  store i1 0, i1* %r3"
+    print }' "$TMP/j.ll" > "$TMP/jpart.ll"
+grep -q "store %Bomb %r6, ptr %j11" "$TMP/jpart.ll" || { echo "FAIL: the partial-registration edit did not apply"; fail=1; }
+nv an_aggregate_held_at_a_panic_by_a_registration_of_one_value_it_carries __nurl_fn.flat \
+  "$TMP/jpart.ll" --journal --core "$TMP/j.core" "$NURLC"
+# e's clone handed to eat's `sink`, then released by value under a flag
+# whose value is not known: if it is set, eat's value is released twice.
+# Under a flag known false, the release is nothing
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { print; if (m && /= call i64 @__nurl_fn.eat\(%Vec__i64 %r[0-9]+\)/) { r = $0; sub(/.*eat\(%Vec__i64 /, "", r); sub(/\).*/, "", r)
+      print "  %kg = icmp sgt i64 %n, 5"; print "  call void @__dropifv_Vec__i64(i1 %kg, %Vec__i64 " r ")" } }' "$TMP/e.ll" > "$TMP/givenv.ll"
+grep -q "__dropifv_Vec__i64(i1 %kg," "$TMP/givenv.ll" || { echo "FAIL: the guarded release edit did not apply"; fail=1; }
+nv a_value_a_sink_took_released_by_value_under_an_unknown_flag __nurl_fn.f "$TMP/givenv.ll" --sums "$TMP/e.core"
+sed 's/__dropifv_Vec__i64(i1 %kg,/__dropifv_Vec__i64(i1 false,/' "$TMP/givenv.ll" > "$TMP/givenv0.ll"
+vok __nurl_fn.f "$TMP/givenv0.ll" --sums "$TMP/e.core" || { echo "FAIL: a release under a flag known false does not validate"; fail=1; }
+# v's flag cleared on f's else side after a by-value release of what a
+# `__nurl_cloneif` whose condition is not known returned: if that was a
+# clone, v leaks. With the condition known false it is v, released
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { print; if (m && /^else_2:$/) {
+      print "  %kx = load %Vec__i64, %Vec__i64* %r3"; print "  %kg = icmp sgt i64 %n, 5"
+      print "  %kc = call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 %kg, %Vec__i64 %kx)"
+      print "  call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %kc)"; print "  store i1 0, i1* %r4" } }' "$TMP/a.ll" > "$TMP/relclone.ll"
+grep -q "%kc = call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 %kg," "$TMP/relclone.ll" || { echo "FAIL: the possible-clone release edit did not apply"; fail=1; }
+nv a_possible_clone_released_by_value_for_the_value_itself __nurl_fn.f "$TMP/relclone.ll" --sums "$TMP/o.core"
+sed 's/@__nurl_cloneif_Vec__i64(i1 %kg,/@__nurl_cloneif_Vec__i64(i1 false,/' "$TMP/relclone.ll" > "$TMP/relorig.ll"
+vok __nurl_fn.f "$TMP/relorig.ll" --sums "$TMP/o.core" || { echo "FAIL: a by-value release of the value itself does not validate"; fail=1; }
+# mk moves two clones of vv's elements into the literal it returns
+L="$D/element_clones_moved_into_a_returned_literal.nu"
+"$NURLC" "$L" > "$TMP/l.ll" || exit 1
+"$NURLC" --emit-core "$L" > "$TMP/l.core" || exit 1
+grep -q "= insertvalue %Two %r[0-9]*, %Vec__i64 %r[0-9]*, 1" "$TMP/l.ll" || { echo "FAIL: mk's literal is not in the LLVM"; fail=1; }
+vok __nurl_fn.mk "$TMP/l.ll" --sums "$TMP/l.core" || { echo "FAIL: the literal of two clones does not validate"; fail=1; }
+lf='/define %Two @__nurl_fn.mk\(/'
+# the literal stored into a field of mk's own (unused) %Two slot, and
+# not returned: frame-local storage is no hand-on
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kp = getelementptr %Two, ptr %r7, i32 0"
+      print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lstore.ll"
+grep -q "store %Two %r[0-9]*, ptr %kp" "$TMP/lstore.ll" || { echo "FAIL: the frame-store edit did not apply"; fail=1; }
+nv a_literal_stored_into_a_field_of_the_frames_own_slot __nurl_fn.mk "$TMP/lstore.ll" --sums "$TMP/l.core"
+# field 0, which holds the first clone, replaced in the literal returned:
+# the result does not carry that clone
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /^  ret %Two %r[0-9]+$/) { print "  %kr = insertvalue %Two " $3 ", %Vec__i64 zeroinitializer, 0"; print "  ret %Two %kr"; next } print }' "$TMP/l.ll" > "$TMP/lrepl.ll"
+grep -q "ret %Two %kr" "$TMP/lrepl.ll" || { echo "FAIL: the field-replacement edit did not apply"; fail=1; }
+nv a_field_holding_a_clone_replaced_in_the_literal_returned __nurl_fn.mk "$TMP/lrepl.ll" --sums "$TMP/l.core"
+# the first clone moved into both fields (the second clone not made): one
+# value with two owners
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /= call %Vec__i64 @__nurl_cloneif_Vec__i64\(i1 true, /) { c++; if (c == 1) first = $1; else { second = $1; next } }
+    if (m && second != "" && index($0, "%Vec__i64 " second ", 1")) sub("%Vec__i64 " second ", 1", "%Vec__i64 " first ", 1")
+    print }' "$TMP/l.ll" > "$TMP/ltwice.ll"
+[ "$(grep -c "@__nurl_cloneif_Vec__i64(i1 true" "$TMP/ltwice.ll")" = 1 ] || { echo "FAIL: the double-insertion edit did not apply"; fail=1; }
+cmut one_clone_moved_into_two_fields "$TMP/ltwice.ll" "$TMP/l.core"
+# a diamond before the literal's second field: one side stores the second
+# clone into heap memory, the other moves it into an aggregate it stores
+# there. The literal then takes it again: on the second side a value moved
+# into an aggregate twice. The sides meet in states that differ only in
+# what that aggregate, handed on, carries: they must not be merged
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /= call %Vec__i64 @__nurl_cloneif_Vec__i64\(i1 true, /) { c++; if (c == 2) {
+      print; r = $1; print "  %kg = icmp eq i8* %r9, null"; print "  %kp = call i8* @nurl_malloc(i64 24)"
+      print "  br i1 %kg, label %kt, label %ke"; print "kt:"; print "  store %Vec__i64 " r ", ptr %kp"; print "  br label %kj"
+      print "ke:"; print "  %ka = insertvalue { %Vec__i64 } zeroinitializer, %Vec__i64 " r ", 0"
+      print "  store { %Vec__i64 } %ka, ptr %kp"; print "  br label %kj"; print "kj:"; next } }
+    print }' "$TMP/l.ll" > "$TMP/ljoin.ll"
+grep -q "^kj:" "$TMP/ljoin.ll" || { echo "FAIL: the aggregate-join edit did not apply"; fail=1; }
+cmut a_value_moved_twice_on_one_side_of_a_join_taken_for_the_other "$TMP/ljoin.ll" "$TMP/l.core"
 exit $fail

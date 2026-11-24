@@ -17,11 +17,17 @@ released or moved exactly once.
 - `store i1 1, flag`: the slot owns the value it holds;
 - `store i1 0, flag`: the slot's value moves out (or there is none). If the
   slot owned it, the value must be handed on along the path: to a call, a
-  store into memory that is not one of the frame's slots, or the `ret`; or
-  be owned by another slot (`= d s`, its flag set), or released. A store
-  into another slot is no hand-on until that slot's flag is set. A move into
+  store through a pointer to memory not the frame's (a parameter's, as the
+  output or an `inout` one, a pointer read through it or from a slot that
+  only holds such pointers, one a call returned), or the `ret`; or be owned
+  by another slot (`= d s`, its flag set), or released. A store into
+  another slot is no hand-on until that slot's flag is set; one into the
+  frame's own storage otherwise (a slot with no flag, a field of a slot),
+  or through a pointer not followed, is reported unsupported. A move into
   an aggregate (`insertvalue`) passes what is owed on to the aggregate,
-  which must go on in its turn. A slot the journal alone tracks, or one
+  which must go on in its turn; one value moved in twice is a double
+  owner, and a field holding such a value replaced is reported
+  unsupported. A slot the journal alone tracks, or one
   always released (`!slot`), is no owner (and a journal `forget` hands
   nothing on): only its release says the value went. A flag cleared with
   the value handed nowhere is a leak (formal/D/Drops.lean's `off` without
@@ -33,6 +39,10 @@ released or moved exactly once.
   target slot must hold what the source held, else unsupported.
 - `__dropif_T(flag, slot)` with the flag set: the slot must own a value (else
   it would be released twice), which is released.
+- `__dropifv_T(flag, %r)`, a release of the value a register holds, is
+  checked as a slot's. A flag whose value is not known on the path, or a
+  register that may be a clone of the value (`__nurl_cloneif` with a
+  condition not known), is reported unsupported.
 - `ret`: no slot owns a value (it would leak).
 
 A value a register loaded from one slot and stored into another is the same
@@ -40,7 +50,10 @@ value in both (not a new one), so the two slots release it once between
 them. A parameter of an owning type, and a clone the path knows was made
 (`__nurl_cloneif(true, …)`), are values of their own from the start. Such
 a clone is the frame's to hand on or release, as a cleared value is. Paths
-that meet in one state but for what each still owes are not merged.
+that meet in one state but for what each still owes, or for what an
+aggregate carries, are not merged. A function with no ownership operation
+at all (no drop flag, release, clone, journal entry or `sink` call) is
+validated without its paths being followed.
 
 A function whose drops depend on an answer the analysis does not follow
 (the per-call ownership answers: `__nurl_clear_if`, `__nurl_hown*`, a flag
@@ -70,7 +83,9 @@ drain asks, none twice, none after its release or after a `sink` parameter
 took it, and no value under two enabled registrations (two slots holding
 one value after `= d s`); a value whose flag was cleared and that is still
 owed a hand-on is held by an enabled registration (of it, or of an
-aggregate it went into), else a panic there leaks it; at a return nothing
+aggregate it went into), else a panic there leaks it (an aggregate held by
+a registration of one value it carries is reported unsupported: what else
+it carries is not all followed); at a return nothing
 is left registered.
 
 Prints one line per program: `validated: N functions`, or the first
@@ -429,10 +444,13 @@ def check_function(name, blocks, owning, journal=False):
             raise Unsupported(f"{name}: an owning slot {sl} with no drop flag")
     # (a function with no drop flag still hands values to `sink`
     # parameters: its parameters, a clone; those handovers are checked. A
-    # clone it makes is a value it owns, and must hand on or release)
+    # clone it makes is a value it owns, and must hand on or release; a
+    # release by value (`__dropifv_T`) is checked as any release. Only a
+    # function with no ownership operation at all is skipped)
     if not pairs and not any((pc := parse_call(l)) and pc[0] and pc[0][1:] in SINKS and SINKS[pc[0][1:]][1]
                              for _, lines in blocks for l in lines) \
-            and not any("@__nurl_cloneif" in l for _, lines in blocks for l in lines):
+            and not any(o in l for _, lines in blocks for l in lines
+                        for o in ("@__nurl_cloneif", "@__dropif", "@nurl_journal_")):
         return None
     for _, lines in blocks:
         for l in lines:
@@ -467,12 +485,82 @@ def check_function(name, blocks, owning, journal=False):
             if md:
                 defs[md.group(1)] = md.group(2)
     unk_src = set()
+    # (where a pointer a value is stored through points: "other" for memory
+    # that is not this frame's (a parameter's, as the output or an `inout`
+    # one, a pointer read from it, or one a call returned that was handed
+    # none of the frame's own), "local" for the frame's own storage (an
+    # `alloca`, a field of one), None where that is not followed (a phi, a
+    # constant, a cast from an integer). A store is a hand-on only into
+    # "other")
+    deflines, roots = {}, {}
+    for _, lines in blocks:
+        for l in lines:
+            md = re.match(r"^\s*(%[\w.]+) = (.*)$", l)
+            if md:
+                deflines[md.group(1)] = md.group(2)
+
+    def ptr_root(p, seen_=()):
+        if p in roots:
+            return roots[p]
+        if p is None or p in seen_:
+            return None
+        seen_ = seen_ + (p,)
+        d = deflines.get(p, "")
+        r = None
+        if p in local or d.startswith("alloca "):
+            r = "local"
+        elif p in params:
+            r = "other"
+        elif (mg := re.match(r"getelementptr (?:inbounds )?(.*)$", d)):
+            ops = split_top(mg.group(1))
+            r = ptr_root(arg_value(ops[1]), seen_) if len(ops) > 1 else None
+        elif (mg := re.match(r"(?:bitcast|addrspacecast) .* (%[\w.]+) to ", d)):
+            r = ptr_root(mg.group(1), seen_)
+        elif (mg := re.match(r"load [^,]+, (?:ptr|[^,]+\*) (%[\w.]+)", d)):
+            a = mg.group(1)
+            if a in local:
+                # (a pointer the frame keeps in a slot of its own: where
+                # every pointer stored into that slot points)
+                rs = set()
+                for _, lines in blocks:
+                    for l in lines:
+                        sp = store_parts(l)
+                        if sp is not None and sp[1] == a:
+                            rs.add(ptr_root(sp[0], seen_))
+                r = "other" if rs == {"other"} else None
+            else:
+                r = "other" if ptr_root(a, seen_) == "other" else None
+        elif (mg := re.match(r"extractvalue .*? (%[\w.]+), \d+(?:, \d+)*$", d)):
+            # (a pointer field of an aggregate: where the aggregate came
+            # from, a parameter (a slice's buffer) or what was stored in
+            # the slot it was loaded from)
+            r = ptr_root(mg.group(1), seen_)
+            r = r if r == "other" else None
+        elif re.match(r"(?:(?:tail|musttail|notail) )?call\b", d):
+            pc = parse_call("  " + d)
+            if pc and pc[1] is not None and all(ptr_root(x, seen_) != "local" for x in pc[1] if x):
+                r = "other"
+        roots[p] = r
+        return r
     # (the values a store or an aggregate took, before their flag was
     # cleared, through a register that may be a clone: if it was not one,
     # that was their hand-on, so a later leak of them is not a sure one)
     maybe_early = set()
     # (the values that are aggregates an `insertvalue` built)
     agg_ids = set()
+    # (for each `insertvalue` result, the `insertvalue` that set each of its
+    # fields, along its chain; and the results a value the frame owned went
+    # into, on some path: a field of one replaced is not followed)
+    chain, owning_ins = {}, set()
+    for _, lines in blocks:
+        for l in lines:
+            mi = re.match(r"^\s*(%[\w.]+) = insertvalue (.*)$", l)
+            if mi:
+                ops = split_top(mi.group(2))
+                base = arg_value(ops[0]) if ops else None
+                c = dict(chain.get(base, {}))
+                c[tuple(x.strip() for x in ops[2:])] = mi.group(1)
+                chain[mi.group(1)] = c
 
     def canon(st):
         flag_v, val, released, regv, regid, jr, given, maybe, pend, via = st
@@ -490,7 +578,9 @@ def check_function(name, blocks, owning, journal=False):
         # holds any more too: a path that owes a hand-on is not the one that
         # owes none. Renamed in the order they were made)
         pd = tuple(sorted((r(x), pend_key(sl, r)) for x, sl in sorted(pend.items())))
-        vi = tuple(sorted((r(x), tuple(sorted(r(y) for y in ys))) for x, ys in sorted(via.items()) if x in pend))
+        # (and what every aggregate carries, owed now or not: it may be owed
+        # again, and a child moved in twice is a double owner)
+        vi = tuple(sorted((r(x), tuple(sorted(r(y) for y in ys))) for x, ys in sorted(via.items())))
         rel = tuple(sorted(r(x) for x in released if x in ren))
         gv = tuple(sorted(r(x) for x in given if x in ren))
         lv = tuple(sorted(r(x) for x in lent_ids if x in ren))
@@ -618,11 +708,11 @@ def check_function(name, blocks, owning, journal=False):
         def settle(a, sl, u):
             # the aggregate a now carries sl's value, u (or what u carried):
             # owed unless a was handed on, released or taken by a slot
-            # already. (`via`: what a carries it through; a registration of
-            # any of them holds it on a panic edge)
+            # already. (`via`: what a carries; a child moved in twice is a
+            # double owner)
+            via[a] = tuple(sorted(set(via.get(a, ())) | {u} | set(via.pop(u, ()))))
             if a in released or a in given or (a in pend and pend[a] is None) or slot_owner(a):
                 return
-            via[a] = tuple(sorted(set(via.get(a, ())) | {u} | set(via.pop(u, ()))))
             if isinstance(pend.get(a), tuple):
                 # (a itself was moved into another aggregate since: that one
                 # carries it on)
@@ -711,12 +801,17 @@ def check_function(name, blocks, owning, journal=False):
                 sv, dst = ms
                 if dst in slot_flag or dst in borrowed:
                     pass
-                elif dst in local:
-                    if sv in regid and sv not in loads and regid[sv] is not None and (
-                            owed(regid[sv]) or slot_owner(regid[sv]) or carries(regid[sv])):
-                        raise Unsupported(f"{name}: an owned value stored into a slot of the frame that "
-                                          f"has no drop flag ({dst})")
-                else:
+                elif sv in regid and sv not in loads and regid[sv] is not None and (
+                        owed(regid[sv]) or slot_owner(regid[sv]) or carries(regid[sv])) and \
+                        ptr_root(dst) != "other":
+                    # (into the frame's own storage, a slot with no drop
+                    # flag or a field of a slot: no hand-on, and who
+                    # releases it is not followed; or through a pointer
+                    # whose target is not followed)
+                    where = "a slot of the frame that has no drop flag" if dst in local else (
+                        "the frame's own storage" if ptr_root(dst) == "local" else "memory not followed")
+                    raise Unsupported(f"{name}: an owned value stored into {where} ({dst})")
+                elif dst not in local:
                     handed([sv], True)
             elif (mr := RET_VAL.match(l)):
                 handed([mr.group(1)])
@@ -732,8 +827,22 @@ def check_function(name, blocks, owning, journal=False):
                     # already handed on, which is not this one)
                     a = next(fresh)
                     agg_ids.add(a)
+                idx = tuple(x.strip() for x in ops[2:])
+                if any(i[:len(idx)] == idx or idx[:len(i)] == i for i, r in chain.get(base, {}).items()
+                       if r in owning_ins):
+                    # (a field that holds a value the frame owned replaced:
+                    # the result no longer carries it, the base still does.
+                    # One id for both is not that: not followed)
+                    raise Unsupported(f"{name}: a field of an aggregate that holds an owned value "
+                                      f"replaced ({mi.group(1)})")
                 if elt and elt in regid and elt not in loads and regid[elt] is not None and regid[elt] != a:
                     u = regid[elt]
+                    if any(u in ys for ys in via.values()):
+                        # (one value moved into an aggregate, or two, twice:
+                        # each would release it)
+                        return f"mismatch: {name} {elt} moved into an aggregate twice: {'>'.join(path)}"
+                    if owed(u) or slot_owner(u) or carries(u):
+                        owning_ins.add(mi.group(1))
                     if owed(u):
                         if elt in maybe:
                             raise Unsupported(f"{name}: a value whose drop flag was cleared, moved into "
@@ -800,8 +909,14 @@ def check_function(name, blocks, owning, journal=False):
                     # (a value owed a hand-on that no enabled registration
                     # holds: on the panic edge the drain skips it, and the
                     # hand-on to come is never reached)
+                    # (an aggregate is held by a registration of itself; one of
+                    # a value it carries holds that value, not the others it
+                    # carries, which are not all followed: not claimed)
                     for v, sl in sorted((v, sl) for v, sl in pend.items() if isinstance(sl, str)):
-                        if v not in released and v not in given and v not in enabled and not any(x in enabled for x in via.get(v, ())):
+                        if v not in released and v not in given and v not in enabled:
+                            if any(x in enabled for x in via.get(v, ())):
+                                raise Unsupported(f"{name}: an aggregate owed a hand-on at a call to {callee} that "
+                                                  f"may panic, held by a registration of one value it carries")
                             return leak(v, sl, f"before a call to {callee} that may panic")
             m = LOAD_FLAG.match(l)
             if m:
@@ -981,8 +1096,15 @@ def check_function(name, blocks, owning, journal=False):
                 vid = regid.get(m.group(2)) if m.group(2) not in loads else None
                 fv = m.group(1)
                 on = True if fv in ("true", "1") else False if fv in ("false", "0") else regv.get(fv)
-                if vid is not None and on is None and owed(vid):
-                    raise Unsupported(f"{name}: a release of an owed value whose flag's value is not known")
+                if vid is not None and on is None:
+                    # (a value the frame follows, released or not as a flag
+                    # not known says: whether it was owed, given to a `sink`,
+                    # released, is not decided)
+                    raise Unsupported(f"{name}: a release of a value whose flag's value is not known")
+                if vid is not None and on and m.group(2) in maybe:
+                    # (the value itself, or a clone of it: which one is
+                    # released is not known)
+                    raise Unsupported(f"{name}: a release of a possible clone ({m.group(2)})")
                 if vid is not None and on:
                     if vid in released:
                         return f"mismatch: {name} {m.group(2)} released twice: {'>'.join(path)}"
