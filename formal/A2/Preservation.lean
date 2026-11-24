@@ -3022,9 +3022,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hpx : p ≠ x := fun h => by
             rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
           simp only [setE, upd_ne _ _ hpx] at hp
-          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
-          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
-          exact CapsInpAt.of_slots (hs1.set (fun V e => by cases e; exact hv)) hm)
+          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw =>
+          hr.liveCapsSet he hi.toMInv hcw (fun h => hw (by simp [Stmt.killVars, h])) fun u E1 hux hu hl1 => by
+            simp only [setE, upd_ne _ _ hux] at hu; exact ⟨E1, hu, hl1⟩)
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF hs hpx, ?_, by simp [post.nv], ?_,
         fun v hv => ?_⟩
       · refine Inv.mk₀ hcaps hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
@@ -3219,9 +3219,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hpx : p ≠ x := fun h => by
             rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; simp [Entry.arm] at hmp; exact hnrb hmp
           simp only [setE, upd_ne _ _ hpx] at hp
-          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
-          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
-          exact CapsInpAt.of_slots (hs1.set (fun V e => by cases e; exact hv)) hm)
+          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw =>
+          hr.liveCapsSet he hi.toMInv hcw (fun h => hw (by simp [Stmt.killVars, h])) fun u E1 hux hu hl1 => by
+            simp only [setE, upd_ne _ _ hux] at hu; exact ⟨E1, hu, hl1⟩)
       refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1.1, hstr⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hΔd hself hFd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
       · refine Inv.mk₀ hcaps hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
@@ -3291,9 +3291,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz⟩
       -- (AGORA-963 step 3: the value stored keeps the clause, the old one is dropped)
       exact hi.heldCaps_step (fun p Ep hp hmp _ =>
-          ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
-          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
-          exact CapsInpAt.of_slots (hs1.set_of hv rfl) post.inv)
+          ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw =>
+          (hr.liveCapsSet he hi.toMInv hcw (fun h => hw (by simp [Stmt.killVars, h])) (fun u E1 hux hu hl1 => by
+            simp only [setE, upd_ne _ _ hux] at hu; exact LiveBack.kill _ _ _ _ u E1 hu hl1)).of_st rfl)
   | ite hsa hsb _ ha hb _ _ =>
     intro m m' s' hcd hi hst
     cases hst with
