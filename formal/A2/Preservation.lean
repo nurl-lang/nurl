@@ -5041,7 +5041,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
             have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
+              hcd hs.headCallc_live h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
             exact this (by simpa [Stmt.killVars] using hin)
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
@@ -5115,7 +5115,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk
     exact hhand hk hx hxF hc htc hcan hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr
-  | @catchR ξ Γ Δ F x m0 s hxF hs hM hanchΔ hKO hds ih =>
+  | @catchR ξ Γ Δ F x m0 s hxF hs hM hanchΔ hKO hds hC ih =>
     intro m m' s' hcd hi hst
     obtain ⟨hfr, hxs, hnv0, hb0, hck⟩ := hi.catchOK
     have hlo : ∀ v, v ≠ x → v ∉ F ++ (List.range m0.nv).filter (· ≠ x) → m0.st v = none := by
@@ -5153,7 +5153,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         have hnint : E'.ty ≠ .int := fun h => by have := hi'.wf.view v E' hv hd; rw [h] at this; cases this
         obtain ⟨E0, h0, hd0, hos0, _⟩ := hk.2.2 v E' hv hd hos (Or.inl hnint) hvs
         exact hds v E0 h0 hd0 hos0 hvs0
-      refine ⟨Γ', StmtT.catchR hxF ht' hM hanchΔ hKO' hds', ?_, hnv, hk,
+      refine ⟨Γ', StmtT.catchR hxF ht' hM hanchΔ hKO' hds' hC, ?_, hnv, hk,
         fun v hv => hfz v (List.mem_append_left _ hv)⟩
       exact
         { toMInv := hi'.toMInv
@@ -5179,7 +5179,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
             have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
+              hcd hs.headCallc_live h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
             rcases (by simpa [Stmt.killVars] using hin : d.root = x ∨ d.root ∈ _) with h | h
             · exact hnk (by simp [Stmt.killVars, h])
             · exact this h
@@ -5279,17 +5279,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨bl'', h3', h2'.trans h4'⟩
       have hKOd : KeepOut Δ Δ (Stmt.skip).spine :=
         ⟨fun v E hv _ => ⟨E, hv, rfl, rfl, fun _ => rfl⟩, fun v E' hv => ⟨by simp [Stmt.spine], E', hv⟩⟩
-      refine ⟨Δ, StmtT.catchR hxF StmtT.skip hM hanchΔ hKOd (DStay.refl _ _),
+      refine ⟨Δ, StmtT.catchR hxF StmtT.skip hM hanchΔ hKOd (DStay.refl _ _) hC,
         -- (AGORA-963 step 3: the panicking body keeps the clause at a held root,
         -- none of its killable names, `Step.slotsCaps`; `x` says so, an integer)
-        Inv.ofLeaf (hi.heldCaps_step (fun q E hq hmq _ => by
-            obtain ⟨hqs, E0, h0⟩ := hKO.2 q E hq
-            obtain ⟨E', h', hm', _, hrb⟩ := hKO.1 q E0 h0 hqs
-            rw [hq] at h'; cases h'
-            have hm0 : E0.mode = .rootb := by rw [← hm']; exact hmq
-            rw [hrb hm0]; exact ⟨h0, by simpa [Stmt.spine] using hqs⟩) (fun w hw hcw =>
-            CapsInpAt.of_slots (((hp.slotsCaps hi.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).2 _ rfl).set
-              (fun V e => by cases e; exact ValCapsInp.int _ w)) hM')) hi hM' (by simp [hnv1]) (by simp [Stmt.vars, hnv1]; exact hi.nvS x (by simp [Stmt.vars]))
+        -- the frame's end restores its start's slots (`hsteq`), whose clause the
+        -- frame's typing carries
+        Inv.ofLeaf ((hC.of_caps fun w h => h.of_st hsteq).respine fun v hv => by
+            simp [Stmt.spine] at hv) hi hM' (by simp [hnv1]) (by simp [Stmt.vars, hnv1]; exact hi.nvS x (by simp [Stmt.vars]))
         (hanchΔ.anti fun v hv => by simpa [Stmt.killVars] using hv) (by simp [Stmt.spine]) (covers_set_none hc1 hxown (fun _ h => by cases h)) hcatch,
         by simp [hnv1], ⟨fun v E hv hvs => ⟨by simp [Stmt.spine], hKO.1 v E hv hvs⟩,
           fun v E' hv _ => hKO.2 v E' hv,

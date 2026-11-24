@@ -1248,4 +1248,42 @@ theorem LiveBack.exitScope (x : Var) (Γ : Ctx) : LiveBack Γ (A2.exitScope x Γ
   · simp only [A2.exitScope, upd_ne _ _ hvx] at h
     exact LiveBack.kill Γ _ _ _ v E1 h hl
 
+
+/-- The receiver of a call through a package is live (`callT_recv_live`). -/
+theorem CallT.recvLive {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {c : Var} {zs : List Var}
+    {E Ec : Entry} (hcT : CallT P Γ F σ (c :: zs) E Γ1) (hc : Γ c = some Ec) : Ec.live = true := by
+  obtain ⟨sig, _, hlen, hargs, _, _⟩ := hcT
+  obtain ⟨Ea, hEa, hl, _⟩ := hargs 0 (by rw [← hlen]; simp)
+  simp only [List.getD_cons_zero] at hEa
+  rw [hc] at hEa; cases hEa; exact hl
+
+/-- **A typed statement's head call through a package has a live
+    receiver** (`Step.held_not_killVars`' premise). -/
+theorem StmtT.headCallc_live {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
+    (ht : StmtT P ξ Γ F s Δ) : ∀ c ∈ s.headCallc, ∃ Ec, Γ c = some Ec ∧ Ec.live = true := by
+  induction ht with
+  | seq _ _ _ iha _ => exact iha
+  | sub hw _ _ ih =>
+    intro c hc
+    obtain ⟨E0, h0, hl0⟩ := ih c hc
+    obtain ⟨E, hE, hwe⟩ := hw.get' h0
+    exact ⟨E, hE, (hwe.live hl0).1⟩
+  | scope _ _ _ _ ih => exact ih
+  | rbind _ _ _ _ _ _ _ ih => exact ih
+  | frozen _ _ ih => exact ih
+  | catchR _ _ _ _ _ _ _ ih => exact ih
+  | scopeD _ _ _ _ _ _ _ _ _ _ ih => exact ih
+  | scopeL _ _ _ _ _ _ _ _ ih => exact ih
+  | block _ ih => exact ih
+  | callc _ _ _ h4 _ _ _ _ _ h10 =>
+    intro c' hc
+    simp [Stmt.headCallc] at hc; subst hc
+    exact ⟨_, h4, h10.recvLive h4⟩
+  | @callcE _ Γc _ _ _ _ _ _ _ _ Ec _ _ _ _ _ _ _ _ _ h4 _ _ _ _ _ _ _ _ _ _ _ h16 =>
+    intro c' hc
+    simp [Stmt.headCallc] at hc; subst hc
+    have h' : A2.kill .replace false c' Γc c' = some (killE .replace false c' Ec) := by simp [A2.kill, h4]
+    exact LiveBack.kill _ _ _ _ c' _ h' (h16.recvLive h')
+  | _ => intro c hc; simp [Stmt.headCallc] at hc
+
 end A2

@@ -2405,6 +2405,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       -- other than `x` that holds no views)
       (RootbAnchS Δ F [x]) →
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
+      -- (AGORA-937 B4: the frame's end, whose slots are the frame's start's,
+      -- keeps the closure-capture clause at a held root: the frame starts so)
+      HeldCapsInp (m0.set x ⟨false, some (.int 1)⟩) Δ F .skip →
       StmtT P ξ Γ F (.catchR x m0 s) Δ
   /-- A2-drop: a binding that runs a destructor at its end: of a destructor
       type (armed when the type holds views, A2-drop.2), or of a `Vec` of
