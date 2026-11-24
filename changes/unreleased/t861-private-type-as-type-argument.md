@@ -17,3 +17,10 @@
       program wrote it.
   - Nothing in the tree relied on the old behaviour: `tools/tree_sweep.sh`
     is byte-identical.
+- A generic struct template's own field types are judged against the file
+  that wrote the template, once, at its first instance: a type another
+  strict module keeps private is refused there (it was accepted by every
+  compiler), and the module's own private types stay usable.
+- A `pub` generic struct as the last declaration of an imported file no
+  longer leaks its prefix onto the importer's next `$` import ("'pub' has no
+  meaning on a '$' import" was reported against the importer).

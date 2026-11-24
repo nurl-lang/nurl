@@ -118809,6 +118809,12 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
     ? == tt TT_COLON {
         ( gen_const_or_struct lex syms )
+        // (A `pub` belongs to this declaration and no other: a generic
+        // struct's template does not read the flag, and it was left set for
+        // whatever the parser reached next - the last declaration of an
+        // imported file put it on the importer's next `$`, "'pub' has no
+        // meaning on a '$' import".)
+        = g_pending_pub 0
         // Still pending: the ':' declared a const, an enum or a generic struct.
         ? != 0 g_pending_rawrep {
             = g_pending_rawrep 0
