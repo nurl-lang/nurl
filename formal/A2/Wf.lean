@@ -1404,7 +1404,7 @@ theorem StmtT.keepKV {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | sub hw _ ho ih =>
     intro r hr E h
     obtain ⟨E0, h0, hw0⟩ := hw.get h
-    obtain ⟨E1, h1, hm1⟩ := ih r (fun h' => hr (by simp [Stmt.killVars, h'])) E0 h0
+    obtain ⟨E1, h1, hm1⟩ := ih r hr E0 h0
     rcases ho with rfl | ho
     · exact ⟨E1, h1, hm1.trans hw0.mode⟩
     · obtain ⟨E2, h2, hw2⟩ := ho.get h1

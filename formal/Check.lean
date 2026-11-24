@@ -677,6 +677,9 @@ import A3
 #print axioms A2.RSetup.allKinds_recvRoots_subE
 -- (AGORA-937 3d): a lent parameter's lift holds the callee's memory; placed, it is its argument's entry
 #print axioms A2.CallH.canon_inp_eq
+#print axioms A2.StmtT.keepKV
+#print axioms A2.CallH.thruReady
+#print axioms A2.CallH.held_anch
 -- (AGORA-937 3d): what a call's result may hold, and what a call setting adds, is precise
 #print axioms A2.mem_compAll
 #print axioms A2.compAll_argMem_notName

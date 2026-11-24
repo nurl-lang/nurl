@@ -367,10 +367,11 @@ theorem zN_sub {Γ : Ctx} {fn : Fn} {args : List Var} {base : Nat} :
 theorem mem_zN {Γ : Ctx} {fn : Fn} {args : List Var} {base : Nat} {v : Var} :
     v ∈ zN Γ fn args base ↔
       v ∈ zOf fn args base ∧ v ∉ roots (mutNames Γ args) ∧ v ∉ thruW Γ fn args := by
-  simp [zN, List.mem_filter, Bool.and_eq_true, Bool.not_eq_true', List.contains_eq_mem]
+  simp [zN, List.mem_filter, Bool.and_eq_true, List.contains_eq_mem]
 
 theorem thruW_nil {Γ : Ctx} {fn : Fn} {args : List Var} (h : callR Γ args = []) : thruW Γ fn args = [] := by
   unfold thruW; split <;> simp [h]
+
 
 def bndOf (ps : List (PMode × Ty)) (v : Var) : Option (Eff × Bool) :=
   match ps[v]? with
@@ -3121,21 +3122,13 @@ theorem pe_Fc (h : CallH P Γ F x fn args base) (j : Nat) :
 theorem held_anch (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
     (hk : fn.params[k]? = some (.inp, t)) {E0 : Entry}
     (hci : (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) = some E0)
-    {d : Dep} (hd : d ∈ E0.vdeps) (hwt : d.root ∈ thruW Γ fn args) :
+    (hc : CallThruOK P Γ F fn args) {d : Dep} (hd : d ∈ E0.vdeps) (hwR : d.root ∈ callR Γ args) :
     HeldAnch E0 d ∧ d.root ∉ (fn.body.rename (callRen fn.params args base)).killVars ∧
       ∃ Er, (callS Γ F fn args base x).canon (sigCtx fn) d.root = some Er ∧ Er.ty.holdsView = false := by
   have hkl : k < fn.params.length := lt_of_get hk
   have hpk : fn.params[k] = (.inp, t) := by simpa [List.getElem?_eq_getElem hkl] using hk
   rw [h.canon_param hk] at hci
   cases hci
-  -- route U: the body changes through a borrow and the call passes views
-  have hht : fn.body.hasThru = true := by
-    unfold thruW at hwt; split at hwt
-    · assumption
-    · simp at hwt
-  have hwR : d.root ∈ callR Γ args := by simpa [thruW, hht] using hwt
-  rcases h.thru (Or.inl hht) with hR | hc
-  · rw [hR] at hwR; cases hwR
   obtain ⟨-, -, hnr, -, hw⟩ := hc
   obtain ⟨hna, hkind, hpath, hvec, -, -, -, ⟨Er, tw, hEr, -, -, hty, hhv⟩, -, -⟩ := hw d.root hwR
   have hak : args.getD k 0 ∈ args := by simp [List.getD, show k < args.length from h.len ▸ hkl]
@@ -3177,9 +3170,10 @@ theorem held_anch (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
     fun hdp => hnp d (hlp ▸ hdp) rfl
   have hσk : (callS Γ F fn args base x).σ (fn.nvars + k) =
       (if Ea.ty = .int then [] else memDeps Ea.held) := by
-    simp only [callS]
-    rw [ite_cond_eq_true _ _ (eq_true ⟨Nat.le_add_right _ _, Nat.add_lt_add_left hkl _⟩),
-      Nat.add_sub_cancel_left, hae]
+    have hc : fn.nvars ≤ fn.nvars + k ∧ fn.nvars + k < fn.nvars + fn.params.length :=
+      ⟨Nat.le_add_right _ _, Nat.add_lt_add_left hkl _⟩
+    simp only [callS, hc, and_self, ↓reduceIte]
+    rw [Nat.add_sub_cancel_left, hae]
   -- a view of `w` the parameter holds is one its argument holds in memory
   have hdh : d ∈ (if regioned (.inp, t) = true then ((callS Γ F fn args base x).σ (fn.nvars + k)).map
         (fun e => (⟨e.root, A2.comp e.kind .self⟩ : Dep)) else []) ∧ regioned (.inp, t) = true ∧
@@ -3319,7 +3313,15 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
         unfold Entry.vdeps; rw [show (callPe Γ fn.params args k).mode = .rootb from h.sOK.pe_rb k]; rfl
       rw [hpv, ← hvd0]; simpa [Entry.vdeps, hm0, Mode.ownSlot] using hd
     by_cases hwt : d.root ∈ thruW Γ fn args
-    · exact Or.inr (h.held_anch hk hci0 hd hwt)
+    · -- route U: the body changes through a borrow and the call passes views
+      have hht : fn.body.hasThru = true := by
+        unfold thruW at hwt; split at hwt
+        · assumption
+        · simp at hwt
+      have hwR : d.root ∈ callR Γ args := by simpa [thruW, hht] using hwt
+      rcases h.thru (Or.inl hht) with hR | hc
+      · rw [hR] at hwR; cases hwR
+      · exact Or.inr (h.held_anch hk hci0 hc hd hwR)
     · exact Or.inl (h.pe_Fc k d hd' hb hwt)
   | sink =>
     have hne : ∀ b' t', (PMode.sink, t) ≠ (.inout b', t') := fun _ _ h => by cases h
