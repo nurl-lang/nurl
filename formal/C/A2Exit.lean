@@ -260,9 +260,9 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
             | none, some (_, Γe) => if exitToB D Γe ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩ else none
             -- (C7w: the arms' ends joined by weakening, as `checkStmt2`'s)
             | none, none =>
-              if ctxWF2B D Γ && nameWFB D Γ && weaker2B D ra.Δ (joinCand ra.Δ rb.Δ) &&
-                  weaker2B D rb.Δ (joinCand ra.Δ rb.Δ) then
-                some ⟨joinCand ra.Δ rb.Δ, ra.E ++ rb.E, none⟩
+              if ctxWF2B D Γ && nameWFB D Γ && weaker2B D ra.Δ (ctxOfList (joinTbl D ra.Δ rb.Δ)) &&
+                  weaker2B D rb.Δ (ctxOfList (joinTbl D ra.Δ rb.Δ)) then
+                some ⟨ctxOfList (joinTbl D ra.Δ rb.Δ), ra.E ++ rb.E, none⟩
               else none
         | _, _ => none
       else none
@@ -349,12 +349,12 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
             some ⟨loopEnd Γ rs.E, rs.E, none⟩
           -- (C7w: a round that ends weaker than it started, a binding moved
           -- and given back, or not: the loop runs from the join of both)
-          else if weaker2B D Γ (joinCand Γ rs.Δ) then
-            match checkX P R C D (joinCand Γ rs.Δ) F s with
+          else if weaker2B D Γ (ctxOfList (joinTbl D Γ rs.Δ)) then
+            match checkX P R C D (ctxOfList (joinTbl D Γ rs.Δ)) F s with
             | some rj =>
-              if weaker2B D (joinCand Γ rs.Δ) (joinCand Γ rs.Δ) && weaker2B D rj.Δ (joinCand Γ rs.Δ) &&
-                  exitToB D (joinCand Γ rs.Δ) (loopEnd (joinCand Γ rs.Δ) rj.E) then
-                some ⟨loopEnd (joinCand Γ rs.Δ) rj.E, rj.E, none⟩
+              if weaker2B D (ctxOfList (joinTbl D Γ rs.Δ)) (ctxOfList (joinTbl D Γ rs.Δ)) && weaker2B D rj.Δ (ctxOfList (joinTbl D Γ rs.Δ)) &&
+                  exitToB D (ctxOfList (joinTbl D Γ rs.Δ)) (loopEnd (ctxOfList (joinTbl D Γ rs.Δ)) rj.E) then
+                some ⟨loopEnd (ctxOfList (joinTbl D Γ rs.Δ)) rj.E, rj.E, none⟩
               else none
             | none => none
           else none
@@ -529,7 +529,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                     simp only [Bool.and_eq_true] at hj
                     obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hj
                     simp only [Option.some.injEq] at h; subst h
-                    have sj := joinCand_supported (Δb := rb.Δ) sa
+                    have sj := joinTbl_supported D ra.Δ rb.Δ
                     have wΓ := weaker_self2 hs h1 h2
                     refine ⟨sj, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
                     obtain ⟨k1, k2⟩ := OblOK.append hξ
@@ -703,7 +703,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                   simp only [Bool.and_eq_true] at hc
                   obtain ⟨⟨hjj, hwd⟩, hto⟩ := hc
                   simp only [Option.some.injEq] at h; subst h
-                  have sJ := joinCand_supported (Δb := rs.Δ) hs
+                  have sJ := joinTbl_supported D Γ rs.Δ
                   obtain ⟨s0, e0, t0, _⟩ := ih sJ (fun v hv => hD v (by simp [Stmt.vars, hv])) hrj
                   have hsl := loopEnd_supported sJ e0
                   obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := exitToB_parts sJ hsl hto

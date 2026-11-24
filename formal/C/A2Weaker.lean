@@ -143,4 +143,36 @@ theorem joinCand_supported {D : List Var} {Δa Δb : Ctx} (ha : Supported2 Δa D
   have h0 := ha v hv
   simp only [joinCand, h0]
 
+/-- A context read from a finite table: the entry listed for `v`, none for a
+    slot the table does not list. -/
+def ctxOfList (l : List (Var × Option Entry)) : Ctx := fun v =>
+  match l.lookup v with
+  | some e => e
+  | none => none
+
+theorem lookup_map_none {D : List Var} {f : Var → Option Entry} {v : Var} (h : v ∉ D) :
+    (D.map fun w => (w, f w)).lookup v = none := by
+  induction D with
+  | nil => rfl
+  | cons a D ih =>
+    have ha : v ≠ a := fun e => h (e ▸ List.mem_cons_self ..)
+    have hD : v ∉ D := fun hm => h (List.mem_cons_of_mem _ hm)
+    simp only [List.map_cons, List.lookup_cons]
+    have : (v == a) = false := by simpa using ha
+    rw [this]
+    exact ih hD
+
+/-- The join candidate over `D`, as a table: data, built once where the
+    join is decided. A checker passes on `ctxOfList` of it, so a later read
+    costs one scan of `D` and never replays the arms the join was built from
+    (github#2242's review: a chain of joins that each read both arms costs
+    2ⁿ reads after `n` joins). It is a `List`, not a `Ctx`, so the compiler
+    cannot eta-expand it into a function that rebuilds it on every read. -/
+def joinTbl (D : List Var) (Δa Δb : Ctx) : List (Var × Option Entry) :=
+  D.map fun v => (v, joinCand Δa Δb v)
+
+theorem joinTbl_supported (D : List Var) (Δa Δb : Ctx) : Supported2 (ctxOfList (joinTbl D Δa Δb)) D := by
+  intro v hv
+  simp only [ctxOfList, joinTbl, lookup_map_none hv]
+
 end C

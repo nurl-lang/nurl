@@ -1285,8 +1285,8 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         if D.all (fun v => Δa v == Δb v) then some Δa
         else if isPanic a && panicToB D Γ Δb then some Δb
         else if isPanic b && panicToB D Γ Δa then some Δa
-        else if ctxWF2B D Γ && nameWFB D Γ && weaker2B D Δa (joinCand Δa Δb) &&
-            weaker2B D Δb (joinCand Δa Δb) then some (joinCand Δa Δb)
+        else if ctxWF2B D Γ && nameWFB D Γ && weaker2B D Δa (ctxOfList (joinTbl D Δa Δb)) &&
+            weaker2B D Δb (ctxOfList (joinTbl D Δa Δb)) then some (ctxOfList (joinTbl D Δa Δb))
         else none
       | _, _ => none
     else none
@@ -1634,7 +1634,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                 simp only [Bool.and_eq_true] at hj
                 obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hj
                 simp only [Option.some.injEq] at h; subst h
-                have sj := joinCand_supported (Δb := Δb) sa
+                have sj := joinTbl_supported D Δa Δb
                 have wΓ := weaker_self2 hs h1 h2
                 exact ⟨.ite ha hb (checkExpr2_sound hce)
                   (.sub wΓ ta (Or.inr (weaker2B_sound sa sj h3)))
