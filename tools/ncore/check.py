@@ -5380,6 +5380,15 @@ class FnCheck:
                     # Bound, pushed or assigned first, it holds copies of
                     # them.
                     lp = sorted(self.lit_params.get(op[1], ()))
+                    # (…and one of several parameters, some of which this
+                    # function takes over on another path, takes them all
+                    # over, as a declared `sink` beside them makes it -
+                    # nurlc's __mixlit_take_all; the summary of the round
+                    # before says which it consumes)
+                    if len(lp) > 1:
+                        took = set(self.s_consumes) | set(self.summ.get(self.fn.name, {}).get("consumes", ()))
+                        if any(self.pidx.get(b) in took for b in lp):
+                            self.lit_mixed[op[1]] = True
                     if lp and not self.lit_mixed.get(op[1]):
                         # (a parameter named twice is lent in part: no
                         # handover of what a caller hands it, as nurlc's
