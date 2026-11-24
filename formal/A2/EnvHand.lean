@@ -2438,6 +2438,41 @@ theorem handProgressD {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : 
     have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
   exact ⟨_, Step.callcD hslot hfs hf hmx (by rw [hps]; rfl)⟩
 
+/-- AGORA-937 B4: **a hand-over keeps the frame clause** where the package
+    is outside the domain: its environment, clean as the package was, is
+    bound fresh and owned; the package and the result slot are emptied. -/
+theorem FrameCaps.hand {m : Mem} {D : List Var} {w c x : Var} {o : Bool} {fs : List Nat} {te : Ty}
+    {ms : List Nat} {env : Val} (h : FrameCaps m D w) (hcD : c ∉ D)
+    (hs : m.st c = some ⟨true, some (.pkg fs te ms env [])⟩) : FrameCaps (handMem m c x env o) D w := by
+  have hg := h c true _ hcD hs
+  refine (((h.set_none c true).set (y := m.nv) (o := true) (v := some env) (fun V e => ?_)).set_none x o).of_st rfl
+  cases e
+  refine ⟨fun n hn => hg.1.sub (Sub.pkg hn), fun c' hc' x' t n hx' hsn hnd => hg.2 c' (Sub.pkg hc') x' t n ?_ hsn hnd⟩
+  by_cases hxc : x' = c
+  · subst hxc; simp at hx'
+  · simpa [upd_ne _ _ hxc] using hx'
+
+theorem handStmt_kv (x c : Var) (f : Nat) (zs : List Var) (fs : List Nat) (te : Ty) (ms : List Nat) (y : Var)
+    (k : Stmt) : ∀ v ∈ (handStmt x c f zs fs te ms y k).killVars,
+      v ∈ (Stmt.callcE x c 0 zs k).killVars ∨ v = y ∨ v = y + 1 := by
+  intro v hv
+  simp [handStmt, Stmt.killVars, Rhs.vars] at hv ⊢
+  rcases hv with h | h | h | h | h | h | h | h | h | h
+  all_goals first
+    | exact Or.inl (Or.inl h) | exact Or.inl (Or.inr (Or.inl h)) | exact Or.inl (Or.inr (Or.inr (Or.inl h)))
+    | exact Or.inl (Or.inr (Or.inr (Or.inr h))) | exact Or.inr (Or.inl h) | exact Or.inr (Or.inr h)
+
+theorem handStmtD_kv (x : Var) (f : Nat) (zs : List Var) (y : Var) (k : Stmt) (c : Var) :
+    ∀ v ∈ (handStmtD x f zs y k).killVars, v ∈ (Stmt.callcE x c 0 zs k).killVars ∨ v = y ∨ v = y + 1 := by
+  intro v hv
+  simp [handStmtD, Stmt.killVars, Rhs.vars] at hv ⊢
+  repeat' rcases hv with h | hv
+  all_goals first
+    | exact Or.inl (Or.inl h) | exact Or.inl (Or.inr (Or.inl h)) | exact Or.inl (Or.inr (Or.inr (Or.inl h)))
+    | exact Or.inl (Or.inr (Or.inr (Or.inr h))) | exact Or.inr (Or.inl h) | exact Or.inr (Or.inr h)
+    | exact Or.inl (Or.inl hv) | exact Or.inl (Or.inr (Or.inl hv)) | exact Or.inl (Or.inr (Or.inr (Or.inl hv)))
+    | exact Or.inl (Or.inr (Or.inr (Or.inr hv))) | exact Or.inr (Or.inl hv) | exact Or.inr (Or.inr hv)
+
 theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
     {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {Δ : Ctx} {m m' : Mem} {s' : Stmt}
     (hk : k.src = true) (hx : Γ x = none) (hxF : x ∉ F) (hc : Γ c = some Ec) (htu : Ec.ty.undtor = .fn ms q)
@@ -2449,9 +2484,10 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
     (hcT : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
     (hkT : StmtT P (ξ.under x) (kill .replace false c (setE Γ1 x E)) F k Δ) (hpx : EndOK Δ x)
     (hcd : MemCodes P m) (hi : Inv m Γ F (.callcE x c j [] k))
-    (hst : Step P m (.callcE x c j [] k) (.ok m' s')) (hnr : ¬ IsReap m (.callcE x c j [] k) m' s') :
+    (hst : Step P m (.callcE x c j [] k) (.ok m' s')) (hnr : ¬ IsReap m (.callcE x c j [] k) m' s')
+    (Z : Var → List Var) (hz : HeldZ m Γ Z (.callcE x c j [] k)) :
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.callcE x c j [] k) s' ∧ Frz F m m':= by
+      Keep Γ Γ' (.callcE x c j [] k) s' ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z' := by
   obtain ⟨hsp, hvd, hmo, hlc, _, _⟩ := hD
   obtain ⟨fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt, hq⟩ :=
     hand_foundD hi.toMInv hcd hc htu hlc hmo hj hσ hsp
@@ -2538,7 +2574,20 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
     · rw [killE_mode] at hm; rw [hkrb p E1 h1 hm]; exact h1
   have hspine : (handStmtD x f0 [] m.nv k).spine = [x, m.nv] := by
     simp [handStmtD, Stmt.spine]
-  refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_⟩
+  refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_, Z,
+    hz.leaf rfl (by simp [handStmtD, Stmt.catchFrames]) (by simp [handMem]) hrbΓ
+      (fun v hv => by
+        rw [hspine] at hv; simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
+        rcases hv with rfl | rfl
+        · exact hx
+        · exact hΓy)
+      (fun v hv => by
+        rcases handStmtD_kv x f0 [] m.nv k c v hv with h | rfl | rfl
+        · exact Or.inl (by simpa [Stmt.killVars] using h)
+        · exact Or.inr (Nat.le_refl _)
+        · exact Or.inr (Nat.le_succ _))
+      (fun p E w hp hm hW hD hcw => hcw.hand (hD c (by simp [Stmt.killVars])) hslot),
+    ZKeep.refl _ _⟩
   · -- (AGORA-963 step 3: the package moved out, its environment bound fresh, a
     -- part of it; the result slot empty)
     refine Inv.mk₀ hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
@@ -2686,11 +2735,11 @@ theorem handProgress {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : N
     outside its new scopes kept. -/
 theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
   intro ξ Γ Γ1 F x c j zs k Ec E ms q σ sig b Δ m m' s' hk hx hxF hc htu hcan hj hσ hsp0 hsl hsr hso hny hdc hcT
-    hkT hpx hcd hi hst hnr
+    hkT hpx hcd hi hst hnr Z hzz
   rcases hsp0 with ⟨ps, hsp, htc, _, hzb⟩ | ⟨hD1, hz, hD⟩
   rotate_left
   · subst hz
-    exact handCaseD hP hk hx hxF hc htu hj hσ ⟨hD1, hD⟩ hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr
+    exact handCaseD hP hk hx hxF hc htu hj hσ ⟨hD1, hD⟩ hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr Z hzz
   obtain ⟨hlc, hmo, fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt⟩ :=
     hand_found hi.toMInv hcd hc htc hcan hj hσ hsp hcT
   cases hst with
@@ -2785,7 +2834,20 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
       · rw [killE_mode] at hm; rw [hkrb p E1 h1 hm]; exact h1
     have hspine : (handStmt x c f0 zs fs0 te0 ms m.nv k).spine = [x, m.nv] := by
       simp [handStmt, Stmt.spine]
-    refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_⟩
+    refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_, Z,
+      hzz.leaf rfl (by simp [handStmt, Stmt.catchFrames]) (by simp [handMem]) hrbΓ
+        (fun v hv => by
+          rw [hspine] at hv; simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
+          rcases hv with rfl | rfl
+          · exact hx
+          · exact hΓy)
+        (fun v hv => by
+          rcases handStmt_kv x c f0 zs fs0 te0 ms m.nv k v hv with h | rfl | rfl
+          · exact Or.inl (by simpa [Stmt.killVars] using h)
+          · exact Or.inr (Nat.le_refl _)
+          · exact Or.inr (Nat.le_succ _))
+        (fun p E w hp hm hW hD hcw => hcw.hand (hD c (by simp [Stmt.killVars])) hslot),
+      ZKeep.refl _ _⟩
     · -- (AGORA-963 step 3: the package moved out, its environment bound fresh, a
       -- part of it; the result slot empty)
       refine Inv.mk₀ hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
