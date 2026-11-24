@@ -13,10 +13,10 @@ $ `stdlib/core/vec.nu`
 
 @ sh ? ( Vec D ) o → v { ?? o { T v → { ( nurl_println_int ( vec_len [D] v ) ) } F → { ( nurl_println `none` ) } } }
 
-@ mm ? ? ( Vec D ) a i k → ??( Vec D ) { ? == k 0 { ^ a } {} ^ @ ??( Vec D ) { T ( mk `a fresh value long enough for the heap here` ) } }
+@ mm ? ? ( Vec D ) a i k → ?? ( Vec D ) { ? == k 0 { ^ a } {} ^ @ ?? ( Vec D ) { T ( mk `a fresh value long enough for the heap here` ) } }
 
 @ main → i {
-    : ??( Vec D ) x @ ??( Vec D ) { T ( mk `a local value long enough for the heap` ) }
-    : ??( Vec D ) y ( mm x 1 )
+    : ?? ( Vec D ) x @ ?? ( Vec D ) { T ( mk `a local value long enough for the heap` ) }
+    : ?? ( Vec D ) y ( mm x 1 )
     ^ 0
 }
