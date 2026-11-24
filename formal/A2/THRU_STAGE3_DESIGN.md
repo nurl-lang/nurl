@@ -1193,3 +1193,31 @@ Next: check whether either already exists.
   An edit's owner may be dead, so its whole tree need not be clean.
 - **Preservation:** `letv`, `letd` and `assign` are done (42 errors left).
 - **Next:** `Repl.nodesBack`, the node correspondence across a `Repl`, from `Repl.capsInp`. Then the edit, push, insert and `takeB` sites through `of_changeR`; then `unpair`, `reap`, `free`, the scope exits, the frames, and `frozenIn` / `catchIn` (`hlive`).
+
+**Integration, 2026-11-25 (wip/t937-b4-int).** The whole tree builds on `LiveCaps`. Proved:
+- the store and value lemmas (`CapsLive.lean`: `liveCapsSet`, `repl` / `editNode(H)`, `unpair`, `hand`, `panic_st`, `of_shrink`);
+- every leaf step in Preservation;
+- the call frame (`CallH.liveCaps`), the closure frames and the hand-overs;
+- the catch frame, which now carries its end's clause (`StmtT.catchR`'s new premise).
+
+Two scaffolds are left: `Inv.rbindIn` (the spine) and Rename's lifted `CallThruOK`.
+
+**Finding: the frame exclusion (`d.root ∉ F`) cannot simply go.** The current branch drops it, so that `frozen` and `catchR` keep the clause from their inner step. With it gone, `Inv.rbindIn` must give the clause at a frozen anchor of the callee's borrowed parameter, and that is false. A counterexample:
+
+- the caller holds a live closure `cl` that captures `r` inout;
+- it calls `f(vv)` where `vv` views `r`, and `r` is frozen for the call.
+
+The typing allows both live together: creating `cl` kills no viewer of `r`; the conflict is settled when `cl` runs. In `f`, `cl` is still live in the frame's context, so `LiveCaps r` fails. The frame exclusion is what makes this case vacuous.
+
+**With the exclusion kept (wip/t937-b4-capskeep)**, `frozenIn` must carry the clause for the roots it freezes (`z' \ F`) through the inner step. Leaf steps do keep it: a frozen root is captured inout by no package (`CapsOK`), and `liveCapsVal` takes `w ∈ F`. Two places break it:
+
+- **`catchP`:** the frame's end restores the start's store and context `Δ`. If the body killed a binding that captured `w` before the catch started, `Δ` revives it.
+- **The catch frame's start:** it knows the clause only at its own frame, outside its `F`, which holds every older binding.
+
+**What would close it:**
+- either a frame-relative clause, over what the frame can reach (above), so a caller's unreachable `cl` does not count;
+- or two catch-frame facts:
+  - the body kills no binding older than the frame (every older binding is frozen there, and depends on frozen roots only), so `Δ`'s live bindings are live now;
+  - its slots are the frame start's (`Frz`, `hsteq`).
+
+  Then `catchP` keeps the clause for every root, and `frozenIn` takes it from a `CapsKeep` conjunct of `preserve`, as on wip/t937-b4-capskeep. This is the smaller step: one new `StmtT.catchR` fact ("no older binding dies"), kept by `catchIn` through a lemma that a step kills only bindings depending on an unfrozen root.
