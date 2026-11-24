@@ -562,6 +562,7 @@ $ `stdlib/core/vec.nu`
 : i FX_LIT_MIXED 4194304  // a literal temporary holding a value of its own beside the parameters it names whole (check.py's lit_mixed, AGORA-995)
 : i FX_CALL_LENT_ONLY 8388608  // a call's temporary whose callee lends one argument, whole, and nothing else (check.py's call_lent_only, AGORA-995)
 : i FX_LIT_TWICE 16777216  // a literal temporary naming one of its whole parameters more than once (check.py's lit_twice, AGORA-995)
+: i FX_CALL_TWICE 33554432  // a call's result whose callee names a parameter twice in a returned literal (check.py's call_twice, AGORA-995)
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
 : ~ i g_fc_wbs 0  // while a call's effects are applied: the cursors it writes back into the slots they were read from (a set)
@@ -16308,6 +16309,8 @@ unsafe @ eng_byte s w i k → i {
     ? < src 0 { ^ } {}
     ? != 0 ( wv_at g_fx_lent src ) { ( wv_put g_fx_lent vid ( wv_at g_fx_lent src ) ) } {}
     ? ( fx_has src FX_CALL_MIXED ) { ( fx_set vid FX_CALL_MIXED ) } {}
+    // (…and its callee's twice-named parameters: a join's arms add up)
+    ? ( fx_has src FX_CALL_TWICE ) { ( fx_set vid FX_CALL_TWICE ) } {}
 }
 
 // Is one of `loans` a handle loan?
@@ -20123,6 +20126,10 @@ unsafe @ eng_byte s w i k → i {
     // twice in a literal: a part, which nurlc copies out of the temporary,
     // and refuses for a value with no copy - check.py's twice)
     : ~ i whole_set 0
+    // (…and a result handed back through it is a part too: a forwarder
+    // of such a callee names the parameter twice as well, check.py's
+    // call_twice)
+    ? & have_dest != 0 ( sm_word sm SM_TWICE ) { ( fx_set dest FX_CALL_TWICE ) } {}
     ? & == res RES_LENT == 0 ( sm_word sm SM_TWICE ) {
         = e 0
         ~ < e nl {
@@ -22508,6 +22515,7 @@ unsafe @ eng_byte s w i k → i {
         ( fx_set vid FX_CALL_LENT_ONLY )
         ( wv_put g_fx_lent vid ( wv_at g_fx_lent src ) )
     } { ? & == kind VK_LOCAL >= vid 0 { ( fx_clear vid FX_CALL_LENT_ONLY ) } {} }
+    ? & & & & == kind VK_LOCAL ! ( fv_mut vid ) from_temp >= src 0 ( fx_has src FX_CALL_TWICE ) { ( fx_set vid FX_CALL_TWICE ) } {}
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
     ? & & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) ! jparts {
@@ -23256,6 +23264,9 @@ unsafe @ eng_byte s w i k → i {
                 = k + k 1
             }
         } {}
+        // (a call's result whose callee names a parameter twice, handed
+        // back: this function names it twice as well, check.py's call_twice)
+        ? ( fx_has ov FX_CALL_TWICE ) { = g_fc_twice 1 } {}
         ? & != lp 0 ! lmix {
             // (one named twice is lent in part: no return handover of
             // what a caller hands it - SM_TWICE, nurlc's twicelit)

@@ -445,6 +445,7 @@ class FnCheck:
         self.s_effects = set()
         self.s_consumes = set()
         self.s_twice = set()     # parameters a returned literal names more than once
+        self.call_twice = {}     # a call's result: the parameters of this function its callee names twice
         self.in_defer = False
         self.s_elems = set()
         self.rets = []
@@ -2576,6 +2577,20 @@ class FnCheck:
             # (not one it names twice: that is a part of it, which nurlc
             # copies out of the temporary - refused for a value with no copy)
             twice = set(sm.get("twice", ()))
+            # (…and handed back, this function names them twice as well:
+            # a forwarder of such a callee, nurlc's SM_TWICE)
+            if dest_vid is not None:
+                # (an argument that is a parameter, or a binding of one
+                # whole: its alias names it)
+                tw = set()
+                for k in twice:
+                    if k < len(ops) and ops[k][0] == "v" and not ops[k][2]:
+                        if ops[k][1] in self.pidx:
+                            tw.add(ops[k][1])
+                        if k < len(avs):
+                            tw |= {a[0] for a in avs[k].alias if not a[1] and a[0] in self.pidx}
+                if tw:
+                    self.call_twice.setdefault(dest_vid, set()).update(tw)
             whole = {k for (k, path, kind) in sm["lends"] if not path and k < len(ops) and k not in twice
                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
                      and avs[k].own == "O"
@@ -4052,10 +4067,16 @@ class FnCheck:
         """A temporary given another's value whole (a value block's tail, a
         join's arm) is that call's result: the arguments it may hand back
         whole go with it (`call_lent`, `call_mixed`)."""
-        if (rv is None or rv[0] != "use" or rv[1][0] != "v" or rv[1][2]
-                or self.fn.vars[vid].kind != "temp"):
+        if rv is None or rv[0] != "use" or rv[1][0] != "v" or rv[1][2]:
             return
         src = rv[1][1]
+        # (…and, any binding of it, the parameters its callee names twice:
+        # handed back, this function names them twice as well)
+        if src in self.call_twice:
+            # (a join's arms add up)
+            self.call_twice.setdefault(vid, set()).update(self.call_twice[src])
+        if self.fn.vars[vid].kind != "temp":
+            return
         if src in self.call_lent:
             self.call_lent[vid] = list(self.call_lent[src])
         if src in self.call_mixed:
@@ -5393,6 +5414,9 @@ class FnCheck:
                                    copy_ok=True, is_ret=True)
                 self.moved_from = None
                 if op[0] == "v" and not op[2]:
+                    # (a call's result whose callee names a parameter twice:
+                    # this function names it twice as well, nurlc's SM_TWICE)
+                    self.s_twice |= {self.pidx[b] for b in self.call_twice.get(op[1], ()) if b in self.pidx}
                     # a literal handed back as it is lends the parameters it
                     # names whole: the result borrows the caller's arguments,
                     # as `^ p` does (D4c, AGORA-995). Beside a value of its
