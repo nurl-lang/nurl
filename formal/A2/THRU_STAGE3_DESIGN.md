@@ -1090,3 +1090,10 @@ Lemmas:
 3. `Step.capsExcept`, the twin of `Step.slotsCaps`.
 4. `Inv.heldCaps` restated with `∃ D`, all members dead closure-typed slots below the frame. The spine exclusion and `∉ F` go.
 5. Remove `CallThruOK`'s "closure-typed bindings live", then discharge the two scaffolds.
+
+**Rejected: "NamesIn for dead entries too".** The idea:
+- `MInv.held` would cover dead entries as well.
+- `StmtT.rbind` would ask that no entry holds a mutating name on its held anchors.
+- `Inv.rbindIn` would then derive `CapsInpAt` directly.
+
+It fails because `Entry.clean` drops a dead entry's dependencies on purpose (`held := memDeps …` or `[]`), and the package call builds its `MInv` over `cleanC Γ`. Making it work would mean changing `clean`, about 170 `EntryWeaker` constructions and 87 uses of `MInv.held`. `CapsExcept`, above, is the route.
