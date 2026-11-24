@@ -1097,3 +1097,17 @@ Lemmas:
 - `Inv.rbindIn` would then derive `CapsInpAt` directly.
 
 It fails because `Entry.clean` drops a dead entry's dependencies on purpose (`held := memDeps …` or `[]`), and the package call builds its `MInv` over `cleanC Γ`. Making it work would mean changing `clean`, about 170 `EntryWeaker` constructions and 87 uses of `MInv.held`. `CapsExcept`, above, is the route.
+
+**What the lift needs, and the two candidate invariants.**
+
+Rename's lifted `CallThruOK` fails only on "every closure-typed binding is live", because outer frames may hold dead closures. Those closures cannot capture the callee's own `w`, which is fresh at the callee's entry. Showing that takes a store fact, from one of two candidates.
+
+- **(i) `CapsExcept`, above.** Its read lemma must be typing-aware:
+  - A dead binding killed in place keeps its slot, and a live view may still depend on it, since `CtxWF.live` does not ask the root to be live.
+  - So a read can land in a dead struct's `Vec`. Its elements are safe when their type has no closures (`WFv.no_pkg`). Otherwise they are a closure whose captures the dead owner's names once listed.
+- **(ii) No forward captures.** A package in a slot below a frame's base captures none of that frame's variables:
+  - A package is made inside the frame, from the frame's variables.
+  - It leaves the frame only through an `inout` argument or the result, after the frame's variables die.
+  - The exit checks have to be shown to refuse the `inout` case.
+
+(ii) is closer to what the lift needs, and it is local to frames. (i) also covers the top-level call's dead closures. Next session: settle which one, by trying (ii)'s step lemma on `assign` to an `inout` argument first.
