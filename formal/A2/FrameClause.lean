@@ -581,4 +581,63 @@ theorem HeldZ.leafR {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : S
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
   frames x m0 h := by rw [hcf] at h; cases h
 
+
+/-- An exit taken keeps `HeldZ`: what runs then is part of what ran. -/
+theorem ExitAt.under_kv {s e : Stmt} {n : Nat} (he : ExitAt s n e) :
+    ∀ p, ∀ v ∈ (e.under p).killVars, v ∈ (s.under p).killVars := by
+  induction he with
+  | exit => intro p v hv; simp [Stmt.under, Stmt.killVars] at hv
+  | @seq a b e n h ih =>
+    intro p v hv
+    by_cases hpa : p ∈ a.spine
+    · simp only [Stmt.under, hpa, ↓reduceIte]; exact ih p v hv
+    · have := ih p v hv
+      rw [Stmt.under_off hpa] at this
+      simp [Stmt.under, hpa, Stmt.killVars, this]
+  | @scope x s e n h ih =>
+    intro p v hv
+    have hsp := h.spine
+    by_cases hps : p ∈ s.spine
+    · have hpe : p ∈ e.spine := hsp ▸ hps
+      simp only [Stmt.under, hpe, hps, ↓reduceIte] at hv ⊢; exact ih p v hv
+    · have hpe : p ∉ e.spine := hsp ▸ hps
+      simp only [Stmt.under, hpe, hps, ↓reduceIte, Stmt.killVars, List.mem_cons] at hv ⊢
+      rcases hv with h1 | h1
+      · exact Or.inl h1
+      · exact Or.inr (h.killVars v h1)
+  | @scopeD x f s e n h ih =>
+    intro p v hv
+    have hsp := h.spine
+    by_cases hps : p ∈ s.spine
+    · have hpe : p ∈ e.spine := hsp ▸ hps
+      simp only [Stmt.under, hpe, hps, ↓reduceIte] at hv ⊢; exact ih p v hv
+    · have hpe : p ∉ e.spine := hsp ▸ hps
+      simp only [Stmt.under, hpe, hps, ↓reduceIte, Stmt.killVars, List.mem_cons] at hv ⊢
+      rcases hv with h1 | h1
+      · exact Or.inl h1
+      · exact Or.inr (h.killVars v h1)
+  | @block s e n h ih =>
+    intro p v hv
+    by_cases hps : p ∈ s.spine
+    · simp only [Stmt.under, hps, ↓reduceIte]; exact ih p v hv
+    · have := ih p v hv
+      rw [Stmt.under_off hps] at this
+      simp [Stmt.under, hps, Stmt.killVars, this]
+
+theorem ExitAt.catchFrames_sub {s e : Stmt} {n : Nat} (he : ExitAt s n e) :
+    ∀ c ∈ e.catchFrames, c ∈ s.catchFrames := by
+  induction he with
+  | exit => intro c hc; simp [Stmt.catchFrames] at hc
+  | seq _ ih => intro c hc; simpa [Stmt.catchFrames] using ih c hc
+  | scope _ ih => intro c hc; simpa [Stmt.catchFrames] using ih c (by simpa [Stmt.catchFrames] using hc)
+  | scopeD _ ih => intro c hc; simpa [Stmt.catchFrames] using ih c (by simpa [Stmt.catchFrames] using hc)
+  | block _ ih => intro c hc; simpa [Stmt.catchFrames] using ih c hc
+
+theorem HeldZ.exitAt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s e : Stmt} {n : Nat} (hz : HeldZ m Γ Z s)
+    (he : ExitAt s n e) : HeldZ m Γ Z e where
+  caps := hz.caps
+  reach p E hp hm v hv := hz.reach p E hp hm v (he.under_kv p v hv)
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (he.catchFrames_sub _ hx)
+
 end A2

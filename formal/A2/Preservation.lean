@@ -5131,7 +5131,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       exact ⟨Γ', StmtT.block ht', hi'.respine rfl (fun v hv => hv) hi'.catchOK hi'.pinIn hi'.dtorIn,
         hnv, hk', hfz, Z', hz'.blockOut, hzk⟩
     | blockSkip =>
-      refine ⟨Γ, ?_, hik, Nat.le_refl _, (CtxRel.refl _).keep rfl rfl, fun _ _ => rfl⟩
+      refine ⟨Γ, ?_, hik, Nat.le_refl _, (CtxRel.refl _).keep rfl rfl, fun _ _ => rfl, Z, hz.blockIn, ZKeep.refl _ _⟩
       rcases skip_inv hk with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
@@ -5142,7 +5142,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hik.respine he.spine he.vars (he.catchOK hik.catchOK) (he.pinOK hik.pinIn) (he.dtorPinOK hik.dtorIn) he.killVars,
         Nat.le_refl _, ⟨fun v E hv hvs => ⟨by rw [he.spine]; exact hvs, E, hv, rfl, rfl, fun _ => rfl⟩,
         fun v E' hv hvs => ⟨by show v ∉ k.spine; rw [← he.spine]; exact hvs, E', hv⟩, DKeep.refl _ _⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl, Z, hz.blockIn.exitAt he, ZKeep.refl _ _⟩
   | @loop ξ Γ Δ F k hsrc hb hwf hnw hdom hmode hdk hds hfΔ _ =>
     intro m m' s' hcd hi hst Z hz
     cases hst with
@@ -5153,7 +5153,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       refine ⟨Γ, StmtT.seq hsrc hb (StmtT.loop hsrc hb hwf hnw hdom hmode hdk hds hfΔ),
         hi.respine (src_spine hsk) (fun v hv => by simpa [Stmt.vars] using hv) (catchOK_src hsk)
           (PinOK.of_spine_nil (src_spine hsk)) (DtorPinOK.of_spine_nil (src_spine hsk)),
-        Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsk), fun _ _ => rfl⟩
+        Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsk), fun _ _ => rfl,
+        Z, hz.restmt rfl (src_spine hsk) (fun v hv => by
+          simp only [Stmt.killVars, List.mem_append] at hv ⊢; rcases hv with h | h <;> exact h)
+          (fun c hc => by rw [Stmt.catchFrames_src hsk] at hc; cases hc), ZKeep.refl _ _⟩
   | letrec hsrc hx hxF hf hp hty ho hc hs hpx _ =>
     intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
