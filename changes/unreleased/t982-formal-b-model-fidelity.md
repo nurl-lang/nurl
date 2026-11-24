@@ -19,3 +19,8 @@
     gains `.gone`, and `ArcInv` requires it on a block that only `Weak`
     handles name. `upgrade_ok` also states that a failed upgrade finds the
     slot empty.
+  - `ArcWeak_share` is covered: `weakClone_ok` clones a held `Weak` with or
+    without strong handles left, and only the weak count moves.
+    `arcDrop_ok` now states that the value handed back at the last release
+    is the one the block held, and `weakDrop_ok` states the block's
+    liveness afterwards, not only the returned flag.

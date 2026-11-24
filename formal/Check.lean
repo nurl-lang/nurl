@@ -958,6 +958,7 @@ import D
 #print axioms B.arcNew_ok
 #print axioms B.arcClone_ok
 #print axioms B.arcDowngrade_ok
+#print axioms B.weakClone_ok
 #print axioms B.arcDrop_ok
 #print axioms B.weakDrop_ok
 #print axioms B.upgrade_ok
