@@ -702,6 +702,7 @@ $ `stdlib/core/vec.nu`
 : ~ i g_eng_dtor_unw -1  // 1: a destructor of the program may start a panic; -1 not asked yet (__eng_dtor_unw_init)
 : ~ i g_sm_dyn 0  // the name `dyn` (interned): boxing a value as a trait object
 : ~ i g_sm_memtake 0  // the name `mem_take` (interned): a binding takes over what it read (g_eng_rawwalk, AGORA-877)
+: ~ i g_sm_memforget 0  // the name `mem_forget` (interned): the core IR names the binding it gives up (AGORA-989)
 : i TG_SC 32
 : i TG_RB 33  // a payload taken out of a temporary: what it holds of itself, of its new holder
 : i TG_CV 34  // a view a closure's body hands back: what it lends of an argument, a capture
@@ -21268,6 +21269,13 @@ unsafe @ eng_byte s w i k → i {
         : i ops ( wv_new )
         : ~ i j 0
         ~ < j n { ( wv_push ops ( eng_op ( ec + + at 3 j ) ) ) = j + j 1 }
+        ? & == n 1 == name g_sm_memforget {
+            // `( mem_forget x )`: the engine's verdicts stay as they were
+            // before the IR named x (AGORA-989); it asks nothing of the
+            // operand.
+            ( wv_drop ops )
+            ^ g_av_none
+        } {}
         ? & & != 0 g_eng_rawwalk == n 1 == name g_sm_memtake {
             // `( mem_take x )`, where the engine reads raw bodies: x, read
             // out of a container by hand, is its own from here - what it
@@ -25201,6 +25209,7 @@ unsafe @ eng_print_types → v {
     = g_ws_syms syms
     = g_sm_dyn ( __core_in `dyn` )
     = g_sm_memtake ( __core_in `mem_take` )
+    = g_sm_memforget ( __core_in `mem_forget` )
     ( eng_sq_reset )
     ( __ep_init )
     ( __et_names )
@@ -34203,6 +34212,11 @@ unsafe @ nurl_lex_peek4_type i h → i {
     : s name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
+    // (The core IR names the binding given up, as every call names the
+    // operands it consumes: `call mem_forget 1 vK`. Without it the IR said
+    // the binding lived to its scope end while the code cleared its flag
+    // here - AGORA-989.)
+    ? != 0 g_core_live { ( core_push_name syms name ( nurl_sym_get syms name ) ) } {}
     : s up ( mem_udrop_ptr_of syms name )
     ? != 0 ( nurl_str_len up ) { ( mem_udrop_flag_set syms cg up `0` ) } {}
     // A destructor's receiver given up whole: its fields go with it, so no
