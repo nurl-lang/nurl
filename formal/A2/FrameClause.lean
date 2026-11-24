@@ -699,4 +699,39 @@ theorem Stmt.under_kv_sub (p : Var) : ∀ (s : Stmt), ∀ v ∈ (s.under p).kill
     · exact hv
   | _ => intro v hv; simpa [Stmt.under] using hv
 
+
+/-- `HeldZ` at a call through a package's run-time form, from the call's:
+    the environment's binding `e`, `rbind` around the body and watching
+    nothing, inside the frozen frame of what the call lends. -/
+theorem HeldZ.frozenRbind {m : Mem} {Γ : Ctx} {Z : Var → List Var} {x e : Var} {H0 : List Var} {b k : Stmt}
+    (hz : HeldZ m Γ Z (.scope x (.seq b k))) (hZe : Z e = []) (heb : e ∉ b.spine)
+    (he : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ b.spine → e ∉ Z p) :
+    HeldZ m Γ Z (.scope x (.seq (.frozen H0 (.rbind e b)) k)) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpb : p ∈ b.spine
+    · have hpe : e ≠ p := fun h => heb (h ▸ hpb)
+      have h1 : (Stmt.scope x (.seq (.frozen H0 (.rbind e b)) k)).under p = b.under p := by
+        simp [Stmt.under, Stmt.spine, hpb, hpe]
+      have h2 : (Stmt.scope x (.seq b k)).under p = b.under p := by
+        simp [Stmt.under, Stmt.spine, hpb]
+      rw [h1] at hv
+      exact hz.reach p E hp hm v (by rw [h2]; exact hv)
+    · by_cases hpe : e = p
+      · subst hpe; rw [hZe]; exact fun h => by cases h
+      · have h1 : (Stmt.scope x (.seq (.frozen H0 (.rbind e b)) k)).under p =
+            .scope x (.seq (.frozen H0 (.rbind e b)) k) := by
+          simp [Stmt.under, Stmt.spine, hpb, Ne.symm hpe]
+        have h2 : (Stmt.scope x (.seq b k)).under p = .scope x (.seq b k) := by
+          simp [Stmt.under, Stmt.spine, hpb]
+        rw [h1] at hv
+        simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv
+        rcases hv with rfl | (rfl | hv) | hv
+        · exact hz.reach p E hp hm _ (by rw [h2]; simp [Stmt.killVars])
+        · exact he p E hp hm hpb
+        · exact hz.reach p E hp hm v (by rw [h2]; simp [Stmt.killVars, hv])
+        · exact hz.reach p E hp hm v (by rw [h2]; simp [Stmt.killVars, hv])
+  bound := hz.bound
+  frames x0 m0 b0 hx := hz.frames x0 m0 b0 (by simpa [Stmt.catchFrames] using hx)
+
 end A2

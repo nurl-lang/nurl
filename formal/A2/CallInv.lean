@@ -634,14 +634,42 @@ theorem callStmt_catchFrames {base : Nat} (h : CallH P Γ F x fn args base) (k :
   unfold callStmt callIn resFrame
   split <;> simp [Stmt.catchFrames, catchFrames_wrap, hb]
 
+/-- The borrowed parameters of a call's frame: old ones, or the new `in`
+    parameters. -/
+theorem CallH.rootb_cases {m : Mem} (h : CallH P Γ F x fn args m.nv) :
+    ∀ p E, (callS Γ F fn args m.nv x).canon (sigCtx fn) p = some E → E.mode = .rootb →
+      (p < m.nv ∧ Γ p = some E) ∨
+      (∃ k' t, fn.params[k']? = some (PMode.inp, t) ∧ p = m.nv + 0 + k' ∧ E = callPe Γ fn.params args k') := by
+  intro p E hp hrb
+  rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+      ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+  · exact absurd hrb (resMode_ne' fn)
+  · exact absurd hrb (resMode_ne' fn)
+  · exact Or.inr ⟨k', t, hk', rfl, rfl⟩
+  · cases hrb
+  · cases hrb
+  · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+    rw [clean_mode] at hrb
+    obtain ⟨E0, h0, hm⟩ := h.postdm.2 _ E1' h1'
+    have := h.post_rootb h0 (hm ▸ hrb)
+    rw [h1'] at this; cases this
+    rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)]
+    exact Or.inl ⟨h.domlt _ _ h0, h0⟩
+
 /-- AGORA-937 B4: **the call's frame meets `HeldZ`**, each new parameter's
     frame list being the call's frozen one: the new frame's slots are the
     arguments' values or what they lend, clean for every anchor
     (`NamesFree.noMut`, `MInv.goodOf`), and the callee's body names nothing
     frozen (`callStmt_under`). -/
-theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk : k.src = true)
+theorem CallH.heldZ' (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk : k.src = true)
     (hi : Inv m Γ F (.letcall x f args k)) {m1 : Mem} (hb : BindParams m fn.params args m.nv 0 m1)
-    {Z : Var → List Var} (hz : HeldZ m Γ Z (.letcall x f args k)) :
+    {Z : Var → List Var}
+    (hcaps : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ w, Watch E (Z p) w → FrameCaps m (Z p) w)
+    (hA0 : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ w, Watch E (Z p) w →
+      ∀ a ∈ args, ∀ o V, m.st a = some ⟨o, some V⟩ → LiveGood m w V)
+    (hkv : ∀ p E, Γ p = some E → E.mode = .rootb →
+      ∀ v, (v = x ∨ v ∈ inoutArgs fn.params args ∨ v ∈ k.killVars) → v ∉ Z p)
+    (hbd : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ Z p, v < m.nv) :
     HeldZ (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn))
       (fun p => if m.nv ≤ p then callZ Γ fn args m.nv else Z p) (callStmt fn args m.nv x k) := by
   have hargs : ∀ a ∈ args, ∃ E, Γ a = some E ∧ E.live = true := fun a ha => by
@@ -651,25 +679,7 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
   have hlt : ∀ a ∈ args, a < m.nv := fun a ha => by
     obtain ⟨E, hE, _⟩ := hargs a ha
     exact h.domlt a E hE
-  -- the borrowed parameters of the frame: old ones, or the new `in` parameters
-  have hcases : ∀ p E, (callS Γ F fn args m.nv x).canon (sigCtx fn) p = some E → E.mode = .rootb →
-      (p < m.nv ∧ Γ p = some E) ∨
-      (∃ k' t, fn.params[k']? = some (PMode.inp, t) ∧ p = m.nv + 0 + k' ∧ E = callPe Γ fn.params args k') := by
-    intro p E hp hrb
-    rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
-        ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
-    · exact absurd hrb (resMode_ne' fn)
-    · exact absurd hrb (resMode_ne' fn)
-    · exact Or.inr ⟨k', t, hk', rfl, rfl⟩
-    · cases hrb
-    · cases hrb
-    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
-      rw [clean_mode] at hrb
-      obtain ⟨E0, h0, hm⟩ := h.postdm.2 _ E1' h1'
-      have := h.post_rootb h0 (hm ▸ hrb)
-      rw [h1'] at this; cases this
-      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)]
-      exact Or.inl ⟨h.domlt _ _ h0, h0⟩
+  have hcases := h.rootb_cases
   refine
     { caps := fun p E hp hm w hW => ?_
       reach := fun p E hp hm v hv => ?_
@@ -678,12 +688,8 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
   · rcases hcases p E hp hm with ⟨hpl, h0⟩ | ⟨k', t, hk', rfl, rfl⟩
     · -- an old parameter: its frame's clause, kept (the arguments are its frame's)
       simp only [Nat.not_le.mpr hpl, ↓reduceIte] at hW ⊢
-      have hcw := hz.caps p E h0 hm w hW
-      have hreach : ∀ v ∈ (Stmt.letcall x f args k).killVars, v ∉ Z p := fun v hv =>
-        hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [Stmt.spine])]; exact hv)
-      exact hb.frameCaps hi.toMInv hlt hargs
-        (fun a ha o V hs => hcw a o V (hreach a (by simp [Stmt.killVars, ha])) hs)
-        (fun v o V hv hs => hcw v o V hv hs)
+      have hcw := hcaps p E h0 hm w hW
+      exact hb.frameCaps hi.toMInv hlt hargs (hA0 p E h0 hm w hW) (fun v o V hv hs => hcw v o V hv hs)
     · -- a new `in` parameter: every argument is clean for its anchor, and for
       -- every name of its frame list (one no argument may change by name)
       simp only [show m.nv ≤ m.nv + 0 + k' by omega, ↓reduceIte] at hW ⊢
@@ -742,16 +748,14 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
         · have := vlt hpl; have := veq e; omega
         · obtain ⟨_, _, _, _, e⟩ := mem_wrapSpine hm'; have := vlt hpl; have := veq e; omega
       rw [Stmt.under_off hps] at hv
-      have hreach : ∀ v ∈ (Stmt.letcall x f args k).killVars, v ∉ Z p := fun v hv =>
-        hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [Stmt.spine])]; exact hv)
       simp only [callStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hv
       rcases hv with rfl | hv | hv
-      · exact hreach _ (by simp [Stmt.killVars])
+      · exact hkv p E h0 hm _ (Or.inl rfl)
       · rcases killVars_callIn fn args m.nv x _ hv with rfl | hge | hio
-        · exact hreach _ (by simp [Stmt.killVars])
-        · exact fun hz' => Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hge (hz.bound p E h0 hm _ hz'))
-        · exact hreach _ (by simp [Stmt.killVars, inoutArgs_sub _ _ h.len _ hio])
-      · exact hreach _ (by simp [Stmt.killVars, hv])
+        · exact hkv p E h0 hm _ (Or.inl rfl)
+        · exact fun hz' => Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hge (hbd p E h0 hm _ hz'))
+        · exact hkv p E h0 hm _ (Or.inr (Or.inl hio))
+      · exact hkv p E h0 hm _ (Or.inr (Or.inr hv))
     · simp only [show m.nv ≤ m.nv + 0 + k' by omega, ↓reduceIte]
       have hpw : m.nv + 0 + k' ∈ wrapSpine fn.params m.nv 0 := mem_wrapSpine_of hk' (fun b h => by cases h)
       intro hvz
@@ -762,8 +766,23 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
     · exact Nat.lt_of_lt_of_le (mem_callZ hv).1 (by simp [callMem])
     · rename_i hpl
       rcases hcases p E hp hm with ⟨_, h0⟩ | ⟨k', _, _, rfl, _⟩
-      · exact Nat.lt_of_lt_of_le (hz.bound p E h0 hm v hv) (by simp [callMem])
+      · exact Nat.lt_of_lt_of_le (hbd p E h0 hm v hv) (by simp [callMem])
       · omega
+
+theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk : k.src = true)
+    (hi : Inv m Γ F (.letcall x f args k)) {m1 : Mem} (hb : BindParams m fn.params args m.nv 0 m1)
+    {Z : Var → List Var} (hz : HeldZ m Γ Z (.letcall x f args k)) :
+    HeldZ (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn))
+      (fun p => if m.nv ≤ p then callZ Γ fn args m.nv else Z p) (callStmt fn args m.nv x k) := by
+  have hreach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (Stmt.letcall x f args k).killVars, v ∉ Z p :=
+    fun p E h0 hm v hv => hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [Stmt.spine])]; exact hv)
+  refine h.heldZ' hk hi hb hz.caps (fun p E h0 hm w hW a ha o V hs => ?_) (fun p E h0 hm v hv => ?_) hz.bound
+  · exact hz.caps p E h0 hm w hW a o V (hreach p E h0 hm a (by simp [Stmt.killVars, ha])) hs
+  · refine hreach p E h0 hm v ?_
+    rcases hv with rfl | hio | hv
+    · simp [Stmt.killVars]
+    · simp [Stmt.killVars, inoutArgs_sub _ _ h.len _ hio]
+    · simp [Stmt.killVars, hv]
 
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
