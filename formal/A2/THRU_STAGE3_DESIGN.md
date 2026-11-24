@@ -1037,3 +1037,15 @@ Stated this way, the clause holds for frozen roots as well: a frozen root is no 
 - `z' ⊆ z` still holds for the typing. `zN` drops `thruW`, and the correspondence lemma shows that `thruW` is the set of removed slots.
 - The spine clause then reads, at an `rbind` under `frozen z`: "a held anchor at a root outside `F ++ z` has `CapsInpAt`". A frozen `w'` is in `z`, so the clause is vacuous for it. A changed `w` is not in `z`, so the clause applies, and the call establishes it as above.
 - `Inv.rbindIn` moves to the typing's `F ++ z'`. A root in `z` but not in `z'` is a root of `mutNames`, which by `NamesFree` no argument but a closure reaches, so it is no held anchor.
+
+**Correction: the informative runtime list does not work.** The runtime cannot match the typing:
+- `thruW` is the roots an argument *may* view (`callR`). An argument whose value holds no views at run time, such as an empty `Vec` of slices, removes nothing from the runtime `z`.
+- `w` then stays in `z` while the typing has freed it (`zN` drops `thruW`).
+- Inside the frame, under `F ++ zN`, the clause still asks `CapsInpAt m w`, and the outer level gives nothing for it.
+
+**What remains: a frame-relative store clause.** For a borrowed parameter `p` of the frame based at `b`, with held anchor `w`: every slot at or above `b` holds `ValCapsInp · w`, and so do the slots of the call's `inout` arguments and every block. This is true for frozen roots too, because a caller closure that captures `w'` is below `b`. What the frame reads elsewhere is harmless:
+- A captured name holds nothing (`CapsOK`), and by `noPkg` its packages capture nothing by name.
+- A view lands in a root whose type holds no views. So that type has no closures (`hasFn → holdsView`), and by `noPkg` its packages capture nothing by name.
+- A borrow of a closure part holds its names, so an inout capture of `w` would make `w` a root of `mutNames`, which `CallThruOK` excludes.
+
+The proof work is `EvalR.capsInp` restated for that clause. A read below `b`, outside the `inout` arguments, needs the typing facts above, carried as `MInv`-level facts. Then comes the preservation of the new `Inv` field over every step, as for `heldCaps` in B2.
