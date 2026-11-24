@@ -2123,6 +2123,59 @@ theorem callcE {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} (h : k.Thru P) :
 
 end Stmt.Thru
 
+/-- AGORA-937 (3d, route U): what a call into code that changes elements
+    through a borrow (`ThruFn`) asks of its caller when it passes views of
+    real memory, not only of regions (AGORA-933's `( f1 vv )`, `vv` a `Vec`
+    of slices of the caller's `w`). The callee changes only inside `w`'s
+    elements, through its regions (`Eff.dropIn`), so:
+    - its own calls change nothing through a borrow (the change is placed
+      one call deep, `ThruOrReady`);
+    - an argument to a parameter with no region holds no memory (the call
+      freezes nothing, `ThruReady`'s `Rf = []`);
+    - what a regioned argument holds in memory is views or handles of roots,
+      no two regioned arguments on one root;
+    - at each such root `w`: every argument reaches it at a view or a handle
+      (a name would anchor it, which would freeze it), in what it holds (not
+      on its path), and none is `w`; a lent
+      parameter it reaches is a `Vec` (its view is then a held anchor,
+      `HeldAnch`); no live binding after the call is ended by
+      a change inside `w`'s elements (a binding that is, `s2`, is ended
+      before the call by weakening, as nurlc ends it); no destructor reads
+      inside them; `w` is not lent out (`F`), is a live owned `Vec` whose
+      elements hold no views, and no closure handed to the call changes it;
+      and every closure-typed binding of the frame is live and changes `w` by
+      no name (the store then holds no package capturing `w` but read-only,
+      `HeldCapsInp`).
+    - No argument is a closure: so a call through a package (whose receiver
+      is one) passes views of a region only, as before route U. Route U for
+      closure arguments is later work; A2 then types fewer such calls than
+      nurlc accepts, which is no hole. -/
+def CallThruOK (P : Prog) (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) : Prop :=
+  (∀ g ∈ fn.body.calls, ¬ ThruFn P g) ∧
+  (∀ a ∈ args, ∀ ms q, (argE Γ a).ty.undtor ≠ .fn ms q) ∧
+  (∀ i (h : i < fn.params.length), fn.params[i].2.holdsView = false →
+    (argE Γ (args.getD i 0)).ty = .int ∨ memDeps (argE Γ (args.getD i 0)).held = []) ∧
+  (∀ i (h : i < fn.params.length), fn.params[i].2.holdsView = true → (argE Γ (args.getD i 0)).ty ≠ .int →
+    ∀ e ∈ memDeps (argE Γ (args.getD i 0)).held, (e.kind = .view ∨ e.kind = .self) ∧
+      ∀ j (hj : j < fn.params.length), j ≠ i → fn.params[j].2.holdsView = true →
+        (argE Γ (args.getD j 0)).ty ≠ .int →
+        ∀ e' ∈ memDeps (argE Γ (args.getD j 0)).held, e'.root ≠ e.root) ∧
+  ∀ w ∈ callR Γ args,
+    w ∉ args ∧
+    (∀ a ∈ args, ∀ d ∈ (argE Γ a).vdeps, d.root = w → d.kind = .view ∨ d.kind = .self) ∧
+    (∀ a ∈ args, ∀ d ∈ (argE Γ a).path, d.root ≠ w) ∧
+    (∀ i (h : i < fn.params.length), fn.params[i].1 = .inp →
+      w ∈ roots (memDeps (argE Γ (args.getD i 0)).held) → ∃ t, fn.params[i].2 = .vec t) ∧
+    (∀ y E, callPost Γ fn args y = some E → E.live = true → hits .dropIn false w E = false) ∧
+    (∀ y E, callPost Γ fn args y = some E → E.dtor = true → E.mode.ownSlot = true →
+      hitsMem .dropIn false w E = false) ∧
+    w ∉ F ∧
+    (∃ Er t, callPost Γ fn args w = some Er ∧ Er.live = true ∧ Er.mode = .own ∧
+      Er.ty = .vec t ∧ t.holdsView = false) ∧
+    w ∉ roots (mutNames Γ args) ∧
+    (∀ v E, Γ v = some E → E.ty.hasFn = true →
+      E.live = true ∧ ∀ d ∈ E.held, d.root = w → d.kind.bound = .none)
+
 /-- A call, checked against the callee's summary.  Each argument is live
     and of its parameter's type; one that moves or may change is not frozen
     and reaches the callee through no other argument (§2.1, §2.4). -/

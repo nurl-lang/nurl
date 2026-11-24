@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+<template GW of compiler/tests/private_type_in_generic_template_mod.nu>:1:9: error: private type 'Impl' is not visible across files: the generic struct 'GW' written in 'compiler/tests/private_type_in_generic_template_mod.nu' names it in a field. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub : name ...'). Defined in 'compiler/tests/private_handle_payload_mod.nu'
+{ ( Vec Impl ) v T x } 
+        ^

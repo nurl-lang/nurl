@@ -1,7 +1,7 @@
-// option_of_a_vec_of_drop_values_lent_out_of_a_local_returned: agora #459 — `^ ( maybe o k )` of a local `?( Vec D )`, D a `% Drop` value with no copy
-// Closed: a function handing back what a call may lend out of a local it drops is refused where the value cannot be copied — an option of a Vec of such values as much as an option of one (agora #459).
-// main: accepted; heap-use-after-free.
-// map: §7.6 | A2 | rejected | - | agora #459: `^ ( maybe o k )` of a local `?( Vec D )`
+// option_of_a_vec_of_drop_values_lent_out_of_a_local_handed_over_runs_clean: agora #459 — `^ ( maybe o k )` of a local `?( Vec D )`, D a `% Drop` value with no copy
+// Closed twice: a function handing back what a call may lend out of a local it drops was refused where the value cannot be copied (agora #459); now that the call answers per call (AGORA-999), the return hands the local itself over on the runs the call lent it (AGORA-995's return handover), and the program runs clean.
+// main (v0.80): accepted; heap-use-after-free.
+// map: §7.6 | A2 | runs-clean | - | agora #459, AGORA-995: `^ ( maybe o k )` of a local `?( Vec D )` hands the local over
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

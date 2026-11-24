@@ -12,6 +12,7 @@
 
 - **A local handed back whole through a lending call is handed over, not copied** (AGORA-995). This covers `^ ( id s )`, `^ ( wrap s )` with `wrap` returning `@ K { p 0 }`, and `: K k ( wrap s ) … ^ k`, where `s` is a local of the function. `s`'s value becomes the result, with no copy and no release. Before, the String or struct was copied and the local released.
   - A value of a type with no copy (a `% Drop` struct) handed back this way is now accepted. Before, it was refused (agora #187).
+  - So is an option of a Vec of `% Drop` values a call answers per call for (AGORA-999), such as `^ ( maybe o k )` with `maybe` handing `o` back on one path: `o` is handed over on that path. Before, it was refused (agora #459).
   - A temporary handed to a literal that lends its parameter whole, as in `( wrap ( string_from … ) )`, is the result's, and nothing is copied.
   - Over the tree sweep's changed functions, 83 copy calls and 320 drop calls are gone. Most of them are `HttpStreamState` copies in `http_stream_open_to` / `http_stream_open_bytes_to`.
 - **The compiler asks what a callee lends without building anything when it lends nothing** (AGORA-995). Instruction counts against main's compiler at this change's base, built the same way, with peak RSS unchanged:
