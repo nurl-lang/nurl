@@ -44,6 +44,14 @@ the page). It serves `GET /` (the page) and `GET /cloud` (the file,
 verbatim) and draws with orbit / pan / zoom, point-size, density and
 far-trim sliders, and rgb / height / depth colouring.
 
+**Game mode** (the "game mode" button, or `g`; mouse and keyboard only)
+flies through the scene like a game's spectator camera: the cursor is
+captured and the mouse turns the head, `w a s d` or the arrows move along
+the view and across it, `e` / `q` (or space / ctrl) rise and sink, shift is four
+times faster and the wheel sets the speed. There is no gravity and nothing
+to collide with. `esc` gives the cursor back, and the orbit carries on
+from the view the flight ended on. `?fly=1` opens the page in game mode.
+
 Details that matter more than they look:
 
 - Points are shuffled once with a seeded Fisher-Yates, so the density

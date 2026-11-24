@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.1] — 2026-11-24
+
+### Added
+
+- The viewer has a game mode (the "game mode" button, or `g`), which flies
+  through the scene like a game's spectator camera. The cursor is captured
+  (Pointer Lock) and the mouse turns the head. `w a s d` or the arrows move
+  along the view and across it, `e` / `q` (or space / ctrl) rise and sink, shift is
+  four times faster, and the wheel sets the speed relative to the scene's
+  size. There is no gravity and there are no collisions. `esc` gives the
+  cursor back, and the orbit carries on from the view the flight ended on.
+  The button is hidden on touch screens. `?fly=1` opens the page in game mode.
+  Because ctrl+w closes the tab and no page can block it, the browser asks for
+  confirmation before leaving the page in game mode.
+
+### Fixed
+
+- Panning no longer moves the centre that the far-trim slider measures from.
+  The orbit target was the same array as that centre until the first reset.
+
 ## [0.4.0] — 2026-11-23
 
 ### Added
