@@ -566,4 +566,220 @@ theorem MInv.rd_no_href {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {k : Nat} {bl : Bl
     | exact ((hpay _ rfl).1).href_sub_false hs
     | (cases hs; done)
 
+
+/-- A node inside a clean tree that lies at a handle, in an owned slot or a
+    block, is the one every slot-located node at that handle is
+    (`nodeAt_unique`), so all of them are clean. -/
+theorem MInv.tgt_of_node {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) {ty : Ty} {c d : Nat}
+    {es : List Val} (hn : NodeAt m c (.node ty c d es)) (hc : ValCapsInp (.node ty c d es) w) :
+    ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t → (∃ ty d es, n = .node ty c d es) →
+      ValCapsInp n w := by
+  rintro x t n hx hsn ⟨ty', d', es', rfl⟩
+  rw [nodeAt_unique hM.heap (Or.inl ⟨x, t, hx, hsn, ty', d', es', rfl⟩) hn]; exact hc
+
+
+/-- A borrowed value holds no node: what it reaches it reaches by handle. -/
+theorem ValOK.no_node {m : Mem} {τ : Ty} {V : Val} {P H : List Dep} (h : ValOK m τ V P H) {ty : Ty}
+    {c d : Nat} {es : List Val} (hs : Sub (.node ty c d es) V) : False := by
+  induction h with
+  | pair _ _ ih1 ih2 =>
+    cases hs with
+    | fst hs => exact ih1 hs
+    | snd hs => exact ih2 hs
+  | inl _ ih => cases hs with | inl hs => exact ih hs
+  | inr _ ih => cases hs with | inr hs => exact ih hs
+  | pkg _ _ ih => cases hs with | pkg hs => exact ih hs
+  | dtor _ ih => exact ih hs
+  | _ => cases hs
+
+/-- ... and what a block owns holds no handle either. -/
+theorem MInv.tree_no_href {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {k : Nat} {bl : Blk} {c : Nat}
+    (hk : m.blk k = some bl) (hs : Sub (.href c) bl.tree) : False := by
+  obtain ⟨_, _, hpay, _⟩ := hM.blocks k bl hk
+  obtain ⟨ty, kind, pay⟩ := bl
+  cases kind <;> cases pay <;> simp only [Blk.tree, Option.getD] at hs
+  all_goals first
+    | exact ((hpay _ rfl).1).href_sub_false hs
+    | (cases hs; done)
+
+/-- A live slot's value: an owned tree holds no handle, and a borrowed one's
+    handles reach clean nodes (the clause). -/
+theorem LiveCaps.tgt {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hM : MInv m Γ) {y : Var}
+    {E : Entry} {o : Bool} {V : Val} (hy : Γ y = some E) (hl : E.live = true)
+    (hs : m.st y = some ⟨o, some V⟩) {c : Nat} (hc : Sub (.href c) V) :
+    ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t → (∃ ty d es, n = .node ty c d es) → ValCapsInp n w :=
+  (h y E o V hy hl hs).2 c hc
+
+
+
+/-- A part `u` of a clean tree `N` that lies in an owned slot or a block
+    lends only clean nodes: its handles are of nodes inside `N` (a tree
+    there holds no handle of its own). -/
+theorem MInv.tgt_lendOf {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) {N : Val}
+    (hloc : (∃ x T, m.st x = some ⟨true, some T⟩ ∧ Sub N T) ∨ (∃ k bl, m.blk k = some bl ∧ Sub N bl.rd))
+    (hN : ValCapsInp N w) {u : Val} (hu : Sub u N) {c : Nat} (hc : Sub (.href c) (lendOf u)) :
+    ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t → (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+  rcases sub_href_lendOf hc with hh | ⟨ty, d, es, hn⟩
+  · rcases hloc with ⟨x, T, hx, hsT⟩ | ⟨k, bl, hk, hsb⟩
+    · exact (hM.slot_no_href hx ((hh.trans hu).trans hsT)).elim
+    · exact (hM.rd_no_href hk ((hh.trans hu).trans hsb)).elim
+  · have hnN := hn.trans hu
+    refine hM.tgt_of_node ?_ (hN.sub hnN)
+    rcases hloc with ⟨x, T, hx, hsT⟩ | ⟨k, bl, hk, hsb⟩
+    · exact Or.inl ⟨x, T, hx, hnN.trans hsT, ty, d, es, rfl⟩
+    · exact Or.inr ⟨k, bl, hk, hnN.trans hsb, ty, d, es, rfl⟩
+
+
+/-- A live slot's value lends only clean nodes through the handles it holds:
+    an owned tree holds none, a borrowed value's reach clean nodes. -/
+theorem LiveCaps.slotTgt {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hM : MInv m Γ) {y : Var}
+    {E : Entry} {o : Bool} {V : Val} (hy : Γ y = some E) (hl : E.live = true)
+    (hs : m.st y = some ⟨o, some V⟩) {c : Nat} (hc : Sub (.href c) V) :
+    ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t → (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+  cases o
+  · exact h.tgt hM hy hl hs hc
+  · exact (hM.slot_no_href hs hc).elim
+
+/-- A borrowed slot's value holds no node. -/
+theorem MInv.bor_no_node {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {y : Var} {E : Entry} {V : Val}
+    (hy : Γ y = some E) (hl : E.live = true) (hs : m.st y = some ⟨false, some V⟩) {ty : Ty} {c d : Nat}
+    {es : List Val} (hn : Sub (.node ty c d es) V) : False := by
+  obtain ⟨sl, hsl, _, hown, _, hbor⟩ := hM.slot y E hy
+  rw [hs] at hsl; cases hsl
+  obtain ⟨V', hV', hvok⟩ := hbor (by rw [← hown]) hl
+  cases hV'
+  exact hvok.no_node hn
+
+/-- ... so a part of a live slot's value lends only clean nodes. -/
+theorem LiveCaps.partTgt {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hM : MInv m Γ) {y : Var}
+    {E : Entry} {o : Bool} {V : Val} (hy : Γ y = some E) (hl : E.live = true)
+    (hs : m.st y = some ⟨o, some V⟩) {u : Val} (hu : Sub u V) {c : Nat} (hc : Sub (.href c) (lendOf u)) :
+    ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t → (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+  cases o
+  · rcases sub_href_lendOf hc with hh | ⟨ty, d, es, hn⟩
+    · exact h.tgt hM hy hl hs (hh.trans hu)
+    · exact (hM.bor_no_node hy hl hs (hn.trans hu)).elim
+  · exact hM.tgt_lendOf (Or.inl ⟨y, V, hs, Sub.refl _⟩) (h.val hy hl hs) hu hc
+
+/-- **What a typed right-hand side yields lends only clean nodes**: its
+    handles are a live borrow's (the clause), or of nodes inside a tree it
+    read, which is clean (`RhsT.liveCapsVal`'s reasoning) and lies in an
+    owned slot or a block. -/
+theorem RhsT.liveCapsTgt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ) (h : LiveCaps m Γ w) :
+    ∀ c, Sub (.href c) v → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+  intro c hc
+  -- (a payload a block holds: no handle, `WFv`)
+  have hpayNo : ∀ k bl V, m.blk k = some bl → bl.pay = some V → Sub (.href c) V → False :=
+    fun k bl V hk hp hs => ((hM.blocks k bl hk).2.2.1 V hp).1.href_sub_false hs
+  cases hr
+  case borrow =>
+    cases he
+    · rename_i hv
+      cases hc
+      exact hM.tgt_of_node (Or.inl ⟨_, _, hv, Sub.refl _, _, _, _, rfl⟩) (h.val (by assumption) (by assumption) hv)
+    · exact h.tgt hM (by assumption) (by assumption) (by assumption) hc
+  case «at» =>
+    cases he with
+    | «at» hn hv _ =>
+      obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv
+      · exact hM.tgt_lendOf (Or.inl ⟨_, _, hv, Sub.refl _⟩) (h.val (by assumption) (by assumption) hv)
+          (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+      · rcases hn' with ⟨x, t', hx, hs, hnd⟩ | ⟨k, bl, hk, hs, _⟩
+        · exact hM.tgt_lendOf (Or.inl ⟨x, t', hx, hs⟩)
+            ((h _ _ _ _ (by assumption) (by assumption) hhr).2 _ (Sub.refl _) x t' _ hx hs hnd)
+            (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+        · exact hM.tgt_lendOf (Or.inr ⟨k, bl, hk, hs⟩) ((hM.rdCapsInp w hk).1.sub hs)
+            (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+  case sat =>
+    cases he with
+    | sat hn hv _ _ _ hda =>
+      have hN := hM.viewTargetCaps (by assumption) (by assumption) hv hda w
+      rcases hda with ⟨x, t', hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+      · exact hM.tgt_lendOf (Or.inl ⟨x, t', hx, hs⟩) hN (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+      · exact hM.tgt_lendOf (Or.inr ⟨k, bl, hk, hs⟩) hN (Sub.child (List.getElem_mem hn) (Sub.refl _)) hc
+  case arcGet =>
+    cases he with
+    | arcGet _ hk => exact hM.tgt_lendOf (Or.inr ⟨_, _, hk, Sub.refl _⟩) (hM.rdCapsInp w hk).1 (Sub.refl _) hc
+  case glob =>
+    cases he with
+    | glob _ hf => rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;> cases hc
+  case lockTake =>
+    cases he with
+    | lockTake _ hk _ => exact (hpayNo _ _ _ hk rfl hc).elim
+  case chanRecv =>
+    cases he with
+    | chanRecv _ hk _ _ _ _ =>
+      cases hc with
+      | inr hc => exact (hpayNo _ _ _ hk rfl (Sub.fst (Sub.child (List.mem_cons_self ..) hc))).elim
+    | chanRecvNone _ _ _ _ => cases hc with | inl hc => cases hc
+  case rwTryRead =>
+    cases he
+    · cases hc with | inr hc => cases hc
+    · cases hc with | inl hc => cases hc
+  case rwTryWrite =>
+    cases he
+    · cases hc with | inr hc => cases hc
+    · cases hc with | inl hc => cases hc
+  case fst =>
+    cases he with
+    | fst hv => exact h.partTgt hM (by assumption) (by assumption) hv (Sub.fst (Sub.refl _)) hc
+  case snd =>
+    cases he with
+    | snd hv => exact h.partTgt hM (by assumption) (by assumption) hv (Sub.snd (Sub.refl _)) hc
+  case getl =>
+    cases he with
+    | getl hv => exact h.partTgt hM (by assumption) (by assumption) hv (Sub.inl (Sub.refl _)) hc
+  case getr =>
+    cases he with
+    | getr hv => exact h.partTgt hM (by assumption) (by assumption) hv (Sub.inr (Sub.refl _)) hc
+  case pop =>
+    cases he with
+    | pop hv _ _ => exact (hM.slot_no_href hv (Sub.child (by simp) hc)).elim
+  case remove =>
+    cases he with
+    | remove hn hv _ _ _ => exact (hM.slot_no_href hv (Sub.child (List.getElem_mem hn) hc)).elim
+  case takel =>
+    cases he with
+    | takel hv => exact (hM.slot_no_href hv (Sub.inl hc)).elim
+  case taker =>
+    cases he with
+    | taker hv => exact (hM.slot_no_href hv (Sub.inr hc)).elim
+  case inl hy hl _ _ =>
+    cases he with
+    | inl h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      cases hc with | inl hc => exact h.slotTgt hM hy hl hs1 hc
+  case inr hy hl _ _ =>
+    cases he with
+    | inr h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      cases hc with | inr hc => exact h.slotTgt hM hy hl hs1 hc
+  case pack hy hl _ _ _ _ =>
+    cases he with
+    | pack h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      cases hc with | pkg hc => exact h.slotTgt hM hy hl hs1 hc
+  case pair y z Ey Ez Γa Dy Dz hy hl hpa1 hz hl2 hpa2 _ =>
+    cases he with
+    | @pair _ _ v1 v2 m1' m2' h1 h2 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      obtain ⟨_, hs2⟩ := h2.slot
+      have hs2' : ∃ o, m.st z = some ⟨o, some v2⟩ := by
+        rcases h1.st_of z with he | he
+        · rw [he] at hs2; exact ⟨_, hs2⟩
+        · rw [he] at hs2; cases hs2
+      obtain ⟨_, hs2'⟩ := hs2'
+      obtain ⟨Ez0, hz0, hl0⟩ := hpa1.liveBack _ _ hz hl2
+      cases hc with
+      | fst hc => exact h.slotTgt hM hy hl hs1 hc
+      | snd hc => exact h.slotTgt hM hz0 hl0 hs2' hc
+  all_goals cases he
+  all_goals first
+    | (cases hc; done)
+    | (cases hc with | child he _ => simp at he)
+    | exact h.tgt hM (by assumption) (by assumption) (by assumption) hc
+    | exact (hM.slot_no_href (by assumption) hc).elim
 end A2
