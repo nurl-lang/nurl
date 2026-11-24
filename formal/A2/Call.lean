@@ -3124,7 +3124,150 @@ theorem held_anch (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
     {d : Dep} (hd : d ∈ E0.vdeps) (hwt : d.root ∈ thruW Γ fn args) :
     HeldAnch E0 d ∧ d.root ∉ (fn.body.rename (callRen fn.params args base)).killVars ∧
       ∃ Er, (callS Γ F fn args base x).canon (sigCtx fn) d.root = some Er ∧ Er.ty.holdsView = false := by
-  sorry -- WIP scaffold (AGORA-937 B4, never merged): the lifted lent parameter's held anchor
+  have hkl : k < fn.params.length := lt_of_get hk
+  have hpk : fn.params[k] = (.inp, t) := by simpa [List.getElem?_eq_getElem hkl] using hk
+  rw [h.canon_param hk] at hci
+  cases hci
+  -- route U: the body changes through a borrow and the call passes views
+  have hht : fn.body.hasThru = true := by
+    unfold thruW at hwt; split at hwt
+    · assumption
+    · simp at hwt
+  have hwR : d.root ∈ callR Γ args := by simpa [thruW, hht] using hwt
+  rcases h.thru (Or.inl hht) with hR | hc
+  · rw [hR] at hwR; cases hwR
+  obtain ⟨-, hnr, -, hw⟩ := hc
+  obtain ⟨hna, hkind, hpath, hvec, -, -, -, ⟨Er, tw, hEr, -, -, hty, hhv⟩, -, -⟩ := hw d.root hwR
+  have hak : args.getD k 0 ∈ args := by simp [List.getD, show k < args.length from h.len ▸ hkl]
+  -- what the parameter lifts to: its argument's path, and what it holds
+  have hlp : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).path =
+      (callPe Γ fn.params args k).path := by simp [RSetup.liftE, paramE, callS]
+  obtain ⟨Ea, hEa, -, hok, -⟩ := h.arg k hkl
+  have hae : argE Γ (args.getD k 0) = Ea := by unfold argE; rw [hEa]; rfl
+  have hEat : Ea.ty = t := by rw [hpk] at hok; exact hok
+  have hlt : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).ty = t := by
+    have : ((callS Γ F fn args base x).pe k).ty = t := by
+      show (callPe Γ fn.params args k).ty = t
+      unfold callPe; rw [hk]; simp only
+      split
+      · rename_i hi; rw [hae, hEat] at hi; rw [hi]
+      · rw [hae, hEat]
+    simpa [RSetup.liftE, paramE] using this
+  -- the argument's path does not reach `w`
+  have hnp : ∀ e ∈ (callPe Γ fn.params args k).path, e.root ≠ d.root := by
+    intro e he
+    unfold callPe at he; rw [hk] at he
+    simp only at he
+    split at he
+    · cases he
+    · have he' := typedDeps_sub _ _ he
+      unfold derive at he'
+      split at he'
+      · simp only [List.mem_singleton] at he'; subst he'
+        exact fun e => hna (e ▸ hak)
+      · obtain ⟨e0, he0, rfl⟩ := List.mem_map.mp he'
+        exact hpath _ hak e0 he0
+  have hkd : ∀ d' ∈ Ea.held, d'.root = d.root → d'.kind = .view ∨ d'.kind = .self :=
+    fun d' hd' hr => hkind _ hak d' (by
+      rw [hae]; unfold Entry.vdeps; exact List.mem_append_right _ hd') hr
+  have hmode : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).mode = .rootb := by
+    simp [RSetup.liftE, paramE, callS]; exact h.sOK.pe_rb k
+  -- `d` is held, not on the path
+  have hdp : d ∉ ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).path :=
+    fun hdp => hnp d (hlp ▸ hdp) rfl
+  have hσk : (callS Γ F fn args base x).σ (fn.nvars + k) =
+      (if Ea.ty = .int then [] else memDeps Ea.held) := by
+    simp only [callS]
+    rw [ite_cond_eq_true _ _ (eq_true ⟨Nat.le_add_right _ _, Nat.add_lt_add_left hkl _⟩),
+      Nat.add_sub_cancel_left, hae]
+  -- a view of `w` the parameter holds is one its argument holds in memory
+  have hdh : d ∈ (if regioned (.inp, t) = true then ((callS Γ F fn args base x).σ (fn.nvars + k)).map
+        (fun e => (⟨e.root, A2.comp e.kind .self⟩ : Dep)) else []) ∧ regioned (.inp, t) = true ∧
+      Ea.ty ≠ .int ∧ d ∈ memDeps Ea.held := by
+    have hd2 : d ∈ (if regioned (.inp, t) = true then ((callS Γ F fn args base x).σ (fn.nvars + k)).map
+        (fun e => (⟨e.root, A2.comp e.kind .self⟩ : Dep)) else []) ++
+        (if (regioned (.inp, t) && PMode.isInp .inp) = true then nameDeps ((callS Γ F fn args base x).pe k).held
+          else ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).held) := by
+      unfold Entry.vdeps at hd
+      simp only [hmode, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte] at hd
+      rcases List.mem_append.mp hd with hd | hd
+      · exact absurd hd hdp
+      · exact hd
+    -- what the argument holds at `w` is a view or a handle, so no name
+    have hnn : ∀ d' ∈ Ea.held, d'.root = d.root → d'.kind.isName = false := fun d' hd' hr => by
+      rcases hkd d' hd' hr with h' | h' <;> rw [h'] <;> rfl
+    have hpeh : ((callS Γ F fn args base x).pe k).held ⊆ Ea.held := by
+      intro e he
+      show e ∈ Ea.held
+      change e ∈ (callPe Γ fn.params args k).held at he
+      unfold callPe at he; rw [hk] at he; simp only at he
+      split at he
+      · cases he
+      · rw [hae] at he; exact typedDeps_sub _ _ he
+    rcases List.mem_append.mp hd2 with hd2 | hd2
+    · cases hreg : regioned (.inp, t)
+      · rw [hreg] at hd2; cases hd2
+      · rw [hreg] at hd2; simp only [↓reduceIte] at hd2; rw [hσk] at hd2
+        obtain ⟨e, he, rfl⟩ := List.mem_map.mp hd2
+        split at he
+        · cases he
+        · rename_i hint
+          simp only [↓reduceIte]; rw [hσk]; simp only [hint, ↓reduceIte]
+          exact ⟨List.mem_map_of_mem he, trivial, hint, by rw [comp_self_r]; exact he⟩
+    · exfalso
+      cases hreg : regioned (.inp, t)
+      · -- no region: the parameter holds its argument's dependencies, and
+        -- an argument to a parameter with no region holds no memory
+        rw [hreg] at hd2
+        simp only [Bool.false_and, Bool.false_eq_true, ↓reduceIte] at hd2
+        have hlh : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).held =
+            (callPe Γ fn.params args k).held := by
+          have hpe : (callS Γ F fn args base x).pe k = callPe Γ fn.params args k := rfl
+          have hpr : (callS Γ F fn args base x).peReg k = regioned (PMode.inp, t) := by simp [callS, hk]
+          have hE : memDeps (paramE fn.params (.inp, t)).held = [] := by
+            simp only [paramE]; split
+            · exact List.filter_eq_nil_iff.mpr fun d hd => by
+                obtain ⟨w, b, t', rfl, _⟩ := mem_symNames' hd; simp [Kind.isName]
+            · rfl
+          have hE' : memDeps (if t.hasFn = true then symNames fn.params else []) = [] := by
+            simpa [paramE] using hE
+          simp [RSetup.liftE, paramE, hE', rds, hpe, hpr, hreg]
+        have hdpe : d ∈ (callPe Γ fn.params args k).held := hlh ▸ hd2
+        have hd3 := hpeh hdpe
+        rcases hnr k hkl (by rw [hpk]; exact hreg) with hi | hm
+        · unfold callPe at hdpe; rw [hk] at hdpe; simp only at hdpe
+          rw [hi] at hdpe; simp at hdpe
+        · rw [hae] at hm
+          have : d ∈ memDeps Ea.held := List.mem_filter.mpr ⟨hd3, by simp [hnn d hd3 rfl]⟩
+          rw [hm] at this; cases this
+      · rw [hreg] at hd2
+        simp only [PMode.isInp, Bool.and_true, ↓reduceIte] at hd2
+        have hd3 := hpeh (List.mem_filter.mp hd2).1
+        have := (List.mem_filter.mp hd2).2
+        rw [hnn d hd3 rfl] at this; cases this
+  obtain ⟨hdh, hreg, hint, hdm⟩ := hdh
+  -- `w` is a frame binding, below the frame and no argument
+  have hwΓ : (Γ d.root).isSome := by rw [← h.postdm.1 d.root, hEr]; rfl
+  obtain ⟨Ew, hEw⟩ := Option.isSome_iff_exists.mp hwΓ
+  have hwb : d.root < base := h.domlt _ _ hEw
+  have hnρ : ∀ v, callRen fn.params args base v ≠ d.root := by
+    intro v hv
+    rcases callRen_mem fn.params args base v with hge | hio
+    · rw [hv] at hge; exact absurd hge (Nat.not_le.mpr hwb)
+    · rw [hv] at hio; exact hna (inoutArgs_sub _ _ h.len _ hio)
+  refine ⟨⟨hdp, List.mem_append_left _ hdh, ?_, ?_⟩, fun hkv => ?_, ?_⟩
+  · obtain ⟨tv, htv⟩ := hvec k hkl (by rw [hpk]) (by
+      rw [hae]; exact List.mem_map_of_mem hdm)
+    rw [hpk] at htv
+    exact ⟨tv, by rw [hlt]; exact htv⟩
+  · exact hkd d (List.mem_filter.mp hdm).1 rfl
+  · rw [Stmt.killVars_rename] at hkv
+    obtain ⟨v, -, hv⟩ := List.mem_map.mp hkv
+    exact hnρ v hv
+  · have hxw : d.root ≠ x := fun e => by rw [e, h.fresh] at hEw; cases hEw
+    refine ⟨Er.clean, ?_, by rw [clean_ty, hty]; exact hhv⟩
+    rw [RSetup.canon_frame _ hnρ]
+    simp [callS, hnρ, setE, upd_ne _ _ hxw, hEr]
 
 theorem wrapCond (h : CallH P Γ F x fn args base) :
     ∀ k p, fn.params[k]? = some p →
