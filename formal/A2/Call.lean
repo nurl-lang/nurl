@@ -3130,7 +3130,7 @@ theorem held_anch (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
   rw [h.canon_param hk] at hci
   cases hci
   obtain ⟨-, -, hnr, -, hw⟩ := hc
-  obtain ⟨hna, hkind, hpath, hvec, -, -, -, ⟨Er, tw, hEr, -, -, hty, hhv⟩, -, -⟩ := hw d.root hwR
+  obtain ⟨hna, hkind, hpath, hvec, -, -, -, ⟨Er, tw, hEr, -, -, hty, hhv⟩⟩ := hw d.root hwR
   have hak : args.getD k 0 ∈ args := by simp [List.getD, show k < args.length from h.len ▸ hkl]
   -- what the parameter lifts to: its argument's path, and what it holds
   have hlp : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).path =
@@ -4578,7 +4578,7 @@ theorem thruReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (hc : 
   · rw [hσu] at he; split at he
     · cases he
     · exact (hreg p hp hph (by assumption) e he).1
-  obtain ⟨hna, hkind, hpath, -, hlive, hdt, hF, ⟨Er, tw, hEr, hl, hmo, hty, -⟩, -, -⟩ :=
+  obtain ⟨hna, hkind, hpath, -, hlive, hdt, hF, ⟨Er, tw, hEr, hl, hmo, hty, -⟩⟩ :=
     hw e.root (hroot _ hu e he)
   have hwΓ : (Γ e.root).isSome := by rw [← h.postdm.1 e.root, hEr]; rfl
   obtain ⟨Ew, hEw⟩ := Option.isSome_iff_exists.mp hwΓ

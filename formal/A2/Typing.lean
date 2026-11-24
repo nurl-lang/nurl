@@ -2171,10 +2171,7 @@ def CallThruOK (P : Prog) (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) 
       hitsMem .dropIn false w E = false) ∧
     w ∉ F ∧
     (∃ Er t, callPost Γ fn args w = some Er ∧ Er.live = true ∧ Er.mode = .own ∧
-      Er.ty = .vec t ∧ t.holdsView = false) ∧
-    w ∉ roots (mutNames Γ args) ∧
-    (∀ v E, Γ v = some E → E.ty.hasFn = true →
-      E.live = true ∧ ∀ d ∈ E.held, d.root = w → d.kind.bound = .none)
+      Er.ty = .vec t ∧ t.holdsView = false)
 
 /-- A call, checked against the callee's summary.  Each argument is live
     and of its parameter's type; one that moves or may change is not frozen
