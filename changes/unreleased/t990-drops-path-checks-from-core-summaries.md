@@ -47,6 +47,38 @@
   - With `--journal`, a registration must name its slot's own drop flag,
     which is the flag the drain asks. An indirect call counts as a call
     that may panic.
+- **The drop validator no longer accepts five more codegen mistakes**
+  (#2242 review, second round). Each one is a mutation in
+  `tools/ncore/tv/selftest.sh`, accepted before and caught now:
+  - A clone the path knows was made (`__nurl_cloneif(true, …)`, or a
+    `__nurl_cloneifk` whose key and flag are both set) is a value of its
+    own. Handing it to two `sink` parameters is a mismatch. It used to
+    have no identity, so both handovers were skipped.
+  - A parameter of an owning type has its own identity from the entry. A
+    borrowed one handed to a `sink` as it came (`eat(%p)`) is a mismatch.
+    So is the same in a function with no drop flag of its own.
+  - With `--journal`, a registration left enabled after a `sink` parameter
+    took the slot's value is a mismatch: a panic there would release what
+    the callee owns.
+  - With `--journal`, two enabled registrations of one value (two slots
+    holding it after `= d s`) are a mismatch: the drain would release it
+    twice.
+  - A flag cleared while its slot owns a value, with the value handed
+    nowhere on the path, is a leak and a mismatch. This is the `off`
+    without a `copy` that `formal/D/Drops.lean`'s `checkA` refuses. A
+    value counts as handed on when it goes to a call, a store, an aggregate
+    or the `ret`, or when another slot owns it. With `--sums`, a call hands
+    a value on only at a `sink` / `keeps` position. The case is reported
+    unsupported, not validated, in three situations: the value may be a
+    clone, it is used where its hand-on is not read (`extractvalue`,
+    `phi`), or it came from somewhere not followed. That last covers a load
+    through another value's pointer or a field, which may be a lend. It
+    also covers a function whose core IR calls `mem_forget`, which gives a
+    value up on purpose.
+  - On the 1983 programs the corpus compiles, 124 functions move from
+    validated to unsupported, and none the other way. The default run
+    gives 98164 validated, 7778 unsupported, 0 mismatches. `--journal`
+    gives 97830 / 8112 / 0, with 480 journal-checked.
 - **`tools/ncore/tv.sh` stops when a step fails.** If `nurlc --emit-core`,
   `nurlc --g` or `tvir.py` fails, it exits nonzero instead of validating
   with an empty file. It also forwards its arguments without word

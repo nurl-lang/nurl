@@ -49,13 +49,30 @@ python3 "$ROOT/tools/ncore/tvir.py" "$TMP/a.core" "$TMP/a.g.ll" > "$TMP/protect"
 wslot=$(awk '$1 == "__nurl_fn.f" {print $2; exit}' "$TMP/protect")
 [ -n "$wslot" ] || { echo "FAIL: D0b found no never-moved binding in f"; fail=1; }
 # its flag: the first one set after a store into the slot; the edit clears
-# it right there
+# it right there. Nothing is handed on after it: on the path where `= w v`
+# overwrites w, its first value leaks (D2's `new; off`), which D0 itself
+# refuses now, and D0b too
 awk -v W="$wslot" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
   { print }
   m && index($0, "* " W) && $1 == "store" && $2 !~ /^i1$/ { s = 1; next }
   m && s && /store i1 true, i1\* %r/ { f = $NF; print "  store i1 0, i1* " f; s = 0 }' "$TMP/a.ll" > "$TMP/handed.ll"
-case "$(tv "$TMP/handed.ll")" in *"mismatch 0") ;; *) echo "FAIL: D0 refuses a plain hand-on"; fail=1 ;; esac
+case "$(tv "$TMP/handed.ll")" in
+  *"mismatch 1") echo "ok: never_moved_binding_cleared_with_nothing_handed_on caught (D0, a leak)" ;;
+  *) echo "FAIL: never_moved_binding_cleared_with_nothing_handed_on not caught by D0"; fail=1 ;; esac
 case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/handed.ll" --protect "$TMP/protect" | tail -1)" in
+  *"mismatch 1") echo "ok: never_moved_binding_cleared_with_nothing_handed_on caught (D0b)" ;;
+  *) echo "FAIL: never_moved_binding_cleared_with_nothing_handed_on not caught by D0b"; fail=1 ;; esac
+# the same flag cleared where w's value is loaded for `keep w`: a hand-on to
+# D0, which has no summary to say keep borrows; D0b refuses it (w is never
+# moved), and D0c (keep's summary: a borrow, so w's value leaks)
+wflag=$(awk -v W="$wslot" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  m && index($0, "* " W) && $1 == "store" && $2 !~ /^i1$/ { s = 1; next }
+  m && s && /store i1 true, i1\* %r/ { print $NF; exit }' "$TMP/a.ll")
+awk -v W="$wslot" -v F="$wflag" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { print; if (m && index($0, "= load %Vec__i64, %Vec__i64* " W)) print "  store i1 0, i1* " F }' "$TMP/a.ll" > "$TMP/handed2.ll"
+cmp -s "$TMP/a.ll" "$TMP/handed2.ll" && { echo "FAIL: the hand-on edit did not apply"; fail=1; }
+case "$(tv "$TMP/handed2.ll")" in *"mismatch 0") ;; *) echo "FAIL: D0 refuses a plain hand-on"; fail=1 ;; esac
+case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/handed2.ll" --protect "$TMP/protect" | tail -1)" in
   *"mismatch 1") echo "ok: never_moved_binding_handed_on caught (D0b)" ;;
   *) echo "FAIL: never_moved_binding_handed_on not caught"; fail=1 ;; esac
 # D0c: what conservation alone cannot see, checked with the core IR's
@@ -66,6 +83,8 @@ cmut() {  # cmut <name> <edited .ll> <core>
   case "$(cv "$2" "$3")" in *"mismatch 1") echo "ok: $1 caught (D0c)" ;; *) echo "FAIL: $1 not caught"; fail=1 ;; esac
 }
 vok __nurl_fn.f "$TMP/a.ll" --sums "$TMP/o.core" || { echo "FAIL: the unedited program does not validate with --sums"; fail=1; }
+# (the hand-on above: keep borrows, so w's value is handed nowhere)
+cmut never_moved_binding_cleared_before_a_borrow "$TMP/handed2.ll" "$TMP/o.core"
 # w's release moved from its scope's end to before w is read
 python3 - "$TMP/a.ll" "$TMP/early.ll" <<'PY'
 import sys
@@ -102,6 +121,18 @@ awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
   { if (m && /^then_1:/) t = 1; if (t && m && /store i1 0, i1\*/ && !c++) next; print }' "$TMP/k.ll" > "$TMP/given.ll"
 case "$(tv "$TMP/given.ll")" in *"mismatch 0") ;; *) echo "FAIL: D0 alone was expected to miss the sink's double ownership"; fail=1 ;; esac
 cmut a_move_released_instead "$TMP/given.ll" "$TMP/k.core"
+# v's flag cleared where the frame releases it on the path that does not
+# call eat: nothing takes v (D2's `new; off; drop`), a leak conservation
+# alone accepted
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^end_3:/) e = 1
+    if (e && m && /= load i1, i1\* %r[0-9]+$/ && !c++) print "  store i1 0, i1* " $NF
+    print }' "$TMP/k.ll" > "$TMP/off.ll"
+cmp -s "$TMP/k.ll" "$TMP/off.ll" && { echo "FAIL: the flag-clear edit did not apply"; fail=1; }
+case "$(tv "$TMP/off.ll")" in
+  *"mismatch 1") echo "ok: flag_cleared_with_nothing_handed_on caught (D0)" ;;
+  *) echo "FAIL: flag_cleared_with_nothing_handed_on not caught"; fail=1 ;; esac
+cmut flag_cleared_with_nothing_handed_on "$TMP/off.ll" "$TMP/k.core"
 # the value handed to eat through a `__nurl_cloneifk` whose key is false:
 # the result is v itself, and the frame still releases it
 awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
@@ -123,6 +154,22 @@ vok __nurl_fn.f "$TMP/c.ll" --sums "$TMP/c.core" || { echo "FAIL: the constant-a
 awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
   { if (m && /^then_1:/) t = 1; if (t && m && /store i1 0, i1\*/ && !c++) next; print }' "$TMP/c.ll" > "$TMP/cgiven.ll"
 cmut a_move_beside_a_constant_argument_released_instead "$TMP/cgiven.ll" "$TMP/c.core"
+# f hands eat a clone of a Vec's element (`__nurl_cloneif(i1 true, …)`), and
+# keep borrows its parameter: the edits hand the clone to eat twice, and
+# keep's parameter, as it came (`%v`), to eat
+E="$D/element_clone_handed_to_a_sink_beside_a_borrowing_function.nu"
+"$NURLC" "$E" > "$TMP/e.ll" || exit 1
+"$NURLC" --emit-core "$E" > "$TMP/e.core" || exit 1
+grep -q "call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 true," "$TMP/e.ll" || { echo "FAIL: f's known clone is not in the LLVM"; fail=1; }
+vok __nurl_fn.f "$TMP/e.ll" --sums "$TMP/e.core" || { echo "FAIL: the clone program does not validate"; fail=1; }
+vok __nurl_fn.keep "$TMP/e.ll" --sums "$TMP/e.core" || { echo "FAIL: the clone program's keep does not validate"; fail=1; }
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { print; if (m && /= call i64 @__nurl_fn.eat\(%Vec__i64 %r[0-9]+\)/) { l = $0; sub(/%r[0-9]+ = /, "%e2 = ", l); print l } }' "$TMP/e.ll" > "$TMP/clone2.ll"
+grep -q "%e2 = call i64 @__nurl_fn.eat" "$TMP/clone2.ll" || { echo "FAIL: the second handover edit did not apply"; fail=1; }
+cmut a_known_clone_handed_to_a_sink_twice "$TMP/clone2.ll" "$TMP/e.core"
+awk '/define i64 @__nurl_fn.keep\(/{m=1} m && /^}/{m=0}
+  { if (m && /^  ret /) print "  %kz = call i64 @__nurl_fn.eat(%Vec__i64 %v)"; print }' "$TMP/e.ll" > "$TMP/lentp.ll"
+cmut a_borrowed_parameter_register_handed_to_a_sink "$TMP/lentp.ll" "$TMP/e.core"
 # D1, the panic journal: flat's registrations, edited
 J="$D/bindings_journaled_across_a_call_that_may_panic.nu"
 "$NURLC" "$J" > "$TMP/j.ll" || exit 1
@@ -145,4 +192,28 @@ jmut registered_with_another_flag 'if ($0 ~ /nurl_journal_push_drop2\(ptr %r2, p
 jmut registration_missing_before_an_indirect_call 'if ($0 ~ /nurl_journal_push_drop2\(ptr %r2,/) next
   if ($0 ~ /call %Bomb @__nurl_fn\.(bomb|late)\(i64 1\)/) { n++; print "  %fp" n " = select i1 true, ptr @__nurl_fn.late, ptr @__nurl_fn.bomb"; sub(/@__nurl_fn\.(bomb|late)\(/, "%fp" n "(") }
   print'
+# flat moves b into w (`: Bomb w b`), then hands w to eat's `sink`, with
+# calls that may panic between: each edit delays a flag's clear past such a
+# call, which plain conservation accepts (each value is released once)
+M="$D/binding_moved_then_handed_to_a_sink_across_calls_that_may_panic.nu"
+"$NURLC" "$M" > "$TMP/m.ll" || exit 1
+"$NURLC" --emit-core "$M" > "$TMP/m.core" || exit 1
+mv_() { python3 "$ROOT/tools/ncore/tvdrops.py" "$1" --sums "$TMP/m.core" --journal --core "$TMP/m.core" "$NURLC" "${@:2}"; }
+vok __nurl_fn.flat "$TMP/m.ll" --sums "$TMP/m.core" --journal --core "$TMP/m.core" "$NURLC" || { echo "FAIL: the moved-binding flat does not validate with the journal"; fail=1; }
+mmut() {  # mmut <name> <flag slot> <call to delay its first clear past>
+  awk -v F="$2" -v C="$3" '/define void @__nurl_fn.flat\(/{m=1} m && /^}/{m=0}
+    { if (m && $0 == "  store i1 0, i1* " F && !c++) { held = $0; next }
+      print; if (m && held != "" && index($0, C)) { print held; held = "" } }' "$TMP/m.ll" > "$TMP/$1.ll"
+  cmp -s "$TMP/m.ll" "$TMP/$1.ll" && { echo "FAIL: the $1 edit did not apply"; fail=1; }
+  case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/$1.ll" --sums "$TMP/m.core" | tail -1)" in
+    *"mismatch 0") ;; *) echo "FAIL: D0c alone was expected to miss $1"; fail=1 ;; esac
+  case "$(mv_ "$TMP/$1.ll" | tail -1)" in *"mismatch 1"*) echo "ok: $1 caught" ;; *) echo "FAIL: $1 not caught"; fail=1 ;; esac
+}
+# b's flag still set at late(n), after its value moved into w: one
+# value registered twice, both enabled
+flags=$(awk '/define void @__nurl_fn.flat\(/{m=1} m && /^}/{m=0} m' "$TMP/m.ll" | sed -n 's/.*push_drop2(ptr %r[0-9]*, ptr \(%r[0-9]*\),.*/\1/p')
+bflag=$(echo "$flags" | sed -n 1p) wflag=$(echo "$flags" | sed -n 2p)
+mmut one_value_journaled_twice_through_a_move "$bflag" "call %Bomb @__nurl_fn.late(i64 %n)"
+# w's flag still set at late(0), after eat took its value
+mmut journaled_after_a_sink_took_it "$wflag" "call %Bomb @__nurl_fn.late(i64 0)"
 exit $fail

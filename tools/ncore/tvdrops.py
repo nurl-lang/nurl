@@ -15,14 +15,22 @@ released or moved exactly once.
 - a store into the slot: the slot must not own a value then (the one it
   holds would leak, never released);
 - `store i1 1, flag`: the slot owns the value it holds;
-- `store i1 0, flag`: the slot's value moves out (or there is none).
+- `store i1 0, flag`: the slot's value moves out (or there is none). If the
+  slot owned it, the value must be handed on along the path: to a call, a
+  store, an aggregate or the `ret`, or into another slot that owns it
+  (`= d s`). A flag cleared with the value handed nowhere is a leak
+  (formal/D/Drops.lean's `off` without a `copy`). Where the value came from
+  is not followed (a load through another value's pointer, a field: maybe a
+  lend, which owns nothing) or the function calls `mem_forget` (with
+  `--sums`), it is reported unsupported instead.
 - `__dropif_T(flag, slot)` with the flag set: the slot must own a value (else
   it would be released twice), which is released.
 - `ret`: no slot owns a value (it would leak).
 
 A value a register loaded from one slot and stored into another is the same
 value in both (not a new one), so the two slots release it once between
-them.
+them. A parameter of an owning type, and a clone the path knows was made
+(`__nurl_cloneif(true, …)`), are values of their own from the start.
 
 A function whose drops depend on an answer the analysis does not follow
 (the per-call ownership answers: `__nurl_clear_if`, `__nurl_hown*`, a flag
@@ -34,7 +42,10 @@ function's `sink` / `keeps` parameters, from its `sum` line. Then, also:
 - a value handed to such a parameter is not released by the frame as well
   (its flag must be cleared), nor handed on twice;
 - a parameter the function only borrows is never released, nor handed to
-  a `sink`; a slot that only ever holds one owns nothing (no flag needed);
+  a `sink` (stored and loaded back, or as it came); a slot that only ever
+  holds one owns nothing (no flag needed);
+- a value whose flag is cleared is handed to such a parameter, not to one
+  the callee only borrows (that would be a leak);
 - a slot is not read after the value it holds was released.
 A per-call answer whose key is a constant of the module (`__nurl_clear_if`,
 `__nurl_cloneifk` on `@.__nurl_sink.N` and the like) is followed: a result
@@ -45,8 +56,9 @@ A call of a function with such parameters has every argument position read
 D1 (`--journal`): at each call that may panic (an indirect call is taken to
 panic), every value the frame owns is registered
 (`nurl_journal_push_drop2`) under its own slot's drop flag, the flag the
-drain asks, none twice, none after its release; at a return nothing is left
-registered.
+drain asks, none twice, none after its release or after a `sink` parameter
+took it, and no value under two enabled registrations (two slots holding
+one value after `= d s`); at a return nothing is left registered.
 
 Prints one line per program: `validated: N functions`, or the first
 `mismatch: <fn> <slot> <what> <path>`, or `unsupported: …` with the
@@ -88,6 +100,8 @@ CONST_I1 = re.compile(r"^(@[\w.]+) = private constant i1 (true|false)", re.M)
 CONSTS = {}   # @key → its constant answer
 SINKS = {}    # D0c (--sums): llvm function → (arity, indices of sink=/keeps= parameters)
 PARAMS = {}   # llvm function → its parameters' names, in order
+PTYPES = {}   # llvm function → {parameter: its LLVM type}
+FORGETS = set()   # D0c (--sums): llvm functions whose core IR calls `mem_forget`
 
 
 class Unsupported(Exception):
@@ -237,6 +251,7 @@ def functions(text):
             cur, blocks = m.group(1), [("entry", [])]
             inner = raw[raw.index("(", m.end() - 1) + 1:raw.rindex(")")]
             PARAMS[cur] = re.findall(r"(%[\w.]+)(?=\s*(?:,|$))", inner)
+            PTYPES[cur] = dict((n, t.strip()) for t, n in re.findall(r"(?:^|,)\s*([^,]*?)\s+(%[\w.]+)(?=\s*(?:,|$))", inner))
             continue
         if cur is None:
             continue
@@ -369,7 +384,10 @@ def check_function(name, blocks, owning, journal=False):
     for sl in (own_slots & stored) - borrowed:
         if sl not in slot_flag:
             raise Unsupported(f"{name}: an owning slot {sl} with no drop flag")
-    if not pairs:
+    # (a function with no drop flag still hands values to `sink`
+    # parameters: its parameters, a clone; those handovers are checked)
+    if not pairs and not any((pc := parse_call(l)) and pc[0] and pc[0][1:] in SINKS and SINKS[pc[0][1:]][1]
+                             for _, lines in blocks for l in lines):
         return None
     for _, lines in blocks:
         for l in lines:
@@ -393,9 +411,20 @@ def check_function(name, blocks, owning, journal=False):
     # not be the slot's own value when it is handed on; a result known to be
     # the value itself is not among them)
     lent_ids = set()
+    # (the values stored into a slot from a register whose origin is not a
+    # call or a parameter: a load through another value's pointer, a field,
+    # a phi. A slot given one and its flag cleared may hold a lend, which
+    # owns nothing, as well as a leak: not followed)
+    defs = {}
+    for _, lines in blocks:
+        for l in lines:
+            md = re.match(r"^\s*(%[\w.]+) = (?:(?:tail|musttail|notail) )?(\w+)", l)
+            if md:
+                defs[md.group(1)] = md.group(2)
+    unk_src = set()
 
     def canon(st):
-        flag_v, val, released, regv, regid, jr, given, maybe = st
+        flag_v, val, released, regv, regid, jr, given, maybe, pend = st
         ren = {}
         def r(x):
             if x is None:
@@ -409,8 +438,10 @@ def check_function(name, blocks, owning, journal=False):
         rel = tuple(sorted(r(x) for x in released if x in ren))
         gv = tuple(sorted(r(x) for x in given if x in ren))
         lv = tuple(sorted(r(x) for x in lent_ids if x in ren))
+        uv = tuple(sorted(r(x) for x in unk_src if x in ren))
+        pd = tuple(sorted((r(x), sl) for x, sl in pend.items() if x in ren))
         return (tuple(sorted(flag_v.items())), v, rel, rv, ri, tuple(sorted(jr.items())), gv, lv,
-                tuple(sorted(maybe)))
+                tuple(sorted(maybe)), pd, uv)
 
     def run(lab, st, visits, path):
         visits = dict(visits)
@@ -428,7 +459,7 @@ def check_function(name, blocks, owning, journal=False):
         path = path + [lab]
         flag_v, val, released = dict(st[0]), dict(st[1]), set(st[2])
         regv, regid, jr, given = dict(st[3]), dict(st[4]), dict(st[5]), set(st[6])
-        maybe = set(st[7])
+        maybe, pend = set(st[7]), dict(st[8])
         fresh_put = set()
 
         def owned(f):
@@ -442,10 +473,86 @@ def check_function(name, blocks, owning, journal=False):
             # releases are checked, each value once)
             return owned(f) and next(iter(pairs[f])) not in jonly and not f.startswith("!")
 
+        def cleared(f):
+            # A flag cleared while its slot owns the value (`store i1 0`, or a
+            # constant `__nurl_clear_if` of a consuming callee): the value
+            # must be handed on (D2's `clr`), or another slot must own it
+            # (`= d s`, D2's `off` after a `copy`); else it leaks, the block
+            # live with no owner. A hand-on still to come on the path is
+            # awaited (`pend`): codegen loads the value, clears the flag,
+            # then hands the register on.
+            # (not a store the slot never owned, `= out <a lend>`)
+            if not owns(f) or next(iter(pairs[f])) in fresh_put:
+                return
+            v = val[f]
+            if v in pend and pend[v] is None:
+                # (handed on before the flag was cleared: into an aggregate,
+                # a store)
+                del pend[v]
+                return
+            if v in given or any(g != f and flag_v.get(g) and val.get(g) == v for g in flags):
+                return
+            pend[v] = next(iter(pairs[f]))
+
+        def handed(regs, before=False):
+            # registers handed on by this line: their values are no longer
+            # awaited; `before`: a hand-on that also counts ahead of the
+            # clear (a move into an aggregate or into memory, not a call)
+            for r in regs:
+                if r not in regid or r in loads or regid[r] is None:
+                    continue
+                v = regid[r]
+                if v in pend and pend[v] is not None:
+                    if r in maybe:
+                        # (what is handed on may be a clone: the value
+                        # itself may still be owed a release)
+                        raise Unsupported(f"{name}: a value whose drop flag was cleared, handed on as a "
+                                          f"possible clone ({r})")
+                    del pend[v]
+                elif before and any(owns(f) and val[f] == v for f in flags):
+                    pend[v] = None
+
         def go(o):
-            return run(o, (flag_v, val, released, regv, regid, jr, given, maybe), visits, path)
+            return run(o, (flag_v, val, released, regv, regid, jr, given, maybe, pend), visits, path)
 
         for l in body.get(lab, []):
+            if flags:
+                hc = parse_call(l)
+                if hc:
+                    # (a call hands on what a `sink` / `keeps` parameter of a
+                    # summarized callee takes; with no summary, what it takes
+                    # is not known, and every argument counts as handed on,
+                    # as D0 alone takes a call: D0c is what knows a borrow)
+                    callee, args = hc
+                    if callee and callee[1:].startswith(NOPANIC + ("__nurl_clear_if",)):
+                        pass
+                    elif args is None:
+                        handed(re.findall(r"%[\w.]+", l))
+                    elif callee and callee.startswith("@") and callee[1:] in SINKS:
+                        ar, idx = SINKS[callee[1:]]
+                        if len(args) == ar:
+                            handed([args[i] for i in idx if i < ar])
+                        else:
+                            handed(args)
+                    else:
+                        handed(args)
+                elif (ms := re.match(r"^\s*store \S+ (%[\w.]+), (?:ptr|[^,]+\*) (%[\w.]+)", l)):
+                    # (stored anywhere but back into its own slot: into
+                    # another slot, a field, another frame's memory)
+                    tf = slot_flag.get(ms.group(2))
+                    if not (tf and regid.get(ms.group(1)) is not None and val.get(tf) == regid[ms.group(1)]):
+                        handed([ms.group(1)], True)
+                elif (mr := RET_VAL.match(l)):
+                    handed([mr.group(1)])
+                elif re.match(r"^\s*%[\w.]+ = insertvalue ", l):
+                    # (moved into an aggregate)
+                    handed(re.findall(r"%[\w.]+", l.split("=", 1)[1]), True)
+                elif not LOAD_VAL.match(l):
+                    used = [r for r in re.findall(r"%[\w.]+", l.split("=", 1)[-1] if " = " in l else l)
+                            if r in regid and r not in loads and pend.get(regid[r], None) is not None]
+                    if used:
+                        raise Unsupported(f"{name}: a value whose drop flag was cleared, used where its "
+                                          f"hand-on is not read ({l.strip()[:60]})")
             if journal:
                 m = JPUSH2.search(l)
                 if m and m.group(1) in slot_flag:
@@ -465,6 +572,7 @@ def check_function(name, blocks, owning, journal=False):
                     # drain would release must be what the frame owns, each
                     # once, under the slot's own drop flag
                     callee = pc[0] or "an unread callee"
+                    enabled = {}
                     for sl, f in slot_flag.items():
                         if owned(f) and sl not in jr:
                             return f"mismatch: {name} {sl} owned but not journaled at a call to {callee}: {'>'.join(path)}"
@@ -473,6 +581,18 @@ def check_function(name, blocks, owning, journal=False):
                                     f"{f}, at a call to {callee}: {'>'.join(path)}")
                         if sl in jr and flag_v.get(f) and (val.get(f) is None or val[f] in released):
                             return f"mismatch: {name} {sl} journaled after its release, at a call to {callee}: {'>'.join(path)}"
+                        if sl in jr and flag_v.get(f) and val[f] in given:
+                            # (the drain would release what a `sink`
+                            # parameter took: the flag must be cleared)
+                            return (f"mismatch: {name} {sl} journaled after a `sink` parameter took its value, "
+                                    f"at a call to {callee}: {'>'.join(path)}")
+                        if sl in jr and flag_v.get(f):
+                            if val[f] in enabled:
+                                # (one value in two slots, each registered
+                                # and enabled: the drain releases it twice)
+                                return (f"mismatch: {name} {enabled[val[f]]} and {sl} journaled with one value, "
+                                        f"both enabled, at a call to {callee}: {'>'.join(path)}")
+                            enabled[val[f]] = sl
             m = LOAD_FLAG.match(l)
             if m:
                 regv[m.group(1)] = flag_v.get(m.group(2))
@@ -496,6 +616,7 @@ def check_function(name, blocks, owning, journal=False):
                     if sl in PROTECT.get(name, {}) and owned(m.group(2)) and sl not in fresh_put:
                         return (f"mismatch: {name} {sl} ({PROTECT[name][sl]}) is never moved in the core IR, "
                                 f"but its flag is cleared while it owns a value: {'>'.join(path)}")
+                    cleared(m.group(2))
                     flag_v[m.group(2)] = False
                 continue
             m = CLONEIFK.match(l)
@@ -511,7 +632,10 @@ def check_function(name, blocks, owning, journal=False):
                         regid[m.group(1)] = regid[m.group(4)]
                     if m.group(4) in maybe:
                         maybe.add(m.group(1))
-                elif not (k is True and fl is True):
+                elif k is True and fl is True:
+                    # a clone, known on this path: a value of its own
+                    regid[m.group(1)] = next(fresh)
+                else:
                     maybe.add(m.group(1))
                 continue
             m = CLONEIF.match(l)
@@ -523,7 +647,11 @@ def check_function(name, blocks, owning, journal=False):
                 c = regv.get(c) if c.startswith("%") else c in ("true", "1")
                 regid.pop(m.group(1), None)
                 maybe.discard(m.group(1))
-                if c is not True and m.group(3) in regid:
+                if c is True:
+                    # a clone, known on this path: a value of its own (handed
+                    # to a `sink` once, not twice)
+                    regid[m.group(1)] = next(fresh)
+                elif m.group(3) in regid:
                     regid[m.group(1)] = regid[m.group(3)]
                 if c is None or (c is False and m.group(3) in maybe):
                     maybe.add(m.group(1))
@@ -536,9 +664,13 @@ def check_function(name, blocks, owning, journal=False):
                     if sl in PROTECT.get(name, {}) and owned(m.group(2)) and sl not in fresh_put:
                         return (f"mismatch: {name} {sl} ({PROTECT[name][sl]}) is never moved in the core IR, "
                                 f"but its flag is cleared while it owns a value: {'>'.join(path)}")
+                if m.group(1) in ("false", "0") and m.group(2) in flags:
+                    cleared(m.group(2))
                 if m.group(1) in ("true", "1") and m.group(2) in flags:
                     # (an owned store: what the slot holds is its own now)
                     fresh_put.discard(next(iter(pairs[m.group(2)])))
+                    # (and a value awaited is owned again)
+                    pend.pop(val.get(m.group(2)), None)
                 flag_v[m.group(2)] = m.group(1) in ("true", "1")
                 continue
             m = STORE_I1_VAR.match(l)
@@ -571,6 +703,8 @@ def check_function(name, blocks, owning, journal=False):
                     val[f] = regid[mv.group(1)]
                 else:
                     val[f] = next(fresh)
+                    if not (mv and defs.get(mv.group(1)) == "call"):
+                        unk_src.add(val[f])
                 if mv and mv.group(1) in lent:
                     # D0c: a parameter the function borrows (not a `sink`)
                     lent_ids.add(val[f])
@@ -652,6 +786,18 @@ def check_function(name, blocks, owning, journal=False):
                 for f in flags:
                     if owns(f):
                         return f"mismatch: {name} {next(iter(pairs[f]))} leaks at the return: {'>'.join(path)}"
+                for v, sl in sorted((v, sl) for v, sl in pend.items() if sl is not None):
+                    if v not in released and v not in given and not any(owned(f) and val[f] == v for f in flags):
+                        if v in unk_src:
+                            raise Unsupported(f"{name}: {sl}'s flag cleared, its value handed nowhere, and where "
+                                              f"the value came from is not followed (a lend, or a leak)")
+                        if name in FORGETS:
+                            # (`mem_forget` gives a value up on purpose: the
+                            # LLVM clears its flag and calls nothing)
+                            raise Unsupported(f"{name}: {sl}'s flag cleared with its value handed nowhere, "
+                                              f"in a function that calls `mem_forget`")
+                        return (f"mismatch: {name} {sl}'s flag cleared while it owned its value, "
+                                f"and the value handed nowhere: it leaks: {'>'.join(path)}")
                 return None
             m = BR_COND.match(l)
             if m:
@@ -671,7 +817,20 @@ def check_function(name, blocks, owning, journal=False):
                 return None
         return None
 
-    return run("entry", ({}, {}, set(), {}, {}, {}, set(), set()), {}, [])
+    # (each parameter register is a value of its own from the entry, the
+    # ones the function borrows among the lent: a parameter handed on
+    # directly, `eat(%p)`, is checked as the parameter, as is one stored
+    # into a slot and loaded back)
+    # (a parameter of a type that owns: a view, a scalar, a pointer hands no
+    # ownership on)
+    regid0 = {}
+    for p in params:
+        if PTYPES.get(name, {}).get(p, "").lstrip("%") not in owning:
+            continue
+        regid0[p] = next(fresh)
+        if p in lent:
+            lent_ids.add(regid0[p])
+    return run("entry", ({}, {}, set(), {}, regid0, {}, set(), set(), {}), {}, [])
 
 
 def main():
@@ -686,8 +845,15 @@ def main():
     CONSTS.update((k, v == "true") for k, v in CONST_I1.findall(text))
     if "--sums" in sys.argv:
         # D0c: each function's `sink` / `keeps` parameters, from the core IR
+        cur = None
         for raw in open(sys.argv[sys.argv.index("--sums") + 1]):
             f = raw.rstrip("\n").split("\t")
+            if f[0] == "fn" and len(f) > 1:
+                cur = "_nurl_main" if f[1] == "main" else "__nurl_fn." + f[1]
+            elif f[0] == "endfn":
+                cur = None
+            elif cur and "call mem_forget" in raw:
+                FORGETS.add(cur)
             if f[0] == "sum" and len(f) > 2 and f[2].isdigit():
                 idx = set()
                 for kv in f[3:]:
