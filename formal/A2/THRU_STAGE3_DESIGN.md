@@ -1349,3 +1349,17 @@ Proved (wip/t937-b4-z, 9961c3798): `FrameCaps` (`set`, `remove`, `mono`, `reads`
 6. `recCase` opens a catch frame: the `frames` entry from `caps` at that moment.
 7. `catchP`: the post store's slots are the snapshot's, so `caps` comes from `frames`.
 8. Soundness's initial state: an empty store, so every part holds.
+
+**Integration progress (wip/t937-b4-z), and a fix to `HeldZ.reach` (2026-11-25).** `Inv.heldCaps` is gone.
+
+`preserve` and the `…Case` results now take `HeldZ m Γ Z s` and return `∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z'`. Threaded so far:
+- `pres_reap`, `sub`, `seq`, `letv`, `letd`, `withLock`, `assign`, `ite`, `while`, `push`;
+- `editB` / `editBV`, `withElem`, `takeB` / `takeBV`, `insert`, `free`, the scope exits.
+
+**The fix.** `reach` must speak of a running `rbind`'s parameter too: entering its body (`rbind p k ⟶ k`), the body's names must avoid `Z p`. State it at `s.below p`, the part of `s` under `p`'s `rbind` on the spine, or `s` itself when `p` is off the spine:
+
+`reach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (s.below p).killVars, v ∉ Z p`
+
+- At the call, `below p` is the callee's body. Its variables are `≥ base`, or `inout` arguments, all outside `z`.
+- A leaf has an empty spine, so `below p = s`.
+- A wrapper keeps `below` for parameters under it, and it is itself for the rest.

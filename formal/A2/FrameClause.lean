@@ -267,10 +267,11 @@ theorem ZKeep.back {Γ Γ0 : Ctx} {Z Z' : Var → List Var} (h : ZKeep Γ0 Z Z')
 /-- `HeldZ` at a statement with the same killable names, spine and catch
     frames (or fewer). -/
 theorem HeldZ.restmt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s s' : Stmt} (hz : HeldZ m Γ Z s)
-    (hspo : ∀ p, p ∉ s'.spine → p ∉ s.spine) (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars)
+    (hspo : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s'.spine → p ∉ s.spine)
+    (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars)
     (hcf : ∀ c ∈ s'.catchFrames, c ∈ s.catchFrames) : HeldZ m Γ Z s' where
   caps := hz.caps
-  reach p E hp hm hps v hv := hz.reach p E hp hm (hspo p hps) v (hkv v hv)
+  reach p E hp hm hps v hv := hz.reach p E hp hm (hspo p E hp hm hps) v (hkv v hv)
   bound := hz.bound
   frames x m0 hx := hz.frames x m0 (hcf _ hx)
 
@@ -313,5 +314,31 @@ theorem HeldZ.mapCaps {m m' : Mem} {Γ : Ctx} {Z : Var → List Var} {s : Stmt} 
   reach := hz.reach
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E hp hm v hv) hnv
   frames := hz.frames
+
+
+/-- `HeldZ` at the end of a statement (`skip`): the clause, carried by the
+    store change, at old borrowed parameters. -/
+theorem HeldZ.toSkip {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s : Stmt} (hz : HeldZ m Γ Z s)
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
+    (hc : ∀ D w, FrameCaps m D w → FrameCaps m' D w) (hnv : m.nv ≤ m'.nv) : HeldZ m' Γ' Z .skip where
+  caps p E hp hm d hd hb hh := hc _ _ (hz.caps p E (hrb p E hp hm) hm d hd hb hh)
+  reach _ _ _ _ _ v hv := by simp [Stmt.killVars] at hv
+  bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
+  frames x m0 h := by simp [Stmt.catchFrames] at h
+
+
+/-- `HeldZ` out of a wrapper `S` around `t` that binds `x`: `x` was a name of
+    the statement before, so outside the frame lists. -/
+theorem HeldZ.wrapOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {t S : Stmt} {x : Var} (hz : HeldZ m Γ Z t)
+    (hsp : ∀ p, p ∉ S.spine → p ∉ t.spine) (hkv : ∀ v ∈ S.killVars, v = x ∨ v ∈ t.killVars)
+    (hcf : ∀ c ∈ S.catchFrames, c ∈ t.catchFrames)
+    (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ S.spine → x ∉ Z p) : HeldZ m Γ Z S where
+  caps := hz.caps
+  reach p E hp hm hps v hv := by
+    rcases hkv v hv with rfl | hv
+    · exact hx p E hp hm hps
+    · exact hz.reach p E hp hm (hsp p hps) v hv
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (hcf _ hx)
 
 end A2
