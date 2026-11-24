@@ -227,11 +227,12 @@ theorem HeldZ.leaf {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : St
     (hnv : m.nv ≤ m'.nv)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
     (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v)
-    (hc : ∀ D w, (∀ v ∈ s.killVars, v ∉ D) → FrameCaps m D w → FrameCaps m' D w) :
+    (hc : ∀ p E d, Γ p = some E → E.mode = .rootb → d ∈ E.vdeps → d.kind.bound = .none → HeldAnch E d →
+      (∀ v ∈ s.killVars, v ∉ Z p) → FrameCaps m (Z p) d.root → FrameCaps m' (Z p) d.root) :
     HeldZ m' Γ' Z s' where
   caps p E hp hm d hd hb hh := by
     have h0 := hrb p E hp hm
-    exact hc _ _ (hz.reach p E h0 hm (by simp [hsp])) (hz.caps p E h0 hm d hd hb hh)
+    exact hc p E d h0 hm hd hb hh (hz.reach p E h0 hm (by simp [hsp])) (hz.caps p E h0 hm d hd hb hh)
   reach p E hp hm _ v hv hvZ := by
     rcases hkv v hv with h | h
     · exact hz.reach p E (hrb p E hp hm) hm (by simp [hsp]) v h hvZ

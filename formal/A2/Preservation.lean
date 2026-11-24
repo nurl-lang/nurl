@@ -1190,7 +1190,7 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
   rotate_right
   · -- (AGORA-937 B4: the payload reaped from the block holds no names, and no handle)
     refine hz.leaf hsp (by simp [Stmt.catchFrames]) (Nat.le_succ _) (fun q Eq hq hmq => ?_)
-      (fun v hv => ?_) (fun D w _ hcw => ?_)
+      (fun v hv => ?_) (fun _ _ _ _ _ _ _ _ _ hcw => ?_)
     · have hqz : q ≠ m.nv := fun h => by
         rw [h] at hq; simp [setE] at hq; rw [← hq] at hmq; exact hnrb hmq
       simpa only [setE, upd_ne _ _ hqz] using hq
@@ -1200,7 +1200,7 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
       · exact Or.inl hv
     · exact (hcw.set (y := m.nv) (o := true) (v := some p) (fun V e => by
         cases e
-        exact ⟨fun n hn => (hi.toMInv.blkCapsInp w k _ p hk rfl).sub hn,
+        exact ⟨fun n hn => (hi.toMInv.blkCapsInp _ k _ p hk rfl).sub hn,
           fun c hc => (hi.toMInv.pay_no_href hk rfl hc).elim⟩)).of_st rfl
   · -- (AGORA-963 step 3: the payload reaped from the block holds no names)
     refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine])
@@ -3026,7 +3026,22 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch1 := post.rel.anchS hanchS
       have hsp : k.spine = [] := src_spine hsrc
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF hs hpx, ?_, by simp [post.nv], ?_,
-        fun v hv => ?_⟩
+        fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: what the right-hand side yields, read from the frame, keeps
+        -- the frame clause)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp [post.nv])
+          (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun p Ep d hp hmp hd hb hh hD hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpx] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · refine hr.frameCapsSet he hi.toMInv hcw (fun y hy => hD y (by simp [Stmt.killVars, hy])) ?_
+          rcases hi.anch p Ep hp hmp (by simp [Stmt.spine]) d hd hb with h' | ⟨_, hnk, _⟩
+          · exact Or.inr h'
+          · exact Or.inl fun h => hnk (by simp [Stmt.killVars, h])
       · refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_evalR hi.cover he) (fun T h => by
