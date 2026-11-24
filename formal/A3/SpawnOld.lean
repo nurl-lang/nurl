@@ -353,7 +353,12 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     induction ht with
     | rbind hp hm hl hanch hpF hs hd _ =>
       cases hS
-      exact StmtT.rbind hp hm hl (by rw [hR'.eq] at hanch; exact hanch.anti (hR'.killVars_sub hkv)) hpF
+      exact StmtT.rbind hp hm hl (by
+          rw [hR'.eq] at hanch
+          exact hanch.anti fun v hv => by
+            rcases List.mem_cons.mp hv with rfl | hv
+            · exact List.mem_cons_self
+            · exact List.mem_cons_of_mem _ (hR'.killVars_sub hkv v hv)) hpF
         (ih hsp hkv hhole _ _ _ _ hs (hi.rbindIn hp hanch)) hd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS

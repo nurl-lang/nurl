@@ -502,14 +502,14 @@ theorem Inv.scopeL_iff {m : Mem} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x
       heldCaps := hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv }
 
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
-    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : AnchoredS Γ Ep F k.killVars) :
+    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : AnchoredS Γ Ep F (p :: k.killVars)) :
     Inv m Γ F k :=
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
     nvF := hi.nvF
     anch := fun q E hq hmq hqs => by
       by_cases hqp : q = p
-      · subst hqp; rw [hp] at hq; cases hq; exact hroots
+      · subst hqp; rw [hp] at hq; cases hq; exact hroots.anti fun v hv => List.mem_cons_of_mem _ hv
       · exact AnchoredS.anti (hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])) (fun v hv => by simp [Stmt.killVars, hv])
     spineNd := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2

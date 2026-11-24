@@ -2214,9 +2214,11 @@ theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var 
         rw [← hp]; simp [Entry.vdeps, hm, Mode.ownSlot]
       -- a held anchor is older than the frame, so none of the parameters'
       -- scopes (`killVars_wrap`)
-      have hr' : AnchoredS Γ E Fc (wrapParams ps base (i + 1) s).killVars := fun d hd hb =>
+      have hr' : AnchoredS Γ E Fc ((base + i) :: (wrapParams ps base (i + 1) s).killVars) := fun d hd hb =>
         (hr d hd hb).imp id fun ⟨hh, hv, he⟩ => ⟨hh, fun hk => by
           have hlt := hpe i d (by rw [← hvd]; exact hd)
+          rcases List.mem_cons.mp hk with h | hk
+          · exact absurd (h ▸ Nat.le_add_right base i) (Nat.not_le.mpr hlt)
           rcases killVars_wrap ps base (i + 1) s d.root hk with h | h
           · exact absurd h (Nat.not_le.mpr hlt)
           · exact hv (hsV _ h), he⟩
