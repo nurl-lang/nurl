@@ -318,6 +318,7 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
         | exact (hM.rdCapsInp w (by assumption)).1.lend)
 
 
+
 /-- Setting a slot to a value no part of which captures `w` but read-only,
     and whose handles reach clean nodes, keeps the clause: the live values
     and the targets in the other slots are as they were, and every node in
@@ -1456,5 +1457,137 @@ theorem LiveCaps.hand {m : Mem} {Γ Γ' : Ctx} {w c x y : Var} {E : Entry} {V en
   rcases htg x' t n hx' hsn with hx'' | hn
   · exact h2 c' hc' x' t n hx'' hsn hnd
   · exact hn
+
+/-- ... where only the bindings it reads are asked about (AGORA-937 B4: a
+    frame's clause covers its own bindings, which its code reads). -/
+theorem RhsT.readsCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ)
+    (h : ∀ y E o V, Γ y = some E → E.live = true → y ∈ r.vars → m.st y = some ⟨o, some V⟩ → LiveGood m w V)
+    (hw : w ∉ r.vars ∨ w ∈ F) : ValCapsInp v w := by
+  have lf : ∀ {u : Val}, (∀ fs te ms e cs, u ≠ .pkg fs te ms e cs) → (∀ e, ¬ Child e u) → ValCapsInp u w :=
+    fun a b => ValCapsInp.leaf a b
+  induction hr generalizing v o m1
+  case expr => cases he; exact ValCapsInp.int _ w
+  case new =>
+    cases he
+    refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with | elem he => simp at he
+  case moveOwn y E0 hy hl _ _ _ _ => cases he <;> exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) (by assumption)).1
+  case borrow =>
+    cases he
+    · exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+    · exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1
+  case view => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case glob =>
+    cases he with
+    | glob _ hf =>
+      rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;>
+        exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case «at» =>
+    cases he with
+    | «at» hn hv _ =>
+      obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv
+      · exact (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1).child (Child.elem (List.getElem_mem hn))).lend
+      · rcases hn' with ⟨x, t', hx, hs, hnd⟩ | ⟨k, bl, hk, hs, _⟩
+        · exact (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hhr).2 _ (Sub.refl _) x t' _ hx hs hnd).child
+            (Child.elem (List.getElem_mem hn))).lend
+        · exact (((hM.rdCapsInp w hk).1.sub hs).child (Child.elem (List.getElem_mem hn))).lend
+  case sat =>
+    cases he with
+    | sat hn hv _ _ _ hda =>
+      exact ((hM.viewTargetCaps (by assumption) (by assumption) hv hda w).child
+        (Child.elem (List.getElem_mem hn))).lend
+  case pair y z Ey Ez Γa Γb Dy Dz hy hl hpa1 hz hl2 hpa2 _ =>
+    cases he with
+    | @pair _ _ v1 v2 m1' m2' h1 h2 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      obtain ⟨_, hs2⟩ := h2.slot
+      have hs2' : ∃ o, m.st z = some ⟨o, some v2⟩ := by
+        rcases h1.st_of z with he | he
+        · rw [he] at hs2; exact ⟨_, hs2⟩
+        · rw [he] at hs2; cases hs2
+      obtain ⟨_, hs2'⟩ := hs2'
+      obtain ⟨Ez0, hz0, hl0⟩ := hpa1.liveBack _ _ hz hl2
+      refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | fst => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).1
+      | snd => exact (h _ _ _ _ hz0 hl0 (by simp [Rhs.vars]) hs2').1
+  case inl hy hl _ _ =>
+    cases he with
+    | inl h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with | inl => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).1
+  case inr hy hl _ _ =>
+    cases he with
+    | inr h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with | inr => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).1
+  case pack hy hl _ _ hcs _ =>
+    cases he with
+    | pack h1 =>
+      obtain ⟨_, hs1⟩ := h1.slot
+      refine ValCapsInp.of_children (fun fs te ms e cs he => ?_) (fun e hc => ?_)
+      · cases he
+        intro q hq hqw
+        rcases hw with hw | hwF
+        · exact absurd (by simp only [Rhs.vars, List.mem_cons, List.mem_map]; exact Or.inr ⟨q, hq, hqw⟩) hw
+        -- (a frame variable is captured `inout` by no package: `CapsOK`)
+        · obtain ⟨_, _, _, _, _, _, _, hmode⟩ := hcs.2 q hq
+          rcases hmode with ⟨h, _⟩ | ⟨_, _, _, _, _, _, hnF, _⟩
+          · exact h
+          · exact absurd (hqw ▸ hwF) hnF
+      · cases hc with | pkg => exact (h _ _ _ _ hy hl (by simp [Rhs.vars]) hs1).1
+  case arcNew => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case lockNew => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case cellNew => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case pop =>
+    cases he with
+    | pop hv _ _ => exact ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1).child (Child.elem (by simp))
+  case remove =>
+    cases he with
+    | remove hn hv _ _ _ => exact ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1).child (Child.elem (List.getElem_mem hn))
+  case rwRead => cases he; exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+  case rwTryRead =>
+    cases he
+    · refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | inr => exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
+    · refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | inl => exact ValCapsInp.int _ w
+  case rwTryWrite =>
+    cases he
+    · refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | inr => exact ValCapsInp.int _ w
+    · refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | inl => exact ValCapsInp.int _ w
+  case chanRecv =>
+    cases he with
+    | chanRecv _ hk _ _ =>
+      have hp := (hM.rdCapsInp w hk).2
+      refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | inr => exact (hp.child Child.fst).child (Child.elem (List.mem_cons_self ..))
+    | chanRecvNone _ _ _ _ =>
+      refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | inl => exact ValCapsInp.int _ w
+  all_goals first
+    | (cases he <;> first
+        | exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1
+        | exact ValCapsInp.int _ w
+        | exact (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1).child Child.fst).lend
+        | exact (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1).child Child.snd).lend
+        | exact (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1).child Child.inl).lend
+        | exact (((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1).child Child.inr).lend
+        | exact ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1).child Child.inl
+        | exact ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).1).child Child.inr
+        | exact (hM.rdCapsInp w (by assumption)).2
+        | exact (hM.rdCapsInp w (by assumption)).1.lend)
 
 end A2
