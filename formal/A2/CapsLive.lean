@@ -1292,4 +1292,129 @@ theorem StmtT.headCallc_live {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {
     exact LiveBack.kill _ _ _ _ c' _ h' (h16.recvLive h')
   | _ => intro c hc; simp [Stmt.headCallc] at hc
 
+
+/-! ### A call's frame (AGORA-937 B4) -/
+
+/-- What the clause asks of one live value: clean, and every node its
+    handles reach in an owned slot clean. -/
+def LiveGood (m : Mem) (w : Var) (V : Val) : Prop :=
+  ValCapsInp V w ∧ ∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+    (∃ ty d es, n = .node ty c d es) → ValCapsInp n w
+
+/-- ... kept where every owned slot after holds a tree an owned slot held
+    before. -/
+theorem LiveGood.mono {m m' : Mem} {w : Var} {V : Val} (h : LiveGood m w V)
+    (hob : ∀ y t, m'.st y = some ⟨true, some t⟩ → ∃ z, m.st z = some ⟨true, some t⟩) : LiveGood m' w V :=
+  ⟨h.1, fun c hc x t n hx hsn hnd => by
+    obtain ⟨z, hz⟩ := hob x t hx
+    exact h.2 c hc z t n hz hsn hnd⟩
+
+/-- A live binding's value, and what it lends, meet the clause. -/
+theorem LiveCaps.good {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hM : MInv m Γ) {a : Var}
+    {E : Entry} (ha : Γ a = some E) (hl : E.live = true) {o : Bool} {V : Val}
+    (hs : m.st a = some ⟨o, some V⟩) : LiveGood m w V ∧ (o = true → LiveGood m w (lendOf V)) :=
+  ⟨h a E o V ha hl hs, fun ho => by
+    subst ho
+    exact ⟨(h.val ha hl hs).lend, fun c hc => h.partTgt hM ha hl hs (Sub.refl _) hc⟩⟩
+
+/-- **Where a parameter binding's slots come from**: each is the one
+    before, or an argument's value, or what an owned argument lends. -/
+theorem BindParams.src {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    (hb : BindParams m ps as base i m') (hlt : ∀ a ∈ as, a < base) :
+    ∀ y o V, m'.st y = some ⟨o, some V⟩ → m.st y = some ⟨o, some V⟩ ∨
+      ∃ a ∈ as, ∃ o' V0, m.st a = some ⟨o', some V0⟩ ∧ (V = V0 ∨ (o' = true ∧ V = lendOf V0)) := by
+  induction hb with
+  | nil => intro y o V h; exact Or.inl h
+  | @inp m _ _ _ a as base i sl v ha hl _ ih =>
+    intro y o V hy
+    have hlt' : ∀ a' ∈ as, a' < base := fun a' h => hlt a' (by simp [h])
+    have hne : ∀ a', a' < base → a' ≠ base + i := fun a' h e => by omega
+    have hsrc : m.st a = some sl := ha
+    rcases ih hlt' y o V hy with h1 | ⟨a', ha', o', V0, h2, h3⟩
+    · by_cases hyb : y = base + i
+      · subst hyb
+        simp [Mem.set, upd] at h1
+        obtain ⟨_, rfl⟩ := h1
+        obtain ⟨so, sv⟩ := sl
+        cases so <;> cases sv <;> simp [lendSlot] at hl
+        · subst hl; exact Or.inr ⟨a, by simp, false, _, hsrc, Or.inl rfl⟩
+        · subst hl; exact Or.inr ⟨a, by simp, true, _, hsrc, Or.inr ⟨rfl, rfl⟩⟩
+      · simp [Mem.set, upd, hyb] at h1; exact Or.inl h1
+    · refine Or.inr ⟨a', by simp [ha'], o', V0, ?_, h3⟩
+      simpa [Mem.set, upd, hne a' (hlt' a' ha')] using h2
+  | @sink m _ _ _ a as base i v ha _ ih =>
+    intro y o V hy
+    have hlt' : ∀ a' ∈ as, a' < base := fun a' h => hlt a' (by simp [h])
+    have hne : ∀ a', a' < base → a' ≠ base + i := fun a' h e => by omega
+    rcases ih hlt' y o V hy with h1 | ⟨a', ha', o', V0, h2, h3⟩
+    · by_cases hyb : y = base + i
+      · subst hyb
+        simp [Mem.set, upd] at h1
+        obtain ⟨rfl, rfl⟩ := h1
+        exact Or.inr ⟨a, by simp, true, _, ha, Or.inl rfl⟩
+      · by_cases hya : y = a
+        · subst hya; simp [Mem.set, upd, hyb] at h1
+        · simp [Mem.set, upd, hyb, hya] at h1; exact Or.inl h1
+    · refine Or.inr ⟨a', by simp [ha'], o', V0, ?_, h3⟩
+      by_cases hae : a' = a
+      · subst hae; simp [Mem.set, upd, hne a' (hlt' a' ha')] at h2
+      · simpa [Mem.set, upd, hne a' (hlt' a' ha'), hae] using h2
+  | inout _ ih =>
+    intro y o V hy
+    rcases ih (fun a' h => hlt a' (by simp [h])) y o V hy with h1 | ⟨a', ha', h2⟩
+    · exact Or.inl h1
+    · exact Or.inr ⟨a', by simp [ha'], h2⟩
+
+/-- ... and every owned slot after holds a tree an owned slot held before. -/
+theorem BindParams.ownedBack {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    (hb : BindParams m ps as base i m') :
+    ∀ y t, m'.st y = some ⟨true, some t⟩ → ∃ z, m.st z = some ⟨true, some t⟩ := by
+  induction hb with
+  | nil => intro y t h; exact ⟨y, h⟩
+  | @inp m _ _ _ a as base i sl v ha hl _ ih =>
+    intro y t hy
+    obtain ⟨z, hz⟩ := ih y t hy
+    by_cases hzb : z = base + i
+    · subst hzb; simp [Mem.set, upd] at hz
+    · exact ⟨z, by simpa [Mem.set, upd, hzb] using hz⟩
+  | @sink m _ _ _ a as base i v ha _ ih =>
+    intro y t hy
+    obtain ⟨z, hz⟩ := ih y t hy
+    by_cases hzb : z = base + i
+    · subst hzb; simp [Mem.set, upd] at hz; subst hz; exact ⟨a, ha⟩
+    · by_cases hza : z = a
+      · subst hza; simp [Mem.set, upd, hzb] at hz
+      · exact ⟨z, by simpa [Mem.set, upd, hzb, hza] using hz⟩
+  | inout _ ih => exact ih
+
+/-- **A call ends caller bindings at most** (`callPost`): it kills, a moved
+    argument dies, and a changed one keeps its liveness. -/
+theorem LiveBack.callPostAux {Γ0 : Ctx} {fn : Fn} {args : List Var} :
+    ∀ {ps : List (PMode × Ty)} {as : List Var} {i : Nat} {Γ : Ctx}, LiveBack Γ0 Γ →
+      (∀ a ∈ as, ∃ E, Γ0 a = some E ∧ E.live = true) →
+      LiveBack Γ0 (A2.callPostAux Γ0 fn args ps as i Γ)
+  | [], _, _, _, h, _ => by simp only [A2.callPostAux]; exact h
+  | (.sink, _) :: _, [], _, _, h, _ => by simp only [A2.callPostAux]; exact h
+  | (.inout _, _) :: _, [], _, _, h, _ => by simp only [A2.callPostAux]; exact h
+  | (.inp, _) :: _, [], _, _, h, _ => by simp only [A2.callPostAux]; exact h
+  | (.sink, _) :: _, a :: _, _, _, h, ha => by
+    simp only [A2.callPostAux]
+    exact LiveBack.callPostAux ((h.trans (LiveBack.kill _ _ _ _)).setDead a _ rfl)
+      fun a' h' => ha a' (by simp [h'])
+  | (.inout b, t) :: _, a :: _, _, _, h, ha => by
+    simp only [A2.callPostAux]
+    obtain ⟨E, hE, hl⟩ := ha a (by simp)
+    refine LiveBack.callPostAux (fun v E1 hv hl1 => ?_) fun a' h' => ha a' (by simp [h'])
+    by_cases hva : v = a
+    · subst hva; exact ⟨E, hE, hl⟩
+    · simp only [setE, upd_ne _ _ hva] at hv
+      exact (h.trans (LiveBack.kill _ _ _ _)) v E1 hv hl1
+  | (.inp, _) :: _, _ :: _, _, _, h, ha => by
+    simp only [A2.callPostAux]
+    exact LiveBack.callPostAux h fun a' h' => ha a' (by simp [h'])
+
+theorem LiveBack.callPost {Γ : Ctx} {fn : Fn} {args : List Var}
+    (ha : ∀ a ∈ args, ∃ E, Γ a = some E ∧ E.live = true) : LiveBack Γ (A2.callPost Γ fn args) :=
+  (LiveBack.callPostAux (LiveBack.refl Γ) ha).trans (LiveBack.killNames _ _)
+
 end A2

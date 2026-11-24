@@ -1,6 +1,7 @@
 import A2.CallMem
 import A2.KillVarsStep
 import A2.SrcKeep
+import A2.CapsLive
 
 /-! A2 — the call step preserves the invariant and is typed: the call case
 of preservation, and the call case of progress. -/
@@ -175,6 +176,57 @@ theorem frz (h : CallH P Γ F x fn args m.nv) (_hi : MInv m Γ) {m1 : Mem}
   rw [get_of hk] at hmv
   exact (hmv rfl).1 (he ▸ hv)
 
+/-- AGORA-937 B4: **the call's frame keeps the closure-capture clause**:
+    each slot a live binding of the frame reads is a live caller binding's,
+    or an argument's value or what it lends (`BindParams.src`), and the
+    frame's owned slots hold trees the caller's did (`BindParams.ownedBack`). -/
+theorem liveCaps (h : CallH P Γ F x fn args m.nv) (hM : MInv m Γ) {m1 : Mem}
+    (hb : BindParams m fn.params args m.nv 0 m1) {w : Var} (hc : LiveCaps m Γ w) :
+    LiveCaps (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn)) w := by
+  have hargs : ∀ a ∈ args, ∃ E, Γ a = some E ∧ E.live = true := fun a ha => by
+    obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem ha
+    obtain ⟨Ea, hEa, hl, _⟩ := h.arg i (by rw [← h.len]; exact hi)
+    exact ⟨Ea, by simpa [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi] using hEa, hl⟩
+  have hlt : ∀ a ∈ args, a < m.nv := fun a ha => by
+    obtain ⟨E, hE, _⟩ := hargs a ha
+    exact h.domlt a E hE
+  -- the frame's slots are the bound ones, with the result slots emptied
+  have hst : ∀ y o V, (callMem m m1 fn x).st y = some ⟨o, some V⟩ → m1.st y = some ⟨o, some V⟩ := by
+    intro y o V hy
+    unfold callMem at hy
+    by_cases h1 : y = m.nv + fn.params.length
+    · subst h1; simp [Mem.set, upd] at hy
+    · by_cases h2 : y = x
+      · subst h2; simp [Mem.set, upd, h1] at hy
+      · simpa [Mem.set, upd, h1, h2] using hy
+  have hob : ∀ y t, (callMem m m1 fn x).st y = some ⟨true, some t⟩ → ∃ z, m.st z = some ⟨true, some t⟩ :=
+    fun y t hy => hb.ownedBack y t (hst y true t hy)
+  intro v E o V hv hl hs
+  refine LiveGood.mono (m := m) ?_ hob
+  rcases hb.src hlt v o V (hst v o V hs) with h0 | ⟨a, ha, o', V0, hsa, hV⟩
+  · -- a slot of the caller's: a live caller binding (an `inout` argument
+    -- or an untouched one)
+    have hvlt : v < m.nv := hM.nvSt v (by rw [h0]; rfl)
+    rcases h.ctx_cases v with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨k', t, _, rfl, _⟩ | ⟨k', t, _, rfl, _⟩ |
+        ⟨k', b', t, hk', rfl, _⟩ | ⟨_, _, hc'⟩ | ⟨hc', _⟩
+    · have := hM.dom v; rw [h.fresh, h0] at this; cases this
+    · have := vlt hvlt; omega
+    · have := vlt hvlt; omega
+    · have := vlt hvlt; omega
+    · obtain ⟨Ea, hEa, hla, _⟩ := h.arg k' (lt_of_get hk')
+      exact hc _ Ea o V hEa hla h0
+    · rw [hc'] at hv
+      obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hv
+      rw [clean_live] at hl
+      obtain ⟨E0, h0', hl0⟩ := LiveBack.callPost hargs v E1 h1 hl
+      exact hc _ E0 o V h0' hl0 h0
+    · rw [hc'] at hv; cases hv
+  · obtain ⟨Ea, hEa, hla⟩ := hargs a ha
+    have hg := hc.good hM hEa hla hsa
+    rcases hV with rfl | ⟨rfl, rfl⟩
+    · exact hg.1
+    · exact hg.2 rfl
+
 theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m Γ F (.letcall x f args k))
     {m1 : Mem} (hb : BindParams m fn.params args m.nv 0 m1) :
     Inv (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn)) F (callStmt fn args m.nv x k) where
@@ -329,7 +381,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
   -- (AGORA-963 step 3: a borrowed parameter outside the call's scopes is the
   -- caller's, as the call left it; the store binds the parameters to the
   -- arguments' values, `BindParams.capsInp`, and the result slots to nothing)
-  heldCaps p E hp hrb hns d hd hb' hh hF := by
+  heldCaps p E hp hrb hns d hd hb' hh := by
     rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
         ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
     · exact absurd hrb (resMode_ne' fn)
@@ -346,8 +398,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       have := h.post_rootb h0 (hm ▸ hrb)
       rw [h1'] at this; cases this
       rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hd hh
-      have hcw := hi.heldCaps p E1' h0 hrb (by simp [Stmt.spine]) d hd hb' hh hF
-      exact (((hb.capsInp hcw).set_none _ _).set_none _ _).of_st rfl
+      exact h.liveCaps hi.toMInv hb (hi.heldCaps p E1' h0 hrb (by simp [Stmt.spine]) d hd hb' hh)
 
 theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     Keep Γ ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (.letcall x f args k) (callStmt fn args m.nv x k) := by
@@ -698,9 +749,20 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       rw [hpost] at h1
       exact ⟨E1, by simp [setE, upd_ne _ _ hvx, h1], by rwa [Entry.clean_dbind] at hd,
         by rwa [clean_mode] at hos⟩
+    -- AGORA-937 B4: the frame's end, the caller's store with `x` an integer,
+    -- keeps the clause the call starts with
+    have hC : HeldCapsInp (m0.set x ⟨false, some (.int 1)⟩) (setE Γ x (callRes Γ fn [])) .skip := by
+      intro p Ep hp hmp _ d hd hb' hh
+      have hpx : p ≠ x := fun e => by
+        subst e; simp [setE] at hp; subst hp; rw [hEc] at hmp; cases hmp
+      simp only [setE, upd_ne _ _ hpx] at hp
+      have hcw := hi.heldCaps p Ep hp hmp (by simp [Stmt.spine]) d hd hb' hh
+      exact (hcw.setClean (o := false) (y := x)
+        (fun u E1 hu h1 hl1 => by simp only [setE, upd_ne _ _ hu] at h1; exact ⟨E1, h1, hl1⟩)
+        (ValCapsInp.int _ _) (fun c hc => by cases hc)).of_st (by show ((m.set x ⟨fn.resOwn, none⟩).set x _).st = _; rw [Mem.set_set])
     have hcatch : StmtT P (ξ.under x) ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
         (setE Γ x (callRes Γ fn [])) :=
-      StmtT.catchR hxF hIn hM hanchΔ hKO hDS
+      StmtT.catchR hxF hIn hM hanchΔ hKO hDS hC
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ bl hk _ => ⟨bl, hk, BlkKeep.refl bl⟩,
