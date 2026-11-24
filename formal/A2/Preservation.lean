@@ -4920,7 +4920,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         rcases skip_inv hs with rfl | hw
         · exact h0
         · exact h0.weakenOut hiS.wf hiS.names (Or.inr (hw.exitScope x hpx.2.2))
-      refine ⟨Γ, hsc, hiS, Nat.le_refl _, ⟨?_, ?_, DKeep.refl Γ _⟩, fun _ _ => rfl⟩
+      refine ⟨Γ, hsc, hiS, Nat.le_refl _, ⟨?_, ?_, DKeep.refl Γ _⟩, fun _ _ => rfl,
+        Z, hz.scopeDIn.scopeOut (fun q E hq hmq _ =>
+          hz.reach q E hq hmq _ (by simp [Stmt.under, Stmt.spine, Stmt.killVars])), ZKeep.refl _ _⟩
       · intro w E hw hws
         exact ⟨by simpa [Stmt.spine] using hws, E, hw, rfl, rfl, fun _ => rfl⟩
       · intro w E' hw hws
@@ -4965,7 +4967,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         rfl (covers_remove_bor hi.cover hsl) trivial, by simp,
         ⟨?_, ?_, (DKeep.refl Γ []).exitRoot _ fun v E hv hd hos hn hvp _ d hdd hnm h =>
           hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvp]) d hdd hnm (by simp [Stmt.spine, h])⟩,
-        fun w hw => by simp [upd_ne _ _ (show w ≠ p from fun e => hpF (e ▸ hw))]⟩
+        fun w hw => by simp [upd_ne _ _ (show w ≠ p from fun e => hpF (e ▸ hw))],
+        Z, hz.toSkip (fun q E hq hmq => by
+          obtain ⟨_, E0, h0, rfl⟩ := hrel q E hq
+          have hmq' : E0.mode = .rootb := by simpa [rerootE] using hmq
+          rw [rerootE_rootb hanch hpF (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hpF) _ h0 hmq'
+            (hpn q E0 h0 hmq')]
+          exact h0) (fun _ _ hcw => hcw.remove p) (by simp), ZKeep.refl _ _⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · refine StmtT.skip.weakenOut hinv.wf hinv.names (Or.inr (hw.exitRoot p (Ep.path ++ Ep.held)
