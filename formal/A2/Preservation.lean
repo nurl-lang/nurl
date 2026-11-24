@@ -4023,7 +4023,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           rcases List.mem_cons.mp hv with h | h
           · simp [Stmt.vars, h]
           · simp only [List.mem_singleton] at h; simp [Stmt.vars, h]) trivial trivial trivial
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hpu hcd hi0 (Step.push htk hT hc hd)
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ih hpu hcd hi0 (Step.push htk hT hc hd) Z
+        (hz.restmt (fun _ _ h => by simp [Stmt.spine] at h) (fun v hv => by
+          simp only [Stmt.killVars, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hv ⊢
+          rcases hv with h | h <;> simp [h]) (fun c hc => by simp [Stmt.catchFrames] at hc))
       have hT' : (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩).st x =
           some ⟨true, some (.node t c d (es ++ [w]))⟩ := by simp
       have hp := perm_insert es n w
@@ -4031,7 +4034,19 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hc' := hi'.cover.perm hT' hp
       rw [Mem.set_set] at hm hc'
       refine ⟨Γ', ht'.ofNone, Inv.ofLeaf hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnchS rfl) rfl hc' trivial,
-        by simpa using hnv, hk, fun v hv => ?_⟩
+        by simpa using hnv, hk, fun v hv => ?_, Z', ?_, hzk⟩
+      rotate_right
+      · -- (AGORA-937 B4: the node keeps its handle, its elements reordered)
+        have hno : NodeOf (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩) x x (.node t c d (es ++ [w]))
+            t c d (es ++ [w]) := ⟨hc, hd, hT', Or.inl ⟨rfl, rfl⟩⟩
+        refine (hz'.mapCaps (m' := (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩).set x
+            ⟨true, some (.node t c d (es.take n ++ w :: es.drop n))⟩) (fun D' w' hcw => ?_) (by simp)).restmt
+          (fun _ _ h => by simp [Stmt.spine] at h) (fun v hv => by simp [Stmt.killVars] at hv) (fun c hc => by
+            simp [Stmt.catchFrames] at hc) |> fun h => by rw [Mem.set_set] at h; exact h
+        exact hcw.editNode (d' := d) (es' := es.take n ++ w :: es.drop n) hno Repl.here
+          (by simp [Mem.set, upd]) (fun z hz => by simp [Mem.set, upd, hz])
+          (fun hN => hN.node_sub fun e he => hp.mem_iff.mpr he) (fun e he => Or.inl (hp.mem_iff.mpr he))
+          (fun c' hc' => hm.slot_no_href (x := x) (by simp [Mem.set, upd]) hc')
       have hvx : v ≠ x := fun e => hxF (e ▸ hv)
       have := hfz v hv
       simp only [Mem.set_st, upd_ne _ _ hvx] at this ⊢; exact this
@@ -4052,7 +4067,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           (fun hdb => ⟨by rw [killE_dbind]; exact hdb, fun d hdd _ => by rw [killE_vdeps]; exact hdd⟩))
       exact ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h)
         rfl (covers_free hi.cover ht hf) trivial,
-        by simp, hrel.keep rfl rfl, fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
+        by simp, hrel.keep rfl rfl, fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))],
+        Z, hz.leaf rfl rfl (by simp) (fun p Ep hp hmp => hrel.rootb_back hp hmp)
+          (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun _ _ _ _ _ _ _ _ _ hcw => (hcw.of_st rfl).set_none x true), ZKeep.refl _ _⟩
   | @scope ξ Γ Δ1 F x k hxE hxF hs hpx ihs =>
     intro m m' s' hcd hi hst Z hz
     obtain ⟨Ex, hx, hnrb⟩ := hxE

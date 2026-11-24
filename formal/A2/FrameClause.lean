@@ -305,4 +305,13 @@ theorem FrameCaps.nodeOf {m : Mem} {D : List Var} {w x o : Var} {T : Val} {t : T
   · exact (h _ true _ hxD ho).1
   · exact (h x false _ hxD hsx).2 c (Sub.refl _) o T _ ho hs ⟨t, d, es, rfl⟩
 
+
+/-- `HeldZ` across a store change that keeps the frame clause everywhere. -/
+theorem HeldZ.mapCaps {m m' : Mem} {Γ : Ctx} {Z : Var → List Var} {s : Stmt} (hz : HeldZ m Γ Z s)
+    (hc : ∀ D w, FrameCaps m D w → FrameCaps m' D w) (hnv : m.nv ≤ m'.nv) : HeldZ m' Γ Z s where
+  caps p E hp hm d hd hb hh := hc _ _ (hz.caps p E hp hm d hd hb hh)
+  reach := hz.reach
+  bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E hp hm v hv) hnv
+  frames := hz.frames
+
 end A2
