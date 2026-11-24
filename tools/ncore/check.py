@@ -4704,8 +4704,12 @@ class FnCheck:
             # (by name, a call's lend, a payload) or an `=` gives it a
             # binding by name - not where an `=` gives it a call's result
             vid = s[1] if s[0] == "let" else s[1][0]
-            byname = s[0] == "let" or (not s[1][1] and s[2] is not None and s[2][0] == "use"
-                                       and s[2][1][0] == "v" and self.fn.vars[s[2][1][1]].kind != "temp")
+            # (…a `let` of a binding codegen linked to no owner links nothing:
+            # a call's result whose callee is compiled after this function,
+            # CORE_VF_UNLINKED - a later `=` by name still links it; AGORA-1005)
+            byname = (not self.fn.vars[vid].unlinked) if s[0] == "let" else (
+                not s[1][1] and s[2] is not None and s[2][0] == "use"
+                and s[2][1][0] == "v" and self.fn.vars[s[2][1][1]].kind != "temp")
             av = st.vals.get(vid)
             if byname and av is not None and self.fn.vars[vid].kind != "temp":
                 for a in av.alias:

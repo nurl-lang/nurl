@@ -787,6 +787,7 @@ $ `stdlib/core/vec.nu`
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
 : i CORE_VF_ENVOWN 2048  // a capture's flag: a closure returned where it is made (`^ \ …`), whose env owns this handle capture — moved in from its owner, a copy where the binding borrows — not a copy of its handle that depends on the binding (gen_env_allocation; AGORA-978). The engine does not ask it
 : i CORE_VF_AGGLEND 1024  // a variable's flag: a returned literal codegen made without copying a field it was given lent: the literal is a lend of what that field borrows, on the runs the function answers lent (__gen_agg_lit_body, agora #907)
+: i CORE_VF_UNLINKED 4096  // a variable's flag: a `:` binding of a call's result that codegen linked to no owner - the callee not compiled yet (defined below, a generic instance), so no argument it hands back is known at the call: no store replacing an owner hands it the old value (mem_udrop_hand_over has no such borrower; AGORA-1005)
 : i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884); on a `:` raw string binding, codegen gave it a copy of its own (AGORA-953)
 : ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
 : ~ i g_core_let_dup 0  // 1: the `:` binding core_let makes next was given a copy of its value by codegen (a raw view a value block lent out of its own local, AGORA-953): it gets CORE_VF_CPCOPY
@@ -9101,6 +9102,9 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // copied whatever the function answers (no lend either way).
     : ~ i __ret_bcopy 0
     : ~ b ret_call_copied F
+    // (…and copied on every run that lent: the result is this function's
+    // own on every run, so it hands back no argument either - agora #1004)
+    : ~ b ret_call_owned_all F
     // (A closure-returning call's result that its callee may have lent is
     // copied on the way out where it was, mem_retclo_own_result's
     // __clo_tmp_settle: this function hands back its own, and lends
@@ -9223,6 +9227,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             = val ( mem_emit_cloneif cg __crt val rb )
             = hbit ( nurl_str_cat `true` `` )
             = ret_call_copied T
+            = ret_call_owned_all T
         } {}
         ? & & ! ret_call_copied ! ( seq hbit `true` ) & != 0 ( nurl_str_len __rll ) ( __clone_supported __crt syms ) {
             : s rb2 ( nurl_cg_reg cg )
@@ -10252,7 +10257,11 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // though the return is not a bare identifier. Ownership only — the
     // §2.8 refdepth summary above deliberately stays on the strict
     // `^ p` form, so no escape diagnostic moves because of this.
-    : ~ s __ra_rest ( nurl_sym_get syms `__last_phi_idents__` )
+    // (…not where the call's result was copied on every run that lent:
+    // what goes back is this function's own, and naming the arguments the
+    // call could hand back made the caller take the copy for a lend of
+    // them, which it never released - agora #1004.)
+    : ~ s __ra_rest ? ret_call_owned_all `` ( nurl_sym_get syms `__last_phi_idents__` )
     ~ != 0 ( nurl_str_len __ra_rest ) {
         : s __ra_w ( str_first_word __ra_rest )
         = __ra_rest ( str_skip_word __ra_rest )
@@ -23198,7 +23207,10 @@ unsafe @ eng_byte s w i k → i {
     ? == op CO_LET {
         ( stmt_let st at ln )
         : i lv ( ec + at 1 )
-        ? != ( fv_kind lv ) VK_TEMP { : i lav ( st_av st lv ) ? != lav 0 { ( __eng_link lv ( av_alias lav ) at ) } {} } {}
+        // (…not a binding codegen linked to no owner, CORE_VF_UNLINKED: a
+        // call's result whose callee is compiled after this function - a
+        // later `=` by name still links it; AGORA-1005)
+        ? & != ( fv_kind lv ) VK_TEMP == 0 & ( ev lv 4 ) CORE_VF_UNLINKED { : i lav ( st_av st lv ) ? != lav 0 { ( __eng_link lv ( av_alias lav ) at ) } {} } {}
         ^ ( eng_next at )
     } {}
     ? == op CO_ASSIGN {
@@ -26223,6 +26235,17 @@ unsafe @ eng_print_types → v {
     : i cv ( nurl_sym_int2 syms name `__cv` )
     ? | < cv 0 != / cv CORE_VS g_core_serial { ^ } {}
     ( core_var_or_flag % cv CORE_VS CORE_VF_SECOND )
+}
+
+// The `:` binding `name` of a call's result, at slot `ptr`: where codegen
+// linked it to no owner (no `__alias` - the callee not compiled yet, so
+// nothing it hands back is known here), a store replacing an owner hands
+// it nothing, and the core IR says so: CORE_VF_UNLINKED (AGORA-1005).
+@ core_mark_unlinked i syms s name s ptr → v {
+    ? != 0 ( nurl_sym_len2 syms ptr `__alias` ) { ^ v } {}
+    : i cv ( nurl_sym_int2 syms name `__cv` )
+    ? | < cv 0 != / cv CORE_VS g_core_serial { ^ v } {}
+    ( core_var_or_flag % cv CORE_VS CORE_VF_UNLINKED )
 }
 
 // The operand on top, a closure binding a `=` gives another without moving
@@ -79275,6 +79298,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_bound_lend syms name __own_tt __own_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
+                    ? & != 0 g_core_live == bck_rhs_tt TT_LPAREN { ( core_mark_unlinked syms name ptr ) } {}
                     ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 val ) } {}
                     ( __most_init syms name ptr val __blk_lend )
                     ( mem_journal_push_userdrop syms cg ptr rvt )
@@ -79714,6 +79738,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                         ( mem_note_bound_lend syms name __own_tt __own_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
+                        ? & != 0 g_core_live == bck_rhs_tt TT_LPAREN { ( core_mark_unlinked syms name ptr ) } {}
                         ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 val ) } {}
                         ( __most_init syms name ptr val __blk_lend )
                         ( mem_journal_push_userdrop syms cg ptr rpt )
