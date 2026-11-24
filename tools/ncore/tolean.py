@@ -1300,6 +1300,11 @@ def moved_caps(fns):
                 for j, op in enumerate(ops):
                     if not (op.startswith("v") and op[1:].isdigit()):
                         continue
+                    # (only a binding of the function's own, a local or a
+                    # temporary, is moved; a parameter or a capture is not
+                    # the literal's to take)
+                    if fn.get("kind", {}).get(int(op[1:])) not in (1, 2):
+                        continue
                     pat = re.compile(r"(^|[\s/])" + re.escape(op) + r"($|[\s/])")
                     dropped = any(l.split()[:2] == ["drop", op[1:]] for l in body)
                     if not dropped and not any(pat.search(l) for l in later):
