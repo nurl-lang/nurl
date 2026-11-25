@@ -94,6 +94,20 @@ theorem Cert.m_race : ∀ C, A3.Reach … C → ¬ A3.Race P C
   the closure again after spawning it is refused. That is a precision gap,
   never a hole.
 - Module globals are not translated yet: such a program is `unsupported`.
+- **What the threaded claims cover.** The translation takes every
+  `thread_spawn_owned` to succeed. A run in which `pthread_create` fails,
+  and the code that handles `ThreadCreate`, is outside the claims: that
+  code is type-checked with the rest, but no theorem speaks of its runs.
+  Modelling a failing spawn would need a nondeterministic outcome in A3.
+  The sentences say so ("on any run in which every thread it spawns
+  starts").
+- `M.leak` for a threaded program is A3's leak clause: once every thread
+  has finished, nothing is allocated. Unlike the single-threaded claim, it
+  says nothing of a run that a panic ends.
+- A spawned closure that is used again after its spawn, or passed to a
+  function that takes the ordinary closure type, is `unsupported`. Not
+  refused: `thread_spawn_owned` copies the environment, and the copy is not
+  translated yet.
 
 ## 2. The bundle
 

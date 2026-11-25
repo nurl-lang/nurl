@@ -179,6 +179,13 @@ expect_internal "a variable kind 7" "$TMP/q7.core" "malformed: a variable's kind
 awk '/^fn\tmain\t/{m=1} m && /^ret c$/ {print "let -3 use c"} {print}' "$TMP/s.core" > "$TMP/q8.core"
 expect_internal "a statement's variable id -3" "$TMP/q8.core" "malformed: a variable id below 0"
 
+# Exact counts (CodeRabbit round 3): a ty line's type arguments are the
+# columns between `A n` and `F`; a call has exactly its operands.
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\ti64\tF\t0\tV\t0\n'; } > "$TMP/x1.core"
+expect_internal "a ty line with surplus type-argument columns" "$TMP/x1.core" "malformed: a ty line with more type arguments than it counts"
+sed 's/^eval call helper 1 c$/eval call helper 0 v0/' "$TMP/s.core" > "$TMP/x2.core"
+expect_internal "a call with an operand word past its count" "$TMP/x2.core" "malformed operands: main, statement 2: a call that counts 0 operands and has 1"
+
 # A word a statement does not have.
 sed 's/^ret c$/ret/' "$TMP/s.core" > "$TMP/n7.core"
 expect_internal "a ret with no operand word" "$TMP/n7.core" "a word the core IR's statement does not have"
@@ -242,10 +249,49 @@ for k in th1 th2; do
 done
 grep -q '(.lockClone ' "$TMP/out" && ok "th2: Channel_share is a new share (lockClone)" || bad "th2: Channel_share is a new share (lockClone)"
 "$NURLC" --emit-core "$TMP/th2b.nu" > "$TMP/th2b.core" 2> /dev/null || bad "th2b: nurlc --emit-core"
-"$CERT" translate "$TMP/th2b.core" > "$TMP/th2b.out" 2>&1
-if grep -q '(.lockClone ' "$TMP/th2b.out"; then bad "th2b: a channel bound from another binding moves (no lockClone)"
-else ok "th2b: a channel bound from another binding moves (no lockClone)"; fi
+"$CERT" translate "$TMP/th2b.core" > "$TMP/th2b.out" 2> "$TMP/th2b.err"; rc=$?
+if [ "$rc" = 0 ] && grep -q '^def spawns : List Nat := ' "$TMP/th2b.out" && head -1 "$TMP/th2b.out" | grep -qx 'import C.Cert3' \
+    && ! grep -q '(.lockClone ' "$TMP/th2b.out"; then ok "th2b: a channel bound from another binding moves (no lockClone)"
+else bad "th2b: a channel bound from another binding moves (exit $rc; an A3 term with no lockClone expected)"; sed 's/^/        /' "$TMP/th2b.err" | head -3; fi
 expect_unsupported "a spawned closure capturing a String by name" "$TMP/th3.core" "__closure_1: a spawned closure capturing s by name"
+# thread_spawn_owned copies the closure's environment; the translation moves
+# the closure into the spawn wrapper: only a closure whose one use is the
+# spawn is translated.
+cat > "$TMP/th4.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+@ main → i {
+    : i n 41
+    : ( @ v ) body \ → v { : i m + n 1 }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    ( body )
+    ^ ?? r { T t → ( thread_join t ) F _ → 1 }
+}
+NU
+cat > "$TMP/th5.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+@ main → i {
+    : i n 41
+    : ( @ v ) body \ → v { : i m + n 1 }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    : !Thread ThreadErr r2 ( thread_spawn_owned body )
+    ^ ?? r { T t → ( thread_join t ) F _ → 1 }
+}
+NU
+cat > "$TMP/th6.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+@ run ( @ v ) f → v { ( f ) }
+@ main → i {
+    : i n 41
+    : ( @ v ) body \ → v { : i m + n 1 }
+    ( run body )
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    ^ ?? r { T t → ( thread_join t ) F _ → 1 }
+}
+NU
+for k in th4 th5 th6; do "$NURLC" --emit-core "$TMP/$k.nu" > "$TMP/$k.core" 2> /dev/null || bad "$k: nurlc --emit-core"; done
+expect_unsupported "a spawned closure called after its spawn" "$TMP/th4.core" "main: a spawned closure used again after its spawn (thread_spawn_owned copies the environment; the copy is not translated yet)"
+expect_unsupported "a closure spawned twice" "$TMP/th5.core" "main: a spawned closure used again after its spawn"
+expect_unsupported "a spawned closure passed to a helper" "$TMP/th6.core" "main: a spawned closure passed to a function that takes the ordinary closure type"
 
 echo "== 2. the reference (tools/ncore/tolean.py)"
 if command -v python3 > /dev/null; then

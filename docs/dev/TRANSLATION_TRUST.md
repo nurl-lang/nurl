@@ -105,7 +105,8 @@ encoding is a ledger row with a design note. The decisions:
 | options → `sum int t`; structs → nested `prod`, one field = the field | layout-free shapes | design note (shapes only, no ownership choice) |
 | destructor types → `.dtor f u`, a one-field struct padded with an int | `% Drop` runs `f` at the end of every value | design note + A2-drop's theorems |
 | closures → `.fn [σ] .any`; captures by name vs in the environment (`CORE_VF_ENVOWN`), mode `inp` / `(.inout .drop)` | a capture by name is a dependency on the binding (MEMORY.md §2.11) | ledger row (the mode choice is precision, the code is checked against it, but by-name vs by-value is meaning) |
-| channels → `lk (prod (vec A) int)` | A3.4's channel | design note, `Ty.ChanOf` |
+| a spawned closure → an interface of class `.send`; the spawn → A3's spawn-only `letcall` of a wrapper `[(.sink, .fn [m] .send)] → .int` that calls it; the join → a read; `Thread` / `ThreadErr` → `.int`; `!T E` → `sum E T` | a spawn moves the closure to a new thread; its captures are held by value (no view, no name, no destructor value); `thread_spawn_owned` always succeeds | ledger row: the spawn's failure path is outside the model; the closure is moved, where nurlc copies its environment (a reuse after the spawn is unsupported, not refused) |
+| channels → `lk (prod (vec A) int)`; `Channel_share` → `lockClone`; a channel bound from another binding → a move | A3.4's channel; one owner per handle (nurlc) | design note, `Ty.ChanOf` |
 | `sink=` / `keeps=` summaries → `sink` | the callee owns what nurlc's caller does not drop (AGORA-994) | ledger row: it reads the walk's summary, which is nurlc's |
 | a borrowed result (`rviews`) → `(.slice .int)` + `lends` | the result views its parameters | ledger row: it reads the walk's summary |
 | a mutable cursor → a borrow; a loop element → `.view` / `.sat` | AGORA-994's families | ledger row; AGORA-1009 changes these |

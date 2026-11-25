@@ -202,31 +202,103 @@
       "items": {
         "$ref": "#/$defs/claim"
       },
-      "minItems": 3,
-      "maxItems": 4,
-      "prefixItems": [
+      "description": "M.safe, M.leak, then M.unsafe; a threaded program: M.safe, M.leak, M.race, then M.unsafe",
+      "oneOf": [
         {
-          "properties": {
-            "id": {
-              "const": "M.safe"
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {
+              "properties": {
+                "id": {
+                  "const": "M.safe"
+                },
+                "lean": {
+                  "const": "Cert.m_safe"
+                }
+              }
             },
-            "lean": {
-              "const": "Cert.m_safe"
+            {
+              "properties": {
+                "id": {
+                  "const": "M.leak"
+                },
+                "lean": {
+                  "const": "Cert.m_leak"
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "M.unsafe"
+                },
+                "lean": {
+                  "const": ""
+                },
+                "status": {
+                  "enum": [
+                    "assumed",
+                    "open"
+                  ]
+                }
+              }
             }
-          }
+          ]
         },
         {
-          "properties": {
-            "id": {
-              "const": "M.leak"
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {
+              "properties": {
+                "id": {
+                  "const": "M.safe"
+                },
+                "lean": {
+                  "const": "Cert.m_safe"
+                }
+              }
             },
-            "lean": {
-              "const": "Cert.m_leak"
+            {
+              "properties": {
+                "id": {
+                  "const": "M.leak"
+                },
+                "lean": {
+                  "const": "Cert.m_leak"
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "M.race"
+                },
+                "lean": {
+                  "const": "Cert.m_race"
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "M.unsafe"
+                },
+                "lean": {
+                  "const": ""
+                },
+                "status": {
+                  "enum": [
+                    "assumed",
+                    "open"
+                  ]
+                }
+              }
             }
-          }
+          ]
         }
-      ],
-      "description": "M.safe, M.leak, then (a threaded program) M.race, then M.unsafe"
+      ]
     },
     "coverage": {
       "type": "object",

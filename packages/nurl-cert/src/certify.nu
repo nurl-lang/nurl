@@ -271,29 +271,33 @@ $ `stdlib/std/random.nu`
 // ── The ledger ───────────────────────────────────────────────────────
 
 @ cert_ledger s prof ( Vec String ) unsafe_rows b threads → Json {
+    // the claims a shared row backs: M.race too, for a threaded program
+    : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
+    : s muc ? threads `M.unsafe M.safe M.leak M.race` `M.unsafe M.safe M.leak`
     : Json L ( json_arr_new )
     ( json_arr_push L ( mj_row `lean-kernel` `the Lean 4 kernel and the toolchain formal/lean-toolchain pins`
-    `it checks every proof in Program.lean and Claims.lean` `formal/lean-toolchain` `the Lean developers` `M.safe M.leak` ) )
+    `it checks every proof in Program.lean and Claims.lean` `formal/lean-toolchain` `the Lean developers` mc ) )
     ? != 0 ( nurl_str_eq prof `fast` ) {
         ( json_arr_push L ( mj_row `lean-compiler` `the Lean compiler and its runtime (native_decide)`
         `under the fast profile the checker's verdict is computed by compiled code, not by the kernel`
-        `Claims.lean, theorem Cert.verdict` `the Lean developers` `M.safe M.leak` ) )
+        `Claims.lean, theorem Cert.verdict` `the Lean developers` mc ) )
     } {}
-    ( json_arr_push L ( mj_row `claim-definitions` `the claims' definitions: A2's semantics (A2.Steps, A2.Stuck, A2.emptyMem, Mem.alloc)`
+    : s defs ? threads `the claims' definitions: A3's semantics over A2's (A3.Reach, A3.Race, A3.Cfg.init, A2.Stuck, Cfg.alloc)` `the claims' definitions: A2's semantics (A2.Steps, A2.Stuck, A2.emptyMem, Mem.alloc)`
+    ( json_arr_push L ( mj_row `claim-definitions` defs
     `a claim means what these definitions say; formal/CLAIM.md is their review document`
-    `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` `M.safe M.leak` ) )
+    `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` mc ) )
     ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
     `nothing yet proves that P is the program the source describes (AGORA-1020 moves it inside the kernel's sight)`
-    `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted, tested by tests/translate_test.sh and tools/ncore/tolean_parity.sh)` `M.safe M.leak` ) )
+    `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted, tested by tests/translate_test.sh and tools/ncore/tolean_parity.sh)` mc ) )
     ( json_arr_push L ( mj_row `library-summaries` `the standard library as the term has it: its calls are A2 primitives and declared summaries`
     `the library's unsafe base follows formal/B's models by inspection, not by proof (AGORA-1014 ties each to its theorem)`
-    `packages/nurl-cert/src/tolean.nu, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` `M.safe M.leak` ) )
+    `packages/nurl-cert/src/tolean.nu, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` mc ) )
     ( json_arr_push L ( mj_row `llvm` `LLVM: the IR to machine code` `the claims are about the program's model; phase D validates the drops, nothing proves codegen`
-    `the LLVM IR hash in this manifest` `the LLVM project` `M.safe M.leak` ) )
-    ( json_arr_push L ( mj_row `linker` `the linker` `it joins the program with the C runtime` `the build` `the toolchain's linker` `M.safe M.leak` ) )
-    ( json_arr_push L ( mj_row `os` `the operating system` `memory, threads and files are the kernel's` `the host` `the OS vendor` `M.safe M.leak` ) )
+    `the LLVM IR hash in this manifest` `the LLVM project` mc ) )
+    ( json_arr_push L ( mj_row `linker` `the linker` `it joins the program with the C runtime` `the build` `the toolchain's linker` mc ) )
+    ( json_arr_push L ( mj_row `os` `the operating system` `memory, threads and files are the kernel's` `the host` `the OS vendor` mc ) )
     ( json_arr_push L ( mj_row `c-runtime` `the C runtime the program links against` `allocation, I/O and panics go through it`
-    `stdlib/runtime*.c` `the NURL project` `M.safe M.leak` ) )
+    `stdlib/runtime*.c` `the NURL project` mc ) )
     ? threads {
         ( json_arr_push L ( mj_row `drf-sc` `the C11 / LLVM memory model's DRF-SC guarantee`
         `M.race is A3's race freedom of the program's model; that a race-free program behaves sequentially consistently in the binary is the memory model's theorem, cited, not mechanized`
@@ -309,7 +313,7 @@ $ `stdlib/std/random.nu`
                 : String id ( string_from `unsafe-` )
                 ( string_push_int id + k 1 )
                 ( json_arr_push L ( mj_row ( string_data id ) ( string_data r ) `the program vouches for this by hand (unsafe), no rule checks it`
-                ( string_data r ) `the program's author` `M.unsafe M.safe M.leak` ) )
+                ( string_data r ) `the program's author` muc ) )
             }
             F _ → {}
         }
@@ -531,7 +535,7 @@ $ `stdlib/std/random.nu`
         : String why ? ( nc_is st `open` ) ( string_clone reason ) ( string_new )
         : String prem ( cert_claim_premises prof k )
         ( json_arr_push cl ( __ct_claim ( cert_claim_id k ) ( cert_claim_lean k ) ( string_data st )
-        ( cert_claim_sentence k ) ( cert_claim_sentence_fi k ) ( string_data why ) ax ( string_data prem ) ) )
+        ( cert_claim_sentence threads k ) ( cert_claim_sentence_fi threads k ) ( string_data why ) ax ( string_data prem ) ) )
         = k + k 1
     }
     // M.unsafe: what nurlc's report says.

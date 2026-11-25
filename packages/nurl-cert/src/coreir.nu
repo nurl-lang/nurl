@@ -31,7 +31,8 @@
 // tools/ncore/tolean.py (which reads these), what is malformed in shape
 // (`internal: line N of the core IR: malformed: …`): a count below 0 (a
 // parameter, field, type-argument, variant or payload count), a type
-// argument, variant or payload count past what the line holds, a variable
+// argument, variant or payload count past what the line holds (or, for
+// the type arguments, short of it), a variable
 // id below 0 or a kind outside 0–3, an `fn` line while a function is
 // open, and the input ending inside a function. An informative column that
 // is not an integer (a source line, a depth, a value block, a function's
@@ -315,16 +316,21 @@ $ `stdlib/std/hashmap.nu`
         = j + j 1
     }
     : i after k
-    ? & ( __cr_is f 5 `A` ) < 5 fi {
+    // (the type arguments, when there is an `A`, are exactly the columns
+    // between its count and `F`; with none, `F` follows the base)
+    ? ( __cr_is f 5 `A` ) {
         : i na \ ( __cr_count f 6 line `a ty line's type-argument count` )
         ? < na 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line's type-argument count below 0` ) } } {}
         ? > na - - fi 7 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line with fewer type arguments than it counts` ) } } {}
+        ? < na - - fi 7 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line with more type arguments than it counts` ) } } {}
         = j 0
         ~ < j na {
             ( vec_push [String] targs ( string_from ( __cr_col f + 7 j ) ) )
             = j + j 1
         }
-    } {}
+    } {
+        ? != fi 5 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line with columns between its base and its fields` ) } } {}
+    }
     ? ( __cr_is f after `V` ) {
         : i nv \ ( __cr_count f + after 1 line `a ty line's variant count` )
         ? < nv 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line's variant count below 0` ) } } {}

@@ -46,16 +46,30 @@ $ `stdlib/core/vec.nu`
     ^ `Cert.m_race`
 }
 
-@ cert_claim_sentence i k → s {
+// A claim's sentence. A threaded program's claims are A3's, over the runs
+// in which every thread it spawns starts (the translation takes each
+// `thread_spawn_owned` to succeed: a run where `pthread_create` fails, and
+// the code that handles that, is outside the claim), and its M.leak is
+// over runs in which every thread has finished (`cert3_leak`: A3's leak
+// clause asks that of a run, and says nothing of one a panic ends).
+@ cert_claim_sentence b threads i k → s {
+    ? threads {
+        ? == k 0 { ^ `It never reads or writes memory it does not own, on any run in which every thread it spawns starts.` } {}
+        ? == k 1 { ^ `Once every thread it starts has finished, it has released everything it allocated.` } {}
+        ^ `Its threads never race on shared memory, on any run in which every thread it spawns starts.`
+    } {}
     ? == k 0 { ^ `It never reads or writes memory it does not own, on any run.` } {}
-    ? == k 1 { ^ `Everything it allocates it releases, also when it stops with an error.` } {}
-    ^ `Its threads never race on shared memory.`
+    ^ `Everything it allocates it releases, also when it stops with an error.`
 }
 
-@ cert_claim_sentence_fi i k → s {
+@ cert_claim_sentence_fi b threads i k → s {
+    ? threads {
+        ? == k 0 { ^ `Se ei koskaan lue eikä kirjoita muistia, jota se ei omista, millään ajolla, jolla jokainen sen käynnistämä säie käynnistyy.` } {}
+        ? == k 1 { ^ `Kun jokainen sen käynnistämä säie on päättynyt, se on vapauttanut kaiken minkä varasi.` } {}
+        ^ `Sen säikeet eivät koskaan kilpaile jaetusta muistista millään ajolla, jolla jokainen sen käynnistämä säie käynnistyy.`
+    } {}
     ? == k 0 { ^ `Se ei koskaan lue eikä kirjoita muistia, jota se ei omista, millään ajolla.` } {}
-    ? == k 1 { ^ `Kaiken minkä se varaa, se vapauttaa, myös kun se pysähtyy virheeseen.` } {}
-    ^ `Sen säikeet eivät koskaan kilpaile jaetusta muistista.`
+    ^ `Kaiken minkä se varaa, se vapauttaa, myös kun se pysähtyy virheeseen.`
 }
 
 // A claim's premises, the ledger rows it rests on: M.race also on the C11 /
@@ -100,13 +114,13 @@ $ `stdlib/core/vec.nu`
     ( string_push_str o ( __cl_tactic prof ) )
     ( string_push_str o `\n\n` )
     ( string_push_str o `/-- M.safe: ` )
-    ( string_push_str o ( cert_claim_sentence 0 ) )
+    ( string_push_str o ( cert_claim_sentence F 0 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_safe :\n    ∀ m' s', A2.Steps P (A2.emptyMem ` )
     ( string_push_str o ns )
     ( string_push_str o `) entry (.ok m' s') → ¬ A2.Stuck P m' s' :=\n  C.cert_safe verdict\n\n` )
     ( string_push_str o `/-- M.leak: ` )
-    ( string_push_str o ( cert_claim_sentence 1 ) )
+    ( string_push_str o ( cert_claim_sentence F 1 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_leak :\n    (∀ m', A2.Steps P (A2.emptyMem ` )
     ( string_push_str o ns )
@@ -150,19 +164,19 @@ $ `stdlib/core/vec.nu`
     ( string_push_str o ( __cl_tactic prof ) )
     ( string_push_str o `\n\n` )
     ( string_push_str o `/-- M.safe: ` )
-    ( string_push_str o ( cert_claim_sentence 0 ) )
+    ( string_push_str o ( cert_claim_sentence T 0 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_safe :\n    ` )
     ( string_push_str o rs )
     ( string_push_str o ` ∀ (i : Nat) (t : A3.Thread), C.ths[i]? = some t → ¬ A2.Stuck P (C.view t) t.s :=\n  C.cert3_safe verdict\n\n` )
     ( string_push_str o `/-- M.leak: ` )
-    ( string_push_str o ( cert_claim_sentence 1 ) )
+    ( string_push_str o ( cert_claim_sentence T 1 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_leak :\n    ` )
     ( string_push_str o rs )
     ( string_push_str o ` (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false :=\n  C.cert3_leak verdict\n\n` )
     ( string_push_str o `/-- M.race: ` )
-    ( string_push_str o ( cert_claim_sentence 2 ) )
+    ( string_push_str o ( cert_claim_sentence T 2 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_race :\n    ` )
     ( string_push_str o rs )

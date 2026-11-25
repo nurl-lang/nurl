@@ -455,8 +455,8 @@ $ `certify.nu`
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.id` ) ) ) id ) { = claims_ok F } {}
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.lean` ) ) ) lean ) { = claims_ok F } {}
         ? == c nc {} {
-            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.en` ) ) ) ( cert_claim_sentence c ) ) { = claims_ok F } {}
-            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.fi` ) ) ) ( cert_claim_sentence_fi c ) ) { = claims_ok F } {}
+            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.en` ) ) ) ( cert_claim_sentence threads c ) ) { = claims_ok F } {}
+            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.fi` ) ) ) ( cert_claim_sentence_fi threads c ) ) { = claims_ok F } {}
         }
         : String pk ( __vf_path `claims.` c `.premises` )
         // element by element: one string that reads like the four

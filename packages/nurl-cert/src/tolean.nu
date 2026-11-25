@@ -46,7 +46,7 @@
 // formed, this translator refuses it (`internal: malformed …`, exit 1 of
 // `nurl-cert translate`), before translating the function:
 // - a statement whose operand count is below 0 or exceeds the operand
-//   words it has
+//   words it has, or is short of them (all but `agg`, whose type follows)
 //   (`call`, `closure`, `callind`, `scalar`, `agg`), or whose count is not
 //   a number: tolean.py takes the words there are (`eval call f 1` became
 //   a call of no argument), or stops where it first reads the count;
@@ -334,6 +334,8 @@ $ `coreir.nu`
     // the closure codes spawned (program indices), in the order first seen:
     // spawn wrapper j is the one of spawned[j]
     ( Vec i ) spawned
+    // per program function: why its spawns are not translated ("" none)
+    ( Vec String ) serr
 }
 
 // What the translation changes as it goes: the closure interfaces and the
@@ -2482,6 +2484,11 @@ $ `coreir.nu`
                 ? > n - nw + cp 1 {
                     ^ ( __wf_bad m p `operands` l ( string_data ( __f3 `a % that counts % operands and has %` h ( __wd m p l cp ) ( string_data ( __ns - nw + cp 1 ) ) ) ) )
                 } {}
+                // (exactly: only a literal, `agg`, has words after its
+                // operands, its type)
+                ? & ! ( __eq h `agg` ) < n - nw + cp 1 {
+                    ^ ( __wf_bad m p `operands` l ( string_data ( __f3 `a % that counts % operands and has %` h ( __wd m p l cp ) ( string_data ( __ns - nw + cp 1 ) ) ) ) )
+                } {}
             } {}
         } {}
         = l + l 1
@@ -2500,6 +2507,7 @@ $ `coreir.nu`
 // result and what it lends.
 @ __fn_init TlMod m inout TlSt t i p → !v String {
     \ ( __wellformed m p )
+    ? & . m threaded > ( string_len ( vec_at [String] . m serr p ) ) 0 { ^ @ !v String { F ( string_clone ( vec_at [String] . m serr p ) ) } } {}
     : s name ( __name m p )
     : i np ( __np m p )
     = . t p p
@@ -2913,13 +2921,89 @@ $ `coreir.nu`
 // the function (`let v closure code …`), no binding of the chain assigned.
 // Every value of the chain goes to sendv (its code to sendc), each code to
 // spawned (once). T when the program spawns at all.
-@ __spawn_scan TlMod m ( Vec ( Vec i ) ) sendv ( Vec ( Vec i ) ) sendc ( Vec i ) spawned → b {
+// Does line l name one of `chain`'s variables (a token `v<id>`, the
+// line split at whitespace and `/`) other than where it may: the spawn
+// line `sl` its argument chain[0], the copy line dl[i] of chain[i] its
+// source chain[i + 1]?
+@ __names_chain TlMod m i p i l ( Vec i ) chain ( Vec i ) dl i sl → b {
+    : i nw ( __nw m p l )
+    : i nc ( vec_len [i] chain )
+    : ~ i q 0
+    ~ < q nw {
+        : String wq ( string_from ( __wd m p l q ) )
+        : ( Slice u ) tq ( slice_of_str ( string_data wq ) )
+        : i nq ( slice_len [u] tq )
+        : ~ i x 0
+        ~ < x nq {
+            : ~ i z x
+            ~ & < z nq != ( slice_byte tq z ) 47 { = z + z 1 }
+            ? < x z {
+                : String tok ( string_new )
+                ( string_push_window tok tq x - z x )
+                : ~ i c 0
+                ~ < c nc {
+                    ? ( __is_v ( string_data tok ) ( vec_at [i] chain c ) ) {
+                        : b at_spawn & == l sl == c 0
+                        : b at_copy & > c 0 == l ( vec_at [i] dl - c 1 )
+                        ? ! | at_spawn at_copy { ^ T } {}
+                    } {}
+                    = c + c 1
+                }
+            } {}
+            = x + z 1
+        }
+        = q + q 1
+    }
+    ^ F
+}
+
+// A3: is the spawn of `chain` (its literal bound at line dl[last], the
+// spawn at line sl) the closure's only use? thread_spawn_owned copies the
+// environment, and the translation moves the closure into the wrapper:
+// one used again (after the spawn, or a spawn repeated by a loop around
+// it), passed on, or read in any other way is not translated (""
+// when it is the only use, else why).
+@ __spawn_uses TlMod m i p ( Vec i ) chain ( Vec i ) dl i sl → String {
+    : i nl ( __nl m p )
+    : i lit ( vec_at [i] dl - ( vec_len [i] dl ) 1 )
+    // (a loop opened between the literal and the spawn, still open there)
+    : ( Vec String ) open ( vec_new [String] )
+    : ~ i l + lit 1
+    ~ < l sl {
+        : s w ( __wd m p l 0 )
+        ? ( __opener w ) { ( vec_push [String] open ( string_from w ) ) } {
+            ? & ( __eq w `end` ) > ( vec_len [String] open ) 0 { : ?String _o ( vec_pop [String] open ) } {}
+        }
+        = l + l 1
+    }
+    ? | ( __sin open `loop` ) ( __sin open `foreach` ) {
+        ^ ( string_from `a spawned closure used again after its spawn (thread_spawn_owned copies the environment; the copy is not translated yet)` )
+    } {}
+    = l 0
+    ~ < l nl {
+        ? ( __names_chain m p l chain dl sl ) {
+            ? > l sl {
+                ^ ( string_from `a spawned closure used again after its spawn (thread_spawn_owned copies the environment; the copy is not translated yet)` )
+            } {}
+            : i off ( __wf_rv m p l )
+            ? & >= off 0 ( __eq ( __wd m p l off ) `call` ) {
+                ^ ( string_from `a spawned closure passed to a function that takes the ordinary closure type` )
+            } {}
+            ^ ( string_from `a spawned closure used other than by its spawn` )
+        } {}
+        = l + l 1
+    }
+    ^ ( string_new )
+}
+
+@ __spawn_scan TlMod m ( Vec ( Vec i ) ) sendv ( Vec ( Vec i ) ) sendc ( Vec i ) spawned ( Vec String ) serr → b {
     : ~ b threaded F
     : i nf ( vec_len [i] . m prog )
     : ~ i p 0
     ~ < p nf {
         : ( Vec i ) sv ( vec_new [i] )
         : ( Vec i ) sc ( vec_new [i] )
+        : ~ String err ( string_new )
         : i nl ( __nl m p )
         : ~ i l 0
         ~ < l nl {
@@ -2932,6 +3016,7 @@ $ `coreir.nu`
                 : s op ( __wd m p l ap )
                 ? ( __vref op ) {
                     : ( Vec i ) chain ( vec_new [i] )
+                    : ( Vec i ) dl ( vec_new [i] )
                     : ~ i id ( __pidx ( string_data ( __from op 1 ) ) )
                     : ~ i code -1
                     : ~ i steps 0
@@ -2944,6 +3029,7 @@ $ `coreir.nu`
                         ~ & < d nl ! & & >= ( __nw m p d ) 3 ( __eq ( __wd m p d 0 ) `let` ) ( __eq ( __wd m p d 1 ) ( string_data vs ) ) { = d + d 1 }
                         ? >= d nl { = go F } {
                             ( vec_push [i] chain id )
+                            ( vec_push [i] dl d )
                             : s h ( __wd m p d 2 )
                             ? & & ( __eq h `use` ) == ( __nw m p d ) 4 ( __vref ( __wd m p d 3 ) ) {
                                 = id ( __pidx ( string_data ( __from ( __wd m p d 3 ) 1 ) ) )
@@ -2967,6 +3053,10 @@ $ `coreir.nu`
                         } {}
                         = d2 + d2 1
                     }
+                    ? & & >= code 0 ! assigned == 0 ( string_len err ) {
+                        : String why ( __spawn_uses m p chain dl l )
+                        ? > ( string_len why ) 0 { = err ( __u m p ( string_data why ) ) } {}
+                    } {}
                     ? & >= code 0 ! assigned {
                         : ~ i q 0
                         ~ < q ( vec_len [i] chain ) {
@@ -2982,6 +3072,7 @@ $ `coreir.nu`
         }
         ( vec_push [( Vec i )] sendv sv )
         ( vec_push [( Vec i )] sendc sc )
+        ( vec_push [String] serr err )
         = p + p 1
     }
     ^ threaded
@@ -3052,14 +3143,15 @@ $ `coreir.nu`
     : i nfn ( vec_len [i] prog )
     : i main_ix ( __mget names `main` )
     ? < main_ix 0 { ^ @ !String String { F ( string_from `no main` ) } } {}
-    : TlMod m @ TlMod { ir prog names dtor flg sinkp ( vec_new [( Vec i )] ) F ( vec_new [( Vec i )] ) ( vec_new [( Vec i )] ) ( vec_new [i] ) }
+    : TlMod m @ TlMod { ir prog names dtor flg sinkp ( vec_new [( Vec i )] ) F ( vec_new [( Vec i )] ) ( vec_new [( Vec i )] ) ( vec_new [i] ) ( vec_new [String] ) }
     : ( Vec ( Vec i ) ) moved ( __moved_caps m )
-    : TlMod m1 @ TlMod { . m ir . m prog . m names . m dtor . m flg . m sinkp moved F ( vec_new [( Vec i )] ) ( vec_new [( Vec i )] ) ( vec_new [i] ) }
+    : TlMod m1 @ TlMod { . m ir . m prog . m names . m dtor . m flg . m sinkp moved F ( vec_new [( Vec i )] ) ( vec_new [( Vec i )] ) ( vec_new [i] ) ( vec_new [String] ) }
     : ( Vec ( Vec i ) ) sendv ( vec_new [( Vec i )] )
     : ( Vec ( Vec i ) ) sendc ( vec_new [( Vec i )] )
     : ( Vec i ) spawned ( vec_new [i] )
-    : b threaded ( __spawn_scan m1 sendv sendc spawned )
-    : TlMod mm @ TlMod { . m1 ir . m1 prog . m1 names . m1 dtor . m1 flg . m1 sinkp . m1 moved threaded sendv sendc spawned }
+    : ( Vec String ) serr ( vec_new [String] )
+    : b threaded ( __spawn_scan m1 sendv sendc spawned serr )
+    : TlMod mm @ TlMod { . m1 ir . m1 prog . m1 names . m1 dtor . m1 flg . m1 sinkp . m1 moved threaded sendv sendc spawned serr }
     : ( Vec i ) wsig ( vec_new [i] )
     : ~ i k1 0
     ~ < k1 ( vec_len [i] . mm spawned ) { ( vec_push [i] wsig -1 ) = k1 + k1 1 }
