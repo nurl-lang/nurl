@@ -90,12 +90,17 @@ while read -r k; do
     cp_=$(class "$W/py" "$k"); cn=$(class "$W/nu" "$k")
     why=""
     if [ "$cp_" != "$cn" ]; then why="class: python $cp_, nurl $cn"
-    elif ! cmp -s "$W/py/$k.out" <(python3 "$ROOT/tools/ncore/norm_any.py" "$W/nu/$k.out"); then
+    elif ! python3 "$ROOT/tools/ncore/norm_any.py" "$W/nu/$k.out" > "$W/nu/$k.norm"; then
+        why="tools/ncore/norm_any.py failed"
+    elif ! cmp -s "$W/py/$k.out" "$W/nu/$k.norm"; then
         # (AGORA-1030: a literal temporary is bound at its statement, where
         # tolean.py binds it at the top: compared with those bindings
-        # dropped on both sides, the same temporaries required per function)
-        if cmp -s <(python3 "$ROOT/tools/ncore/norm_any.py" --drop-temps "$W/py/$k.out") \
-                  <(python3 "$ROOT/tools/ncore/norm_any.py" --drop-temps "$W/nu/$k.out"); then
+        # dropped on both sides, the same temporaries required per function;
+        # a normalizer that fails is a difference, never two empty files equal)
+        if ! python3 "$ROOT/tools/ncore/norm_any.py" --drop-temps "$W/py/$k.out" > "$W/py/$k.dt" \
+            || ! python3 "$ROOT/tools/ncore/norm_any.py" --drop-temps "$W/nu/$k.out" > "$W/nu/$k.dt"; then
+            why="tools/ncore/norm_any.py --drop-temps failed"
+        elif cmp -s "$W/py/$k.dt" "$W/nu/$k.dt"; then
             n_temps=$((n_temps + 1))
         else why="stdout differs (modulo .any and literal-temp placement, AGORA-1030)"; fi
     elif [ "$cp_" = unsupported ] && ! cmp -s "$W/py/$k.err" "$W/nu/$k.err"; then why="unsupported message differs"

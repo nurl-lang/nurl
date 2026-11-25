@@ -358,8 +358,12 @@ if command -v python3 > /dev/null; then
         # AGORA-1030: `.any` where tolean.py writes `(.lit 0)`; compared modulo that
         # (and where a literal temporary is bound: at its statement, not at
         # the top of the function, compared with those bindings dropped)
-        python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.nu.raw" > "$TMP/$k.nu.out"
-        python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.py.out" > "$TMP/$k.py.n"; mv "$TMP/$k.py.n" "$TMP/$k.py.out"
+        # (a normalizer that fails is a failure, never two empty files equal)
+        if ! python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.nu.raw" > "$TMP/$k.nu.out" \
+            || ! python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.py.out" > "$TMP/$k.py.n"; then
+            bad "$k: tools/ncore/norm_any.py failed"; continue
+        fi
+        mv "$TMP/$k.py.n" "$TMP/$k.py.out"
         if [ "$prc" = "$nrc" ] && cmp -s "$TMP/$k.py.out" "$TMP/$k.nu.out" && cmp -s "$TMP/$k.py.err" "$TMP/$k.nu.err"; then
             same=$((same + 1))
         else bad "$k: the translator differs from tolean.py (exit $nrc, tolean.py $prc)"; fi
