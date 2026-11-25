@@ -1,6 +1,7 @@
 # The certificate bundle
 
-Status: **S1 of the certified-programs work** (AGORA-1019, part of
+Status: **S1 and M4 of the certified-programs work** (AGORA-1019; M4,
+the translator in NURL and threaded programs, AGORA-1020; part of
 AGORA-1010; spec in the agora notes `spec.program-cert`, `.2`, `.3`).
 Schema **`nurl-cert/1`**, described here and in
 [`certificate.schema.json`](certificate.schema.json).

@@ -730,7 +730,9 @@ the initialiser `0`. It starts as that type's zero value (which drops as
 nothing) and owns what it holds: an assignment to it or to one of its
 fields drops what it replaces, and a read borrows (docs/MEMORY.md §1,
 Module globals). Every thread can reach it, so only an `unsafe` function
-(§3.3d) reads or writes it.
+(§3.3d) reads or writes it. An immutable global (no `~`) never changes,
+so it may not start as `0` where zero bytes are not a value of its type
+(a `Vec`, a `String`, a closure, a library handle, a struct holding one).
 
 <!-- doctest-prelude
 : Model { ( Vec f ) weights }
@@ -2878,7 +2880,8 @@ A closure capturing a binding by pointer (a `: ~` multi-field struct, or
 a `: ~` binding it assigns or hands to an `inout` parameter — see §8.4) is a *stack reference*. Returning it, pushing it
 into a longer-lived container, spawning a thread or a fiber (or
 installing a signal handler) that holds it, or
-assigning it into a longer-lived binding is rejected. The escape rule
+assigning it into a longer-lived binding — an `inout` parameter or a
+field of one included, which the caller holds — is rejected. The escape rule
 also covers an aggregate (struct) literal that holds such a closure,
 a `= . obj field` store into one (the struct inherits the reference),
 and the phi of a `?` / `??` — a join carries the deepest referent depth

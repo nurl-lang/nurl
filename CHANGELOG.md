@@ -10,6 +10,822 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.95.0] — 2026-11-25
+
+### Added
+
+- **New package `glb`: triangle meshes as binary glTF 2.0** (glb 0.1.0). A mesh is built vertex by vertex (position, optional normal and RGBA colour) and triangle by triangle, and written as one `.glb` that Blender, three.js and phone AR viewers open; dangling indices and partial attributes are refused. Its test checks the bytes without dependencies and, when available, with Khronos's validator (no errors, no warnings).
+
+- **recon-kit: the reconstruction service as a package** (recon-kit 0.1.0, map-anything 0.11.0). map-anything's web service, 3-D objects, voxel fusion and frame choice, generalised over an `RkApp` a model package supplies.
+- **Shared links for map-anything and lingbot-map** (recon-kit 0.1.0): a finished job's read-only link that opens without the sign-in — view and download the cloud and the 3-D object; nothing under it changes anything. The confidence and pixel-stride options get limits that still leave a cloud.
+- **lingbot-map serve and mesh** (lingbot-map 0.13.0): the same upload page, job queue, viewer and 3-D objects as map-anything, plus `--max-views`, `--scene`, `--voxel` and `--image-size auto` in the CLI.
+
+- **map-anything: 3-D objects from a reconstruction, or a region cut from it** (map-anything 0.10.0, ply 0.4.0, glb 0.1.0). `--scene` keeps each view's camera, depths, mask and colours; `map-anything mesh` fuses them in a box (TSDF), extracts the surface (marching tetrahedra), drops the loose pieces and writes a binary glTF. In `serve`, the cloud viewer gets a region box and a "make 3-D object" button, objects are queued like reconstructions, and the job list links the object and its download; the viewer also shows `.glb` meshes.
+
+- **`map-anything serve`: photos or a video in the browser, a metric 3-D point cloud back** (map-anything 0.8.0, ply 0.3.7). A self-contained upload page queues jobs on disk under `~/.map-anything/jobs/`, runs them one at a time on the GPU as children of the same executable, follows their progress, and opens the result in the ply viewer or downloads it as a PLY; HTTP Basic sign-in with `--password`. Three quality steps beyond the reference, on by default in the service: `--align N` fits a correcting Sim(3) per view against the other views of its window (the parallel copies of a wall merge: 43 → 27 mm thick on the lego clip), `--mv-check N` drops pixels no other view agrees with, and `--voxel auto` fuses the cloud on a metric grid (a 4.1 M-point scene becomes 0.8 M, 62 MB → 12 MB). The ply viewer takes touch: one finger orbits, a pinch zooms, two fingers pan, a double tap resets, and a phone starts a large cloud at a density it can orbit.
+
+- **The point-cloud viewer has a game mode** (ply 0.4.1). The "game mode" button, or `g`, flies through a cloud or a 3-D object like a game's spectator camera. The mouse turns the head through a captured cursor, `w a s d` or the arrows move, `e` / `q` or ctrl rise and sink, shift is faster, and the wheel sets the speed. There is no gravity. `esc` returns to the orbit from the same view. map-anything and lingbot-map serve this viewer, so their result and shared-link pages get it too. It is for mouse and keyboard only; on a touch screen the button is hidden.
+
+- **A2 groundwork for typing a call that changes memory its arguments view, inside the elements** (AGORA-937 B4, AGORA-933's `( f1 vv )`).
+  - New definition `CallThruOK`, the call-site premise route U will add.
+  - `zN` leaves out the roots such a call changes inside. That set is empty for every call typed today.
+  - New lemmas: `StmtT.keepKV` (a binding none of a statement's killable names stays bound), `CallH.thruReady` (a `CallThruOK` call sets its callee's body up ready for a change through its regions) and `CallH.held_anch` (the lifted lent parameter's view of such a root is a held anchor).
+  - No typing rule changes, and nurlc is unchanged.
+
+- **The verified checker covers A2 and A3 programs end to end, and nurlc's
+  programs can be run through it** (Agora #970, #975). `formal/C` now
+  decides A2's typing for every statement form a function body holds:
+  - exits are carried as obligations (`C/A2Exit.lean`);
+  - joins of `if` arms and loop rounds that end apart are checked by
+    weakening (`C/A2Weaker.lean`);
+  - destructor glue is decided, its `sink` alternative included;
+  - whole programs are decided (`C.checked_program_safe2`), and A3's full
+    claim for a checked program (`C.checked_claim_made_full`).
+
+  `tools/ncore/tolean.py` translates nurlc's core IR (`--emit-core`) into A2,
+  and `tools/ncore/certify.sh prog.nu` runs the verified checker on the
+  result, printing `accepted`, `refused` or `unsupported: <construct>`.
+  A construct the translation cannot render faithfully is reported, never
+  guessed. Over `tools/fuzz/holes`, the checker accepts no probe that
+  nurlc's map marks as rejected. The programs in `tools/ncore/certify/`
+  each get nurlc's verdict.
+
+- **Formal A2: a string literal handed back as a view is typed**
+  (AGORA-980). The memory model gains a static literal's text block,
+  `BKind.static`, which `Rhs.slit n` makes at fresh addresses before handing
+  back a view of it. The view needs no dependency (`ValOK.sview`,
+  `SViewAt`), and `RhsT.slit` types it. Preservation (`rhs_slit`) and
+  progress cover the new step. The no-leak invariant covers the block's
+  text, and the sweep frees the block once no view refers to it. Static
+  text is no memory that a dependency tracks: `RootNode`'s view case now
+  asks for a node of memory (`DataAtM`). A3's race-freedom proof allows a
+  fresh address in a payload: `Step.payAt` gains the case of a new block
+  that the step's own slots reach. No theorem statement is weakened and no
+  axiom is added. The verified checker infers the rule (C `inferRhs2`).
+  `tools/ncore/tolean.py` translates a literal handed back as a view, and a
+  borrowed-result function that hands back only literals, which it used to
+  report as unsupported: seven more hole probes now translate, and the six
+  that must be rejected are.
+- **The verified checker accepts a return from inside a loop beside a
+  fall-off result.** Its block rule asked every exit of a block to leave
+  from exactly the block's end. It now joins the end with the exits'
+  contexts when they differ, as it already joins an `if`'s arms, which A2's
+  `Exits.blk` and `sub` allow. `bare_view_of_a_loop_element_over_a_param_handed_back_runs_clean`
+  is accepted. Over the 154 translated sweep programs no other verdict
+  changes, and all 99 that must be rejected still are.
+
+- **A first translation validator for the drops nurlc's code generation
+  inserts** (formal phase D0, Agora #981). `tools/ncore/tv.sh prog.nu`
+  checks the LLVM nurlc emits for `prog.nu`, one function at a time. On every
+  path, each value a slot of the function's own frame comes to own is
+  released or moved exactly once, through its drop flag: never overwritten
+  or left at a return while owned, never released twice. A drop decided at
+  run time (a per-call ownership answer) is reported unsupported rather than
+  guessed. `tools/ncore/tv/selftest.sh` shows that it catches a missing
+  release, a double release, an overwrite of an owned value and a move that
+  leaves its flag set. Over `tools/ncore/certify` and the runs-clean hole
+  probes it finds no mismatch.
+
+- **What the drop validator's verdict means, proven** (formal phase D2).
+  `formal/D/Drops.lean` models one path through a function the way codegen
+  writes it: owned and unowned stores, moves out, `= d s`, flag clears and
+  `__dropif`. It proves that a path the validator's check accepts runs on a
+  concrete heap of live blocks with no double free, no use after free and
+  nothing left live at the return (`D.validated_safe`), on Lean's standard
+  axioms only. The theorem is about the model checker `D.checkA` over the
+  modeled operations; `tools/ncore/tvdrops.py` follows `checkA`'s rules, and
+  that it decides as `checkA` does is tested (its self-test and corpus), not
+  proved.
+
+- **Translation validation of the panic journal** (formal phase D1, Agora
+  #984). `tools/ncore/tv.sh prog.nu --journal` also checks, in each function
+  that may run under a `recover` frame, that at every call that may panic
+  the values the frame owns are registered with the journal, so a caught
+  panic releases them, each once, and that no registration outlives its
+  frame. What may panic is nurlc's own answer: the core IR's inline panic
+  points and call graph, and `--may-panic=` for runtime entries.
+  `tools/ncore/tv/selftest.sh` shows that it catches a missing
+  registration, a missing forget and a double registration.
+
+- **The drop validation also checks the LLVM against the core IR** (formal
+  phase D0b, Agora #985). `tools/ncore/tv.sh prog.nu --ir` asks that a named
+  binding the core IR never moves keeps its value to its scope end in the
+  emitted LLVM: its flag is never cleared while it owns a value. Bindings are
+  matched to slots by name through the `--g` build's debug declarations.
+  `tools/ncore/tv/selftest.sh` shows that it catches a binding the LLVM hands
+  on although the IR keeps it, which the conservation check alone accepts.
+  It found that the core IR leaves out the operand `mem_forget` consumes.
+
+- **The drop validator checks what conservation alone cannot see**
+  (formal phase D0c, Agora #990). `tools/ncore/tv.sh` now hands
+  `tvdrops.py` the core IR's per-function summaries. On every path it
+  reports these:
+  - a value a callee's `sink` parameter took that the frame releases too;
+  - a parameter the function only borrows that it releases;
+  - a slot read after its value was released, which is what an early
+    release looks like.
+
+  `tools/ncore/tv/selftest.sh` catches each of these, and plain
+  conservation accepts two of them.
+
+- **The drop validation checks temporaries and one-arm moves against the core IR** (formal phase D0d, AGORA-992). `tools/ncore/tv.sh prog.nu --ir` now also asks two things:
+  - **a temporary the core IR never moves**, one bound straight from a call, is not handed on by the LLVM: not to a `sink` or `keeps` argument, not by `ret`, not into an aggregate, not into memory outside the frame. It is matched to the LLVM by its call, the k-th of the function's calls to that callee, where both have as many;
+  - **a binding the core IR moves on one arm of an `if` only** is handed on in that arm's LLVM blocks only.
+
+  Over the corpus this checks 2818 temporaries and 294 one-arm bindings, with no mismatch. `tools/ncore/tv/selftest.sh` gains a case for each. Its edits now read the registers they change from the emitted LLVM, so a change of nurlc's register numbering no longer turns them into no-ops: 15 of its checks had stopped applying, and all 60 pass now.
+
+- **Memory-safety certificates of programs: `nurl --certify` and `nurl verify`** (AGORA-1019). `nurl --certify prog.nu prog` builds `prog` as before, then writes `prog.cert/`.
+  - The bundle's `Claims.lean` holds two theorems about the program's own term in `formal/A2`, each checked by the Lean kernel with only the three standard axioms (`propext`, `Classical.choice`, `Quot.sound`):
+    - `M.safe`: no run ever gets stuck;
+    - `M.leak`: every allocation is freed, also when a panic ends the run.
+  - The verified checker's verdict is decided by `decide +kernel`. The claims follow from it by the new `formal/C/Cert.lean` (C13: `C.certOK2B`, `cert_safe`, `cert_leak_end`, `cert_leak_panic`).
+  - `manifest.json` carries:
+    - each claim's status (`proved`, `validated`, `assumed`, `open`), read off `#print axioms` and never written down;
+    - the program's functions;
+    - sha256 of every source file read, of the core IR, the LLVM IR and the binary;
+    - the nurlc version, the `formal/` tree hash and the Lean toolchain;
+    - a trust ledger: the kernel, the translation, the library, LLVM, the runtime, and each line of `--unsafe-report`.
+  - `nurl verify prog.cert --binary prog` checks a bundle again without the compiler: every hash, the claims' template byte for byte, `Program.lean` held to the program grammar, the proofs and their axioms, and each status. It fails, naming the check, when a source byte, a claim's status, a theorem's statement, a `sorry`, an added axiom or the binary was tampered with.
+  - `verify --rebuild` also runs nurlc and the translator again, and compares Program.core and Program.lean byte for byte. That catches the one swap a plain verify cannot see: another program's term with every hash updated.
+  - A program the checker refuses, or the translation does not cover yet, gets no proved claim.
+  - All 36 accepted programs of `tools/ncore/certify/` are certified, and all 26 refused ones yield no proved claim (the threaded programs below included).
+  - The tool is the new package **`nurl-cert` 0.1.0**, written in NURL. The format is in `docs/dev/CERTIFICATE.md`, with `docs/dev/certificate.schema.json`. CI's `certify` workflow runs it end to end.
+  - The flag and subcommand names are working names until 1.0.
+- **`nurlc --list-sources=TAG`** prints each source file a compile reads, once, on stderr: a line `source:TAG <length> <real path>`, then the snapshot's bytes, then a newline. A certificate hashes exactly the bytes nurlc compiled. TAG is chosen fresh per run, so a diagnostic quoting a source line cannot pass for a record. A path holding a newline stops the listing. Without the flag, nurlc's output and cost are unchanged: 2120 programs compile byte-identical, and the self-compile is neutral within codegen noise (+0.056 % instructions at -O2, −0.07 % at -O0) with the same peak RSS.
+
+- **`nurl-cert translate` translates a program that spawns threads for A3** (AGORA-1020). A program with `thread_spawn_owned` becomes a term for A3's checker (`C.certOK3B P spawns entry 1`, `formal/C/Cert3.lean`): the spawned closure at class `send`, its captures by value (numbers, Vecs of numbers, channel shares), one spawn wrapper per closure code (`def spawns`), `!Thread ThreadErr` as a sum, `thread_join` as a read of the handle. A spawned closure that captures a binding by name is unsupported. A program that spawns nothing is translated as before, byte for byte.
+
+
+- **Certificates of threaded programs: `M.race`** (AGORA-1020). A program that spawns with `thread_spawn_owned` is translated for A3: the spawn becomes A3's spawn-only call of a wrapper that takes the closure over (class `send`), the join a read, a thread handle an integer, and `!Thread ThreadErr` a sum. Its Claims.lean then proves `M.safe`, `M.leak` and `M.race` over every interleaving of its threads, from `C.certOK3B` (`formal/C/Cert3.lean`, C14). `M.race` rests on the new `drf-sc` ledger row.
+  - The verified checker's closure literal takes the class its interface declares where it fits (`C.packClass`, `C.fitsB`); every other closure keeps `any`. All 4505 hole and certify probes keep their verdicts.
+  - New certify programs: two threaded programs certified and two refused. One of the refused pair is a channel alias moved and then read, which guards the encoding.
+  - What the threaded claims cover: the translation takes every `thread_spawn_owned` to succeed, so a run in which `pthread_create` fails is outside the claims. The threaded `M.leak` covers runs in which every thread finishes. The sentences say both.
+  - A spawned closure gets the `send` class only when the spawn is its single use. One reused after the spawn, or passed to a function that takes the ordinary closure type, is `unsupported`, not refused: `thread_spawn_owned` copies the environment, and the copy is not translated yet.
+  - The translator also refuses surplus type-argument columns and operand words past a statement's count (`internal: … malformed`).
+
+- **New package `tiles3d`: OGC 3D Tiles 1.1 tilesets** (tiles3d 0.1.0). It builds a tileset tile by tile (bounding box, geometric error, ADD/REPLACE refinement, content URI, transform) and writes `tileset.json`. That is the format CesiumJS, Cesium for Unreal and Cesium for Unity stream large 3-D data in. A tileset that breaks the specification is refused with the tile and the reason. Its test writes a 21-tile point terrain, which CesiumGS's `3d-tiles-validator` and Khronos's glTF validator pass with no errors and no warnings.
+- **glb writes point clouds** (glb 0.2.0). `glb_points_write` gives a POINTS primitive under an unlit material, which is the content of a 3D Tiles point tile.
+- **New package `octree`: level-of-detail octrees over points** (octree 0.1.0). Each node keeps one point per cell of its sampling grid, chosen from a seeded shuffle, so the sample is even. The rest go down to the node's octants, and every point is in exactly one node (3D Tiles' ADD refinement). Nodes come parents first, each with its cube, spacing and tight subtree bounds. Non-finite points are dropped and counted, and the smallest cube scales with the coordinates' magnitude, so georeferenced data and repeated points end in sensible leaves.
+- **New package `pctiles`: point clouds as streamed 3D Tiles** (pctiles 0.1.0). `pctiles build cloud.ply -o dir` puts a cloud in a level-of-detail octree and writes one POINTS glb per node plus `tileset.json`, refining by ADD. The 8.6 M-point courthouse reconstruction becomes 568 tiles in 5.8 s, with a 10,000-point root tile, and both validators report no errors or warnings.
+- **ply reads PLY files** (`ply_read`, ply 0.4.1): ascii and binary little-endian, any scalar types, optional colours. Faces after the vertices are ignored, and big-endian files, list properties in the vertex element and short bodies are refused.
+- **The ply viewer streams 3D Tiles** (`?tiles=URL`, ply 0.4.1). It draws the tiles in view, fetches finer ones while their error would show, and lets the least-used go past a GPU point budget. The courthouse tileset shows its first tiles in under a second, where the whole cloud is 8.6 M points; CesiumJS opens the same tileset at its defaults (111 tiles, 2.2 M points, none failed). Game mode flies through it, loading detail ahead.
+
+### Changed
+
+- **map-anything: a long video gives views from its whole length, the sharp frames** (map-anything 0.9.0, video 0.3.0). `--max-views N` used to keep the first N frames; it now spreads N views over the whole capture and takes the sharpest frame of each run (variance of the Laplacian), and a video is sampled across its whole length with three candidates per view (`vid_extract_count`, the rate count/duration from ffprobe). The `serve` page's views control is a slider that says how densely it samples the video.
+
+- **The borrow checker's sweep of a row is linear in the bindings.** For each
+  row, the sweep for bindings a call consumed visited every binding of the
+  function's state, and measured the state up to each one: quadratic in the
+  bindings. It now steps from one borrowed binding to the next
+  (`bck_st_next_borrow`). Hoisted-body emission copies a marker's span
+  without measuring the whole function each time. A self-compile runs 2.2 %
+  fewer instructions (25.93G to 25.35G), with byte-identical output.
+- `__vis_check_template` (Agora #861) is an ordinary function, not
+  `unsafe`. Three helpers that only set a scalar global (`__rpg_tmp_next`,
+  `amv_close`, `__rp_rhs_set`) are no longer `unsafe` either, so nurlc has two
+  fewer `unsafe` functions than before #861.
+
+- **`^ ( same a )`, handing back a local raw string through a function, is accepted whatever order the two functions are written in** (AGORA-867, AGORA-946 D4b). With `a` an `s` the function owns and `same` handing its argument back:
+  - **`same` defined above:** the return copied the text for the caller, so the program compiled and ran clean.
+  - **`same` defined below:** the same program was refused with "this returns a view of 'a' … released when the function returns".
+
+  Now both compile. When the callee may lend back such an argument, the caller gets the result as its own: the string the callee handed over when it did, a copy of what it lent otherwise. That copy is decided at module end from the callee's summary, as it already is for a `String` or a `Vec`. A callee that lends only a parameter keeps its result a lend of that parameter. A callee that hands back a fresh string hands it over without a second copy. Every program accepted before compiles to the same code.
+
+- **The compiler's core IR builder keeps its tables in Vecs, and 88 of its 93 `unsafe` functions are safe code now** (AGORA-905). The ownership engine reads the core IR the walk builds under `--emit-core` / `--engine`. The builder's ten word tables were raw arrays, allocated, grown and freed by hand and reached by pointer, so every builder function had to be `unsafe`:
+  - per function: statements, variables, places, the operand stack, temporaries;
+  - per module: virtual callees, callees, pending arguments, types, functions.
+
+  Each table is now a `( Vec i )` global. Only a handful of small inline accessors reach them: the tables, the stack of enclosing builders, and the strings behind interned ids. Each accessor says in a comment why it is sound: the walk's single-threaded state, never handed to another thread, every index bounds-checked, and interned strings that live for the whole compile. Two scratch buffers became local Vecs, and type-string bytes are read with the checked reader. Nothing in the builder is freed by hand any more. `compiler/nurlc.nu` now includes `stdlib/core/vec.nu`.
+  - **Unsafe functions in the compiler:** 840 → 765.
+  - **Output:** the printed core IR and the engine's verdicts are byte-identical on all 6,299 probes and tests. Ordinary compiles do not run this code.
+  - **Cost:** `--engine` runs in the same wall time (the bounds checks cost 0.7 % more instructions on `gpu.nu`). Building the compiler itself also parses `vec.nu`.
+
+- **The formal proof lets a borrowed parameter's lent `Vec` hold a view anchored by a root that stays unfrozen** (AGORA-937, route U, with AGORA-963). Before, every anchor of a borrowed parameter had to be lent out (`F`). Now a held view may be anchored by a root outside `F` that holds no views and that the running statement cannot kill. A call names it as no argument, and its closures' by-name changes spare it. The store holds no package that captures such a root other than read-only, in a slot or in a block. The invariant carries this, every step keeps it (`Step.slotsCaps`, `EvalR.capsInp`), and source typing and the call frames are proved on it. It is the next step to typing a call that changes memory its argument's views reach (`formal/A2/THRU_STAGE3_DESIGN.md`). Nothing changes in nurlc: today every held anchor is still in `F`, so the new premises hold wherever a program types.
+
+- **The formal proof covers a call that changes a `Vec` only inside its elements while the caller keeps a view of it** (AGORA-937 B4, route U). Such a call passes a view of real memory, not of a region. Its callee's frame now meets a closure-capture clause relative to the frame: every binding outside what the call froze holds no package that may change a frozen binding by name. This replaces a store-wide clause that a callee's frame could break. The A2 example `( f1 vv )` now types once the view of `w`'s element has ended. Nothing changes in nurlc.
+
+- **The formal proof keeps a view of a `Vec`'s buffer across a change inside one of its elements** (AGORA-937). An example: `vv` is a `Vec ( Vec i )`, `sw` is a slice of `vv`'s own buffer, and `( vec_set ( vec_at vv 0 ) 0 f )` changes the inside of `vv[0]`. That change moves no element of `vv`, so `sw` stays valid. MEMORY.md §2.10 already says so ("its handles of the elements stay"), and nurlc accepts it. A2 used to end `sw` there, because it gave every change through an element the effect `.drop` on `vv`. It now has an effect for a change strictly inside the elements, `.dropIn`. It keeps the root's views when the elements hold no views. When they do hold views, it ends what `.drop` ends, because a view read out of the root may then point inside an element. Its soundness is proved (`MInv.edit_dropE`, `vkeep_view_below`), and the order on effects is now inclusion of what they end. A root that is not a `Vec` keeps `.drop`, since a struct's field lies at the struct's top. This is the first step of typing a call that changes memory its argument's views reach (`formal/A2/THRU_STAGE3_DESIGN.md`). Nothing changes in nurlc.
+
+- **Formal proof: a frozen owner may be changed strictly inside its elements, as far as memory is concerned** (AGORA-937). The memory invariant is now proved to survive such a change when two things hold:
+  - no lent parameter reaches that owner through its path, and none but a `Vec` through what it holds. So every lent parameter's node lies in another frozen owner's tree or in a live block's payload;
+  - the change ends no loan.
+
+  The typing rule that would allow such a change is still to come. It waits on how the proof treats frozen bindings across a step, which the design notes record. Nothing changes in nurlc.
+
+- **When the formal proof models a call inside its caller, it now separates memory it freezes from memory a parameter's region tracks** (AGORA-937). Before, everything the arguments held was treated as frozen. Only what is passed to parameters that hold no views now stays frozen. What a view-holding parameter's argument holds comes back through that parameter's region. This removes the last over-approximation that would have stopped a callee from changing memory inside its argument's view. Nothing changes in nurlc, no rule changes, and the proof is complete with no theorem weakened.
+
+- **The formal proof's rule for what a call's result may hold is now more precise** (AGORA-937). The rule used to say the result may hold every root the arguments hold, in every way. It now says the result may hold each of the arguments' own dependencies, combined with each way of reaching inside them. This matches what a result built from the arguments can reach, so the rule is still sound. The proof's model of a call uses the same precise form for what a call places in the caller. Nothing changes in nurlc, and the proof is complete with no theorem weakened.
+
+- **In the formal proof, a parameter lent to a call is now modelled through the call's own view of its argument** (AGORA-937). When a call is placed in the caller, the proof models a lent parameter as the callee's own record of what it depends on, with its region standing for what the argument holds. Before, the proof copied the argument's entry. The two give the same dependencies, now proven (`canon_inp_eq`). The old way could only bound them by an over-approximation, which the next step removes. No rule changes, nothing changes in nurlc, and the proof is complete with no theorem weakened.
+
+- **The formal proof gives a lent parameter that holds views a region of its own** (AGORA-937). This is the second step of typing a call that changes memory its argument's views reach. Before, only `sink` and `inout` parameters holding views had one. A lent parameter such as `vv` in `@ f ( Vec ( Slice ( Vec i ) ) ) vv` now holds its region's view inside the callee too, and what the callee hands back of it is checked against that region. Typing anchors such a parameter through its region as well as through a frozen root. A frame binds no region, so it keeps the stricter anchoring. Every lemma that places a callee's kills where the call puts them now asks that no region be killed, and every kill site proves this from the binding it kills. Proofs complete, no warnings, no theorem weakened. Nothing changes in nurlc.
+
+- **The formal proof's memory invariant says that a binding whose type holds no by-name closure holds no package that captures by name, in a live slot or a dead one** (AGORA-937, a B4 piece). Before, only a live binding's value was known to be of its type in this respect; a dead slot's leftover value was not. `MInv.noPkg` now carries it. Every step keeps it: a right-hand side's value is of its type whether owned or lent (`ValOK.no_pkg`), and the call setup and a spawned thread's frame give it to their parameters. Nothing changes in nurlc.
+
+- **The formal proof's model of a call now tracks exactly what each argument views** (AGORA-937). The proof models a parameter's region as standing for the memory its argument holds. Before, the model took every root the argument held and assumed it was reached in every possible way. It now takes the argument's own dependencies, in the way the argument actually reaches each one. When a callee reaches through the region, the two ways now combine into one. This gives the proof the exactness the next step needs. No rule changes, nothing changes in nurlc, and the proof is complete with no theorem weakened.
+
+- **The formal proof's rule for a call through a package now tracks its result more precisely** (AGORA-937). The rule used to say that the result depends on every root the package reaches, in every way. It now says the result depends on each of the package's own dependencies, combined with each way of reaching inside them. That matches what the package's environment can reach, so the rule is still sound. It also lets the next step model a call's regions exactly. Nothing changes in nurlc, and the proof is complete with no theorem weakened.
+
+- **In the formal proof, a parameter now holds its region by its handle rather than as a view** (AGORA-937). A parameter that holds views holds a region, which stands for what the caller's argument holds. The proof now records the region by its handle (`⟨π p, .self⟩` instead of `⟨π p, .view⟩`). When a call is placed in the caller, composing kinds then gives back each of the argument's dependencies in its own way. Before, an argument's dependency on a handle came back as a view. Every kill that spares a view also spares a handle, so no rule changes and nothing changes in nurlc. The proof is complete with no theorem weakened.
+
+- **The formal proof now shows that a change inside a region's elements, placed in the caller, ends exactly what the callee's change ends** (AGORA-937). When a callee changes memory inside the elements its argument views, the caller sees that change on the argument's root. The caller then ends the same bindings the callee does. It ends no frame binding, given the conditions the coming call rule will ask for. These lemmas are the core of typing such a call. Nothing changes in nurlc, and the proof is complete with no theorem weakened.
+
+- **The formal proof can now place, inside the caller, a callee's change through a parameter whose argument views the caller's memory** (AGORA-937). This holds when all of the following are true:
+  - the argument views each root only directly;
+  - no other argument reaches that root;
+  - the root is a live `Vec` the caller owns;
+  - no other binding of the caller's frame views inside the root's elements, which the call's entry kill guarantees;
+  - the call freezes nothing else;
+  - the statement calls no through-changing function.
+
+  Under these conditions the caller ends exactly the bindings the callee's change would end. The call rule that grants these conditions is still to come. Nothing changes in nurlc, and the proof is complete with no theorem weakened.
+
+- **Formal proof: groundwork for calls that change the caller's memory inside a `Vec`'s elements** (AGORA-937). The design now takes route F: a frozen root may be changed strictly inside its elements, as long as the change ends no lent parameter.
+  - The memory invariant is proved to survive such a kill, frozen root or not.
+  - The conditions a call must meet before its callee may change through a region now speak only of live bindings. A separate condition covers destructors.
+
+  Nothing changes in nurlc.
+
+- **Formal proof design: route U's conditions become memory-invariant clauses, not new typing premises** (AGORA-937). A root that a lent parameter views without it being frozen must be named by no variable of the running statement. A `Vec` borrow among those variables may reach it only inside its elements. The call that places the callee establishes both. No typing rule gains a premise, and nothing changes in nurlc.
+
+- **Formal proof: the memory invariant now allows a lent `Vec` to hold views anchored at a root that is changed only inside its elements** (AGORA-937). Every lemma that ends bindings shows it spares those views. Where the statement runs, anchors stay frozen as before, so no typing rule changes and nothing changes in nurlc. This is route U's first step. The call that sets up such views comes next.
+
+- **Formal model: a change through a borrow must end no lent `Vec`'s view of the root it changes** (AGORA-937). The typing rule now states this outright, where before it followed from the root being frozen. Every program that typed before still types, and nurlc already refuses such a change. The rename lemma and the memory invariant carry the new condition. This is route U's second step.
+
+- **Formal proof design: calls that change the caller's memory inside a `Vec`'s elements take route U** (AGORA-937). Route F, where a frozen root may change inside, is set aside: a `recover` freezes the caller's whole frame and expects it unchanged after a panic, and the typing cannot tell which frozen roots may change. Route U leaves such a root unfrozen for the call. It relaxes the anchors of a lent `Vec`'s views, and adds premises so that every kill ends no loan. Nothing changes in nurlc.
+
+- **The formal proof shows what the kinds-composed lift of a change through a region ends** (AGORA-937). This is groundwork for typing a call of a function that changes memory its argument's views reach. When the argument views the caller's `w` directly, composing kinds makes the caller end exactly what the callee ends. Copying the argument's kinds verbatim, as the lift does today, would also end the argument's own view. When the argument views something inside `w`, even composing does not make the two match, so that call must stay refused unless the kinds gain another level. The proof records this as a theorem. Nothing changes in nurlc. The same holds root by root when the argument views several roots. When no other argument reaches a changed root, the caller's change ends nothing that rests on another parameter's region.
+
+- **The formal proof types a change made through a region** (AGORA-937). This is the third step of typing a call that changes memory its argument's views reach. AGORA-933's callee grows a `Vec` it reaches through a slice its lent parameter `vv` holds. A2 now types that change: it reaches `vv`'s region strictly inside its nodes, which ends no view of it, so `vv` stays valid. Where a call places such a change, either the region stays a region, or the region stands for nothing and the call's context simply knows more. Proofs complete, no warnings, no theorem weakened. A call of such a function with views of real memory was still refused at this step; AGORA-937 B4, above, types it (route U). Nothing changes in nurlc.
+
+- **A `:` join reading an inner struct's field can be handed to an `inout` parameter** (AGORA-959). `: y ? c . p s ( mk )` then `= t y`, with `t` an `inout` String, Vec, option or struct parameter, was refused as storing a view of `. p s` into the caller's storage. The generated code already gives the parameter a copy wherever the join lends, so the program is safe and now compiles. A value that cannot be copied (a `% Drop` struct) is still refused.
+
+  The parameter holds a copy, so a later call that may panic no longer reads it as a view of the struct. Where the join lent, the binding stays readable; where it owned, it moved. A struct of views or a `Vec` of views is still refused: the copy is shallow, so the views would still point into the local.
+
+- **Breaking: `= o ( pick o other k )` is refused however `pick` is spelled** (AGORA-966, AGORA-946 D4a). An option or result owner given back a call that may hand back either its own value or another argument's was refused only when the callee was a plain function defined above the call. A callee defined below, a generic instance and a `dyn` method were accepted on a run-time key. All four are now refused with the same message, as the formal model refuses the form. Migration: give `o` a value of its own (`= o ( mem_dup ( pick o other k ) )`), or bind the result to a new name and keep the two owners apart. No code in this repository used the accepted spellings.
+
+- **The core IR says which captures a returned closure's environment owns** (AGORA-978). A closure returned where it is made (`^ \ …`) owns its handle captures: the binding's value is moved in, or copied where the binding borrows. A closure that stays in its frame holds a copy of the handle, which depends on the binding. `nurlc --emit-core` now flags such a capture (variable flag 2048, `CORE_VF_ENVOWN`), so tools/ncore's translation to the formal model can tell the two apart. Nothing else changes: the engine does not ask the flag, and the LLVM output is byte-identical.
+
+- **The `Vec` models in `formal/B/Vec.lean` follow the runtime more closely.**
+  These are proof-only changes. The compiler, stdlib and runtime are not
+  touched.
+  - `releaseFrom` (`__vec_release_from` with elements whose drop runs code)
+    now frees its private buffer after the drop loop, as
+    `nurl_vec_move_drop_dtor` does. `releaseFrom_ok` states that the buffer
+    is no longer live afterwards.
+  - A packed `Vec` (`vec_with_cap_packed`, `vec_split_off_packed`) is now
+    modelled with its stored capacity (`PVec`, `PRep`):
+    - below that capacity, a push stores in place and allocates nothing
+      (`packedPush_room`);
+    - at it, the push detaches and grows from the stored capacity, not from
+      4 (`packedPush_ok`).
+  - When the last strong `Arc` handle drops, the value slot is now emptied
+    in the model too, as it is in the emitted code. Moving the value out
+    through the field stores `zeroinitializer` into the slot. `RcCell`
+    gains `.gone`, and `ArcInv` requires it on a block that only `Weak`
+    handles name. `upgrade_ok` also states that a failed upgrade finds the
+    slot empty.
+  - `ArcWeak_share` is covered: `weakClone_ok` clones a held `Weak` with or
+    without strong handles left, and only the weak count moves.
+    `arcDrop_ok` now states that the value handed back at the last release
+    is the one the block held, and `weakDrop_ok` states the block's
+    liveness afterwards, not only the returned flag.
+  - `vec_set`'s length check is modelled (`setC`, `setC_ok`): at or past
+    the length it answers `F` and writes nothing, even with capacity left.
+    `set` is named as the raw store it is.
+  - `vec_reserve` checks the byte size of the capacity it rounds up to
+    (`reserveZ`), as `__vec_grow`'s `alloc_size` does, not only the count.
+    `reserveC_size_gap` shows the case the count check alone lets through.
+  - `vec_append`'s complete call, with the drop of the emptied source, is
+    covered (`appendFree_ok`), also for a source that was already empty.
+  - The release of a packed `Vec` after its detach frees both the control
+    block and the new buffer (`packedPush_release`).
+  - `releaseFrom_fresh` states when no id is reused across a release: for
+    destructors that never move the fresh-id counter back.
+
+- **Breaking: an immutable global may not start as zero bytes that are not a value of its type** (AGORA-987). `: ( Vec i ) g 0`, `: String g 0`, a library handle, a closure, or a struct holding one, declared without `~`, started as a null control block. That global is never assigned, so it stayed null for the whole run. A read saw an empty value, but safe code could also grow it through its handle (`vec_push`, `string_push_str`), and that wrote through null: a SIGSEGV on Linux, and a write near address 0 in a wasm linear memory. The two rules for globals each left it out. A mutable global that owns something is reached only from `unsafe`, and a global set at start must synchronise itself. The declaration is now refused, by the same test (`__zero_invalid`) the zero-filling constructors use. Migration: make it a mutable global (`: ~ ( Vec i ) g 0`), filled before use and reached from an `unsafe` accessor (docs/MEMORY.md, module globals). Or set it at start from a function of no arguments, as a type that synchronises itself (`: ( Locked ( Vec i ) ) g ( make )`). In this repository only `compiler/tests/hex_literals.nu` declared one (`: String g_str 0`, only read), and its zero-initialised aggregate global is now a struct of two integers.
+
+- **More functions validate.** A per-call ownership answer whose key is a
+  constant of the module (`__nurl_clear_if` and `__nurl_cloneifk` on
+  `@.__nurl_sink.N`) is now followed instead of being reported as
+  unsupported. A slot that only holds a borrowed parameter is recognised as
+  owning nothing.
+  - On the 1986-program corpus, 98236 functions now validate (83518
+    before) and 8010 are unsupported (22728 before).
+  - There are 0 mismatches.
+- **The drop validator claims less where it followed less.**
+  - A loop whose drop state still changes after two rounds is reported
+    unsupported. It used to count as validated.
+  - A `__dropif` releases what its slot holds at the call.
+  - A return of a value that was released, handed on, or only borrowed is
+    a mismatch.
+
+- **Breaking: a place a callee or a `sink` may have left empty is moved there, and may not be used before it gets a new value** (AGORA-991). Two kinds of place are emptied, set to a null handle. A function that hands its `inout` handle parameter to a `sink` on some paths empties its caller's slot on those paths (agora #778). A binding read out of a struct's field (`: R a . col res`) and handed to a `sink` takes the field over and leaves it empty where it lives. The caller could go on using either place: a Vec or a String read as empty, but a push through it stored through data pointer 0, which the optimiser treated as unreachable (an optimised program re-entered `main` until the stack overflowed), and an Rc read through it faulted. Now:
+  - the caller's argument to such a callee is moved on some paths after the call (a new summary, built from the calls that hand an `inout` parameter on);
+  - a field taken over through a binding read out of it is moved, as a field handed to the `sink` directly already was.
+
+  A use before a new value is refused ("use of possibly-moved value 'w' — 'g3' may hand it on to a 'sink' …"). The zero slot still drops as nothing, so releases are unchanged. Migration: give the place a new value after the call (`= w ( vec_new [i] )`, `= . col res …`) before using it. In this repository, `compiler/tests/field_viewer_rebound_handed_to_sink.nu` and `compiler/tests/inout_taken_on_some_paths_leaves_the_caller_its_value.nu` read the emptied place; they now give it a new value first.
+
+- **Breaking: a literal handed back lends an `in` parameter it names whole** (AGORA-995, D4c of AGORA-946). `^ @ K { p }`, `^ @ E { V p }`, `^ @ ?K { T @ K { p } }` and `^ @ KK { @ K { p } }` now lend the caller's argument, as `^ p` always did. The caller keeps its argument, and the result borrows it. Before, the literal took the argument over (an inferred `keeps`), so reading the argument after the call was refused ("its value was moved into an owner"). A literal that also holds a value of its own beside the parameter, such as `^ @ P { p ( vec_new ) }`, still takes the parameter over, because a struct is dropped whole.
+  - **Migration:** a constructor that is meant to take its argument over says so with `sink`. Code that let the result outlive the argument is now refused with "'k' borrows from 's'".
+  - `pair_new` now takes `sink A first sink B second`.
+  - A literal of several parameters named whole, of which the function takes one over on another path, takes them all over, as before this change.
+  - `json_arr` and `json_obj` now take a `sink ( Vec Json )`.
+  - `image_of` now takes a `sink ( Vec u ) data`.
+  - toml's internal `__valresult_ok` and `__keyresult_ok`, and nurldb's `__tok`, take their value as `sink`.
+  - The hole probes and compiler tests that tested the take-over (h205, h207, agora #160 and #362) now write `sink`.
+
+- **Breaking: an `in` option's payload handed back by a match is lent** (AGORA-995, D4c). `^ ?? o { T x → x F → ( mk ) }` and `: String r ?? o { … }  ^ r` now lend the caller's option on the path that hands the payload back, and the result is the caller's own on the path that makes a fresh value, as `?? o { T x → { ^ x } … }` written in the arm always did. The caller keeps its option. Before, the parameter was taken over (an inferred `sink`), so reading the option after the call was refused ("use of moved value").
+  - **Migration:** code that released the result (`( string_free s )`) or let it outlive the option is now refused with "'s' is a borrow …" or "'s' borrows from 'o'". Copy it where it must outlive the option, or declare the parameter `sink`.
+  - A `:` binding of a `?` / `??` that lends only what the caller lent, such as `: String r ? c p ( mk )  ^ r` or a join of two parameters' elements, is handed back lent the same way, as the join handed back directly always was. Before, it was copied on the runs it lent. A caller that changes the argument while it holds such a result is now refused; copy the result where it must outlive the change (`( string_from ( string_data r ) )`).
+
+- **`: String k ( id s )`, then `= s ( … )`, then reading `k` is accepted: `k` takes the old value over** (AGORA-1003). Take a call that hands its argument back whole, `id String p → String { ^ p }`. The generated code already gave `k` the old value at `= s` and never freed it under `k`: it found `k` holding the same buffer, and the program ran clean under ASan. The reference checker and the ownership engine accepted it too. Only the borrow checker refused it, with "'k' borrows from 's', which ended at … — it was given a new value". It now takes `k` as the owner of that value from then on, for a `String` or a `Vec` of the owner's type, in a function or a closure body, on every path that gives `s` a new value. Unchanged:
+  - **refused as before:** two or more such bindings linked to `s`, a `: ~ k`, and `= k ( id s )`, which the code does not link to `s` (agora #881);
+  - **an `inout` parameter** given a new value still frees its old value outright (agora #886);
+  - **every program accepted before** compiles to the same code.
+
+- **A certificate's term is made by a translator written in NURL** (AGORA-1020). `nurl-cert` turns the core IR (`nurlc --emit-core`) into the Lean term itself (`packages/nurl-cert/src/tolean.nu`, on the one core IR reader `coreir.nu`): no Python runs between `Program.core` and the theorem, and `python3` is no longer needed to certify. `nurl-cert translate prog.core` prints the term.
+  - It is the port of `tools/ncore/tolean.py`, which stays its reference. `tools/ncore/tolean_parity.sh` runs both over the 58 certify programs and every hole probe (4300 core IRs): 0 differences in stdout, exit class or `unsupported` message. Over those 4300 core IRs the NURL translator takes 15.1 s where tolean.py takes 182 s, one at a time (3.8 s against 27.4 s on 12 jobs).
+  - The trust ledger's `translation` and `library-summaries` rows name the new translator. A bundle written before this change no longer verifies (its ledger rows are the old text): certify it again.
+  - A core IR that is not one nurlc prints is refused, never read as something else (`nurl-cert translate` exit 1, `internal: …`): a needed column that is not an integer, a `ty` line with fewer fields than it counts, an `endfn` with no function open, a statement missing a word. Variable ids are indexed sparsely, so an IR with an id of 10^9 costs no more than one with 10.
+  - Intentional deviations from `tolean.py` (fail closed on malformed IR): a statement whose operand count exceeds its operand words, and a block with no `end` before its function's end (or an `end`, `else`, `arm` or `loopcond` out of place), are refused, where `tolean.py` reads them. nurlc prints neither shape.
+  - Deliberately stricter as well: a core IR record malformed in shape is refused (`internal: line N of the core IR: malformed: …`): a count below 0 (parameters, fields, type arguments, variants, payloads, a statement's operands), a type's counts past its line, a variable id below 0 or a kind outside 0–3, an `fn` line while a function is open, the input ending inside a function.
+
+### Performance
+
+- **A module constant is its value wherever it is read** (AGORA-855). An immutable number at file scope (`: i LIMIT 100`, `: f SCALE 2.5`, `: b ON T`, or an integer folded from a constant expression) was emitted as a mutable `global` and loaded at every use. Clang's pre-link optimiser could not see through that load; the value only reached the code at link time, after inlining. Enum tags had the same problem until AGORA-853. Now each read is the number itself, an immediate in the code. Nothing can write such a constant: `=` refuses it, so does `mem_addr`, and an `inout` argument must be a binding. A `~` global, a string, a pointer and an aggregate are still loaded as before. On the compiler's own source, which declares 377 such constants, nurlc emits 5,798 fewer loads. Clang's `-O2` step then runs 2.2 % faster (40.4 s → 39.5 s) with a 6 % lower peak (586.6 MB → 552.1 MB). nurlc itself executes 0.02 % fewer instructions and peaks 250 KB lower. Run time is mostly unchanged, because full or ThinLTO already folded such a load at link time. Of the bench rows, only `json_parse` and `http_server` read a constant, and `json_parse` executes exactly what it did. The one program measured that moves the other way is std/zstd's encoder: LLVM picks another shape for its hash loop, with 0.5 % more instructions on a 2 MB round trip and wall time within noise. A program's results, drops and diagnostics are unchanged.
+
+- **A function makes its result slot only when a return needs it** (AGORA-856). Every function with a result used to open with an `alloca` for it. Only two kinds of return use that slot: one under a `;` defer, which leaves its value there while the defers run, and the returns of an aggregate, which merge through it. Most functions have neither, so the slot was a dead line of IR in most functions. Now the first return that needs it makes it, as a closure body's return already did.
+  - **`compiler/nurlc.nu`:** 1,744 fewer allocas, 2,819 fewer IR lines (−0.30 %).
+  - **`compiler/tests/dst_flagship.nu`:** 2,544 fewer allocas, 2,591 fewer lines (−0.74 %).
+
+  Programs run exactly as before: LLVM removed the unused slot anyway, so what shrinks is the IR nurlc prints and clang reads.
+
+- **A loop that indexes a Vec reads its data pointer once, not once per iteration** (AGORA-857). `vec_at` / `vec_put` read the data pointer ahead of their bounds check, but the optimiser sank that load past the check, and from there it could not lift it out of the loop. A load may be lifted above a branch only when the pointer is known to be readable, and nothing said so. Each Vec control-block read now says so (`llvm.assume` with `dereferenceable`) right before its own load. That claims nothing the load does not already require, so the claim stays where the read was written, and the loop keeps the pointer in a register. Instructions executed, bench.sh's pipeline:
+  - **`bench/safe_record_array`:** 565.4M → 545.4M (−3.5 %).
+  - **`bench/payload_state_machine`:** 252.7M → 242.2M (−4.1 %).
+  - **`bench/stdlib_hotpath`, `string_build_16`:** 532 → 451 per operation (−15 %).
+  - **The other bench rows** are unchanged (to within ±14 instructions), with the same output.
+  - **Every module's IR** gains two lines.
+- **A Vec read where its handle may be null takes one select, not three instructions more** (AGORA-857). A Vec's null handle is its empty state: a field a sink took over, an `inout` slot handed on, a zero-initialised mutable global. `nurl_vctl_get` reads it as an empty block by selecting a zero constant in place of the handle. The constant was one word, so the select also had to choose the index (0), which cost an `xor`, a `setne` and an indexed load on every read the optimiser could not hoist. The zero constant is now three words, the data pointer, length and capacity, so a null handle reads the same word of it, and the word's offset stays an immediate. Every index is a constant 0..2, so nothing reads past it, and the value read at null is 0 as before. Instructions executed, bench.sh's pipeline:
+  - **`bench/dynamic_method_mix`:** 411.4M → 390.8M (−5.0 %);
+  - **`bench/captured_closure_queue`:** 326.1M → 322.1M (−1.2 %).
+
+- **nurlc holds its input file once and compares a row's field in place** (AGORA-972). Compiling `compiler/nurlc.nu`, nurlc now peaks 6.7 MB lower (210,069 → 203,412 KB, mean of eight runs, −3.2 %) and executes 58.7 M fewer instructions (−0.21 %). Its output is byte-identical: the compiler's own source and all 7,277 files of the tree sweep compile exactly as before. Two changes:
+  - A source read hands back the snapshot table's own copy, valid for the whole compile. Before, the input file was held twice: once as that snapshot, and once as `main`'s copy from the join with the `--stdin` arm. A `--stdin` overlay is now written into the table for the input's path, so every read sees it as before.
+  - The borrow walk compares a row's kind or mark with a literal byte by byte (`bck_field_is`). Before, it copied the field first, which meant a malloc, a copy and a free at each of 57 sites.
+
+  Both are safe code. `compiler_read_source` and `bck_field_id` were `unsafe` and no longer are, and the raw-pointer aliases `g_input_source` and `g_input_key` are gone. No program's results, drops or diagnostics change.
+
+- **The compiler's symbol tables take a third less memory per entry**
+  (Agora #973). Six of each entry's per-entry words, previously 8 bytes
+  each, are now 4:
+  - its scope depth;
+  - its bucket-chain link and the bucket heads;
+  - its cached value length;
+  - its hash, read back zero-extended, so buckets and lookups are
+    unchanged;
+  - its buffer size.
+
+  A self-compile holds over half a million entries at its peak. On the same
+  input:
+  - peak RSS drops from 200.6 MB to 183.6 MB (−8.5 %);
+  - instructions drop from 27.400 G to 27.353 G (−0.17 %);
+  - wall time is unchanged within noise.
+
+  Hash chains compare in 32 bits, so the narrower words cost no extra
+  instruction.
+
+  The emitted LLVM is byte-identical across the tree (`tools/tree_sweep.sh`).
+
+  A value length or buffer size of 2 GiB or more now stops the compile
+  with a message (`__sym_n32`) rather than being stored wrong. No program
+  the compiler can read reaches that size.
+
+- **The borrow checker's statement rows are no longer interned for the whole compile** (Agora #974). Each function's captured row list, which the borrow walk splits into rows, was copied into the intern arena, and that arena is never freed. The list was interned again when a deferred function was parked, when it was walked, and when a closure literal saved its enclosing function's rows. Now:
+  - the walk reads the list in place;
+  - a parked function's rows sit in a buffer of their own, read in place by each of its walks and released after the last one;
+  - a closure saves a copy of its own.
+  
+  No new unsafe code. Self-compile of `nurlc.nu`: heap at peak 230.8 → 225.1 MB (massif, −2.5 %), instructions −0.011 % (callgrind), peak RSS flat, byte-identical output.
+
+- **A statement's pending call rows are no longer interned for the whole compile** (Agora #977). `__bck_flush_ppends` runs on every statement. It read the statement's pending list (`ppends`) through an interning lookup and then emptied it, so every statement's list stayed in the intern arena until the compile ended. It now returns at once for an empty list, the common case, and reads a non-empty one from a copy of its own. The read-only sites read the list in place: the join arms' snapshots, `__vself_waiting` and `__bck_arm_take`. No new unsafe code. Self-compile of `nurlc.nu`: peak RSS 203.5 → 200.5 MB, heap at peak 225.1 → 222.0 MB (massif), instructions −0.11 % (callgrind), byte-identical output.
+
+- **The verified checker no longer grows dependency lists geometrically** (AGORA-988, github#2242's review). A1's and A2's typing rules build a context's dependency lists by concatenation: a push appends what the pushed value depends on, and a call appends what its arguments hold, in every kind. Before, `formal/C`'s checkers computed those lists exactly. A slice read from a `Vec` of slices and pushed back 15 times left 14,348,907 copies of one dependency. Now the checkers drop the duplicates where a push or a call makes them, and justify it with one `sub` step. Every clause of `Weaker` is stated by membership, so an entry and its deduplicated form are weaker than each other (`EntryWeaker.dedup2` / `of_dedup2`, `EntryWeaker.dedup1` / `of_dedup1`; for contexts, `weaker_dedup2` / `weaker_of_dedup2`), and the checker decides that the result is well formed. No typing rule changes, and no program changes verdict. Witness: `C/DedupWitness.lean`, where after 15 rounds the `Vec` holds that one dependency once, in A2 and in A1. The context is also read once into a table over the domain at each call and push (`settleL2`, `settleOutL2`). A later read is then one scan of the domain, and no longer replays the calls and kills that built the context. Over the 225 programs of `tools/ncore/certify` and `tools/fuzz/holes` that translate, the checker's run time fell from 2810 ms to 2292 ms (−18 %), with the same verdicts. The slowest program fell from 116 ms to 9 ms. nurlc is unchanged. A program `tools/ncore/certify.sh` runs now imports only the checker it runs (`C.A2Prog`, not `C.A3Prog` with A3's proofs), so each run's peak memory falls by 6 % (630 → 593 MB), with the same verdicts over every hole probe.
+
+- **nurlc no longer walks comments and its own output byte by byte**
+  (Agora #993).
+  - The lexer skips a line comment with `memchr` to the line break. A
+    third of the compiler's own source is comments, and every scan pass
+    lexes the whole file.
+  - The lazy-function scan finds each `@` in the emitted module text with
+    `memchr`. It used to step over the tens of megabytes one byte at a
+    time.
+
+  On a self-compile (same input), instructions drop from 27.400 G to
+  27.046 G (−1.29 %) and wall time by about 3 %. Peak memory is unchanged,
+  and the emitted LLVM is byte-identical across the tree.
+
+- **A local handed back whole through a lending call is handed over, not copied** (AGORA-995). This covers `^ ( id s )`, `^ ( wrap s )` with `wrap` returning `@ K { p 0 }`, and `: K k ( wrap s ) … ^ k`, where `s` is a local of the function. `s`'s value becomes the result, with no copy and no release. Before, the String or struct was copied and the local released.
+  - A value of a type with no copy (a `% Drop` struct) handed back this way is now accepted. Before, it was refused (agora #187).
+  - So is an option of a Vec of `% Drop` values a call answers per call for (AGORA-999), such as `^ ( maybe o k )` with `maybe` handing `o` back on one path: `o` is handed over on that path. Before, it was refused (agora #459).
+  - A temporary handed to a literal that lends its parameter whole, as in `( wrap ( string_from … ) )`, is the result's, and nothing is copied.
+  - Over the tree sweep's changed functions, 83 copy calls and 320 drop calls are gone. Most of them are `HttpStreamState` copies in `http_stream_open_to` / `http_stream_open_bytes_to`.
+- **The compiler asks what a callee lends without building anything when it lends nothing** (AGORA-995). Instruction counts against main's compiler at this change's base, built the same way, with peak RSS unchanged:
+  - self-compile: −0.43 %;
+  - `compiler/tests/anthropic_basic.nu`: −0.21 %.
+
+### Fixed
+
+- **lingbot-map: camera poses were applied inverted** (lingbot-map 0.13.0). The pose encoding decodes to camera→world; the port inverted it as if it were world→camera, rotating every frame the wrong way round its camera — a fan of rotated room copies on a phone turning in place, tangled facades on the courthouse walk. The reference-side test oracles shared the misreading and are corrected; port and reference agree on the fixed cloud.
+
+- **map-anything serve: phone uploads no longer fail with "network error"** (map-anything 0.8.1). The upload page sliced every file with `file.slice()`, which a phone browser can fail to read for a file picked from its gallery; files up to 32 MiB now go whole, larger ones are read as a stream and sent in pieces from memory, unreadable files are reported as such, and failed pieces are retried.
+
+- **A module's private type can no longer be named from another file as a
+  type argument** (Agora #861). A strict module's private type was already
+  refused when named bare (`: Impl x`). It was accepted inside a generic:
+  `( Vec Impl )`, `( vec_new [Impl] )`, `[?Impl]`, `( Vec ( Vec Impl ) )`.
+  Those spellings took the name as a single token and never checked its
+  visibility, so a module could not keep a type private from code that
+  wrapped it in a generic.
+  - Every one of those forms is now refused with the same diagnostic as
+    the bare name, at the name's own file and column.
+  - Unchanged:
+    - a type argument written in the module that owns the type, including
+      a `pub` struct's field such as `( Shared Impl )`, read again from an
+      importer;
+    - a type argument inside an instance's body, already judged where the
+      program wrote it.
+  - Nothing in the tree relied on the old behaviour: `tools/tree_sweep.sh`
+    is byte-identical.
+- A generic struct template's own field types are judged against the file
+  that wrote the template, once, at its first instance: a type another
+  strict module keeps private is refused there (it was accepted by every
+  compiler), and the module's own private types stay usable.
+- A `pub` generic struct as the last declaration of an imported file no
+  longer leaks its prefix onto the importer's next `$` import ("'pub' has no
+  meaning on a '$' import" was reported against the importer).
+
+- **A `?` / `??` a function falls off with is the same as `^` of it, where its value has no copy** (AGORA-866). `@ pick D x b c → D { : D l … ? c x l }`, with `D` a type with no copy, was refused ("a borrowed 'D' would have to be copied here"), while `^ ? c x l` was accepted and runs clean, though both compile to the same IR. The fall-off join now returns the way the `^` one does: the local an arm selects moves out to the caller on that path. This holds in closure bodies too. Where `^` refuses, the fall-off form still refuses: under a `;` defer, and when an arm hands back a field of a local.
+
+- **A `% Drop` that may panic now counts as a way out of the function** (AGORA-942). A field of an `inout` parameter that a `sink` took may not stay empty across the release of a value whose destructor may panic. The release can be a temporary, a scope's end, or a `=` over the old value. Likewise, an `inout` parameter may not view a value of the function across such a release. Before, `recover` handed the caller the parameter with the field empty, and its next use read a null handle (a SEGV), or a view of freed memory. Whether a destructor may panic is the module's own answer, so one that cannot panic refuses nothing.
+
+- **A closure that changes an Rc payload ends the views of that payload when it runs, even when the handle it holds is its maker's own local** (AGORA-945, proposal D3 of AGORA-441). The case: a maker made a fresh `Rc`, captured it in a closure that replaces or grows the payload, and let a clone of the handle leave beside the closure: in a field of the result, in another closure, through an `inout` parameter, or through a helper. A caller's view of the payload through that clone then outlived the closure's call and read freed memory. The maker's summary dropped every effect on its own locals ("the closure's alone"). An Rc's payload is not the closure's alone: every clone reaches it. Now such an effect is carried to the caller as an effect on an anonymous handle of that Rc type, and the same-Rc rule ends the views. Twelve shapes that faulted under ASan are refused.
+  - A handle the maker keeps private stays the closure's, as the ownership engine has it. Private means bound by `:` from `rc_new` or `rc_zero`, and every mention of it is a bare argument of `rc_set`, `rc_replace`, `rc_take`, `rc_restore`, `rc_strong`, `rc_weak` or `rc_is_unique`. So AGORA-845's `mkown` guard, a maker over an Rc nothing else reaches, is accepted as before.
+  - A maker defined below its caller that returns a struct of closures (not a closure) had no answer at all at the call, so even a closure over a clone of its parameter went unseen. It now gets the same placeholders a closure-returning maker gets.
+  - Precision: a call handed a value that holds no closure, such as `( rc_get . p h )` of a struct holding a closure and an Rc, no longer runs the struct's closures. Its guard, refused on main, is accepted.
+
+  - **What is newly refused, besides the faulting programs.** The rule is keyed by the Rc's type, not by its allocation: it is D3's static rule, and the walk cannot tell two allocations of one type apart. So the following is refused even where the closure's Rc is another allocation and nothing is freed: a view of an `( Rc T )` payload held across a call of a closure that changes a *shared* handle of the same `( Rc T )` held by its maker. To migrate, read the view before the call, or take a copy that owns its data (`mem_dup`, `slice_to_vec`), as the diagnostic says. A maker's private handle (above) and a handle of another Rc type do not count. The tree sweep found no such program in stdlib, packages or examples.
+
+- **Releasing a closure counts as a way out when its environment holds a value whose `% Drop` may panic** (AGORA-952). Example: a closure made by `( mkf @ D { k } )`, where `mkf` takes the `D` over. That closure, released by a `=` over it or at its block's end, runs `D`'s drop. A field of an `inout` parameter that a `sink` took may not stay empty across that release, and an `inout` parameter may not view a value of the function across it. Before, a `recover`ing caller got the parameter back with the field empty and read a null handle (a SEGV), or read freed memory. A closure's type names nothing its environment holds, so the check follows what each maker took over, through wrappers that take the closure over too.
+
+- **A closure over a value whose `% Drop` reaches an `Rc` now counts as a way out at its block's end too** (AGORA-952 follow-up). This covers a function with no borrows. Before, such a release while an `inout` field taken by a `sink` was still empty was accepted, and a `recover`ing caller read a null handle.
+
+- **A `:` binding of a join or a value block keeps what its producer lends** (AGORA-953, part of AGORA-242). Four of the elaborated twins of closed probes, and two neighbours, read freed memory. Each binds the form first and then hands the binding on (`: e ? c x ( mk )` and then `= t e`, `^ e`, or `: e2 e`). The unbound form copies, moves or refuses, and the bound one now does the same:
+  - handed to a binding of an outer block, the binding's lent paths are copied in there;
+  - a value with a `% Drop` is refused, with the unbound form's message;
+  - handed back, a non-copyable value is refused where the join's calls lend this frame's values;
+  - a value block's raw `s` view of its own local gets a copy.
+
+  No source changes: programs that compiled before compile the same, except the ones that read freed memory, which are now copied or refused. Three closure-valued twins stay open (tools/fuzz/holes/open/t242.md).
+
+- **`= a g` with `g` a second name of `a`'s own closure env releases nothing** (AGORA-953, part of AGORA-242). With `: g { : i z ( a 1 ) a }`, `g` is a second name of `a`'s env. `= a g` used to release that env as `a`'s old one and then hand `a` the freed env, a heap-use-after-free. The release is now decided by the env's address at run time: the same env stays with its owner, and another closure's env leaves `a`'s own to be released as before. No source changes.
+
+- **A binding given a join over two locals' lends takes over only the one it holds** (AGORA-953). `: e ? c ( id a ) ( id b )  = o e` used to take both `a` and `b` over, so the one the join did not select was never released, a leak. Ownership is now decided by the value's identity at run time. No source changes.
+
+- **A typed `:` binding of a value block whose tail views the block's own local gets a copy** (AGORA-953). `: s e { : String x … ( string_data x ) }` and `: ~ s e { … }`, with the type written, now take the same copy rule as the inferred `: e { … }`. They used to read freed memory once handed back. No source changes.
+
+- **A closure that a `??` arm builds over its payload, bound by `:`, can no longer outlive the matched value** (AGORA-958). `: c ?? o { T s → \ → i { ^ ( string_len s ) } F → … }` followed by `^ c` (or `= outer c`), with `o` a local, handed out a closure reading `o`'s freed payload. It is refused now, as a closure over a local is. Return the join directly (`^ ?? o { T s → \ … }`), which copies the payload into the closure.
+
+- **A closure stored in an `Rc` payload is now tracked as something the `Rc` holds** (AGORA-960). A helper handed an `( Rc H )` that runs `H`'s closure through `rc_get` ends the views of what the closure changes, as it already did for a struct, an option, a `Vec` or a `Box`. Before, a slice of another `Rc`'s payload, held across such a call, was read after the closure had replaced that payload (a heap-use-after-free).
+- **A function that hands back a `box_new` or `rc_new` of a value holding a closure now says what that closure does.** A caller that runs it therefore ends the same views. Before, a maker's result counted as holding closures nobody here built.
+
+- **A binding a closure captures, given a `:` binding of a join, gets a copy of its own wherever the join lends** (AGORA-961, AGORA-964). Inside a closure that captures `o`, `: e ? c ( id o ) ( id a )` then `= o e` left `o` holding memory the assignment had just released. So did `: e ? k ?? x { T s → s F → ( id a ) } ( id a )` then `= o e` when `x` was a fresh option, a closure-local option, or a `vec_get` of a closure-local Vec. `o` is now given a copy wherever the join lends, as `= o ? …` written directly already was. Nothing to change in your code.
+
+- **A closure's capture given a join over literal-built locals' lends no longer reads freed memory** (AGORA-965). With `: ?String e ? == k 0 ( idq a ) ( idq b )  = cap e` in a closure, where `a` and `b` are options built by literals, `cap` was left borrowing a local that the closure released when it returned. The join binding is now a cursor over the local an arm's call lends, so `cap` takes over the one the join selected. When that one is `None`, no owner is taken over, and the other option is no longer leaked. No source changes.
+- **A join over fields lent out of local structs, handed on by name, no longer leaks** (AGORA-967). `: String e ? == k 0 ( ex a ) ( ex b )  = o e`, with `ex` handing back a field, used to take both structs over whole and release only the field. The target now gets a copy of the field, and each struct releases its own. A field with no copy is refused at the assignment. With structs built by literals the same shape read freed memory; that is fixed too.
+
+- **The core IR names the binding `mem_forget` gives up** (Agora #989).
+  - `nurlc --emit-core` printed `( mem_forget x )` as `call mem_forget 0`,
+    with no operand. So the IR said `x` lived to its scope end, while the
+    generated code correctly cleared `x`'s drop flag there.
+  - It now prints `call mem_forget 1 vK`, as every call names the operands
+    it consumes.
+  - The ownership engine's verdicts are unchanged. The emitted LLVM is
+    byte-identical across the tree.
+  - With the drop validator's matching update in nurl-lang/nurl#2242
+    (`tools/ncore/tvir.py`), `tools/ncore/tv.sh --ir` no longer reports
+    `__dq_drop_elems` in `stdlib/std/deque.nu`.
+
+- **The drop validator no longer accepts six codegen mistakes it used to
+  miss** (#2242 review). Each one is now a mutation in
+  `tools/ncore/tv/selftest.sh`:
+  - A value moved from one slot to another by a load and a store is the
+    same value in both slots, so releasing it from each is a mismatch. It
+    used to count as a new value.
+  - A call to a function with `sink` / `keeps` parameters has every
+    argument read, constants included. A call it cannot read is reported
+    unsupported. A constant argument used to make it skip the call's checks.
+  - A `__nurl_cloneifk` result that the path knows is the value itself, not
+    a clone, is checked as that value when it is handed to a `sink`.
+  - An unconditional release (`__dropif(true, …)`) gets the same
+    borrowed-parameter and `sink` checks as a release under a flag.
+  - With `--journal`, a registration must name its slot's own drop flag,
+    which is the flag the drain asks. An indirect call counts as a call
+    that may panic.
+- **The drop validator no longer accepts five more codegen mistakes**
+  (#2242 review, second round). Each one is a mutation in
+  `tools/ncore/tv/selftest.sh`, accepted before and caught now:
+  - A clone the path knows was made (`__nurl_cloneif(true, …)`, or a
+    `__nurl_cloneifk` whose key and flag are both set) is a value of its
+    own. Handing it to two `sink` parameters is a mismatch. It used to
+    have no identity, so both handovers were skipped.
+  - A parameter of an owning type has its own identity from the entry. A
+    borrowed one handed to a `sink` as it came (`eat(%p)`) is a mismatch.
+    So is the same in a function with no drop flag of its own.
+  - With `--journal`, a registration left enabled after a `sink` parameter
+    took the slot's value is a mismatch: a panic there would release what
+    the callee owns.
+  - With `--journal`, two enabled registrations of one value (two slots
+    holding it after `= d s`) are a mismatch: the drain would release it
+    twice.
+  - A flag cleared while its slot owns a value, with the value handed
+    nowhere on the path, is a leak and a mismatch. This is the `off`
+    without a `copy` that `formal/D/Drops.lean`'s `checkA` refuses. A
+    value counts as handed on when it goes to a call, a store, an aggregate
+    or the `ret`, or when another slot owns it. With `--sums`, a call hands
+    a value on only at a `sink` / `keeps` position. The case is reported
+    unsupported, not validated, in three situations: the value may be a
+    clone, it is used where its hand-on is not read (`extractvalue`,
+    `phi`), or it came from somewhere not followed. That last covers a load
+    through another value's pointer or a field, which may be a lend. It
+    also covers a function whose core IR calls `mem_forget`, which gives a
+    value up on purpose.
+  - On the 1983 programs the corpus compiles, 124 functions move from
+    validated to unsupported, and none the other way. The default run
+    gives 98164 validated, 7778 unsupported, 0 mismatches. `--journal`
+    gives 97830 / 8112 / 0, with 480 journal-checked.
+- **The drop validator no longer accepts nine more codegen mistakes**
+  (#2242 review, third round). Each one is a mutation of real nurlc output
+  in `tools/ncore/tv/selftest.sh`, accepted before and refused now:
+  - Two paths that meet in one state except for a value one of them still
+    owes a hand-on are no longer merged. The owed value used to be left out
+    of the state when no slot or register held it, so the leaking path was
+    skipped.
+  - A slot the journal alone tracks, or one that is always released, is no
+    longer an owner of a value whose flag is cleared. The value stays owed
+    until it is released or handed on. A journal `forget` hands nothing
+    on.
+  - A store into one of the frame's own slots is not a hand-on. The value
+    is owned again only once that slot's flag is set.
+  - A value moved into an aggregate (`insertvalue`) passes what it owes on
+    to the aggregate. The aggregate must then be stored, passed, returned
+    or released. A thrown-away aggregate is a leak.
+  - A known clone is the frame's to hand on or release. A clone made and
+    thrown away is a leak. Functions with no drop flag that make clones are
+    checked now too.
+  - A parameter stored into a slot that only holds it, then loaded back,
+    keeps its identity. Handing that load to a `sink` is a mismatch. A
+    `keeps` parameter of a type that owns nothing (a view such as `i8*`) is
+    still given no identity.
+  - With `--journal`, at a call that may panic, every value still owed a
+    hand-on must be held by an enabled registration, either of the value or
+    of an aggregate it went into. Otherwise a panic there leaks it.
+  - Reported unsupported instead of validated: a value handed on through a
+    `__nurl_cloneif` whose condition is not known, before its flag is
+    cleared. If the result was a clone, the value itself leaks.
+  - Reported unsupported instead of validated: a drop flag copied
+    (`store i1 %f`) into a slot that does not hold the source's value. The
+    target used to be given the source's identity without holding it.
+  - Also: a release of a value a register holds (`__dropifv_T(i1 true, T
+    %r)`) now counts as a release. A `store` is read with bracketed types
+    (`{ i1, %T }`).
+  - Registers that no path reads again are left out of the state, so paths
+    that loaded different registers on the way still meet. This alone moves
+    38 functions from unsupported (a loop whose state still changed) to
+    validated. It is a sound reduction: no check depends on a dead register.
+  - On the 1983-program corpus, the default run goes from 98164 validated,
+    7778 unsupported, 0 mismatches to 98197 / 7745 / 0. `--journal` goes
+    from 97830 / 8112 / 0 to 97863 / 8079 / 0, with 480 journal-checked
+    both times. Five functions move from validated to unsupported. Three
+    read a field (`extractvalue`) of a value still owed, and two are
+    clone-only functions whose loop is not followed.
+- **The drop validator no longer accepts eight more codegen mistakes**
+  (#2242 review, fourth round). Where a construct is rare, it is now
+  reported unsupported rather than modelled. Each one is a mutation of real
+  nurlc output in `tools/ncore/tv/selftest.sh`, accepted before and refused
+  now:
+  - A function whose only ownership operation is a release by value
+    (`__dropifv_T`) is checked. Only a function with no drop flag, release,
+    clone, journal entry or `sink` call is skipped.
+  - Two paths whose aggregates carry different values are no longer merged
+    at a join. The state key now holds what every aggregate carries, not
+    only what the ones still owed carry.
+  - A store of an owned value is a hand-on only through a pointer to memory
+    that is not the frame's. That means a parameter (the output or an
+    `inout` one), a pointer read through one or kept in a slot that holds
+    only such pointers, a field of a parameter's aggregate, or a pointer a
+    call returned that was handed none of the frame's own storage. A store
+    into the frame's own storage, a field of a slot included, or through a
+    pointer that is not followed, is reported unsupported.
+  - A field replaced (`insertvalue`) in an aggregate where it held a value
+    the frame owned is reported unsupported. The result used to share the
+    base's identity, so the replaced value's obligation went with it.
+  - One value moved into an aggregate twice (into two fields, or into two
+    aggregates) is a mismatch: both would release it. Distinct clones moved
+    into two fields still validate.
+  - (`--journal`) At a call that may panic, an aggregate still owed a
+    hand-on is held only by a registration of itself. One held by a
+    registration of a single value it carries is reported unsupported: the
+    other values it carries are not all followed.
+  - A release by value under a flag whose value is not known is reported
+    unsupported for any value the frame follows, not only one still owed.
+    It used to pass for a value a `sink` had taken. A flag known false is
+    still no release.
+  - A release by value of a possible clone (a `__nurl_cloneif` whose
+    condition is not known) is reported unsupported. It used to count as
+    the release of the value itself. A release of the value itself, known
+    to be no clone, still counts.
+  - On the 1983-program corpus, the default run goes from 98197 validated,
+    7745 unsupported, 0 mismatches to 98185 / 7757 / 0. `--journal` goes
+    from 97863 / 8079 / 0 to 97852 / 8090 / 0, with 480 journal-checked
+    before and 479 now. Of the 12 functions that move to unsupported in the
+    default run, five store an owned value into the frame's own storage,
+    a result temporary or a field of a slot. Three store through a pointer
+    cast from an integer (`inttoptr`, the btree's raw node blocks). Four
+    release by value an aggregate under a run-time answer (`__nurl_ret_own`).
+    `--journal` loses the same kinds, less two of the btree functions that
+    were unsupported there already, plus one aggregate held at a panic by
+    a registration of the value it carries.
+- **The drop validator checks slots of literal aggregate types.** A slot
+  such as `alloca { i1, %String }` (an option, a slice, a result
+  temporary) used to be taken for another frame's, because the type has
+  commas, so its releases were skipped and the function could validate
+  unchecked. LLVM types are now read by a tokenizer that balances `{}`,
+  `[]`, `<>` and `()`, in allocas, loads, stores, releases, clones and
+  parameter lists. Such a slot owns where its type is one a `__dropif_T`
+  loads or a `__dropifv_T` takes. A line of those kinds whose types do not
+  parse, or a parameter list not read whole, is reported unsupported.
+  - `selftest.sh` gains three mutations on a new program with an option
+    slot: a leak, a double release, and a release after a `sink` took the
+    value. The validator before this change accepted all three. Each is a
+    mismatch now.
+  - A slot that only ever holds what was loaded from a slot holding a
+    borrowed parameter is borrowed too, so it owns nothing. That covers the
+    result temporary of a function that lends a parameter back.
+  - On the 1983-program corpus, the default run goes from 98185 validated,
+    7757 unsupported, 0 mismatches to 98065 / 7877 / 0. `--journal` goes
+    from 97852 / 8090 / 0 to 97733 / 8209 / 0, with 479 journal-checked
+    before and 481 now. 193 functions move to unsupported and 73 to
+    validated. Of those moving to unsupported, 116 have a slot of an
+    owning aggregate type with no drop flag. These are mostly result
+    temporaries (options, `recover`'s result) and 44 slices
+    `{ T*, i64 }`, whose LLVM type is the same as an owned slice's. The
+    other 77 have an option slot's flag set from a run-time answer
+    (`__nurl_ret_own`, 76 of them). The 73 now validated have their option
+    slots checked: they were unsupported before because a release of a slot
+    the validator did not take for the frame's was read as a flag it could
+    not follow.
+- **`tools/ncore/tv.sh` stops when a step fails.** If `nurlc --emit-core`,
+  `nurlc --g` or `tvir.py` fails, it exits nonzero instead of validating
+  with an empty file. It also forwards its arguments without word
+  splitting.
+- **`selftest.sh`'s positive controls require the function under test to
+  validate.** A module with no mismatch used to pass even when that
+  function was unsupported.
+- Two follow-ups from the same round. An `insertvalue` result's chain of
+  fields is resolved from the definitions, not read in the order the blocks
+  are listed, so replacing a field that holds an owned value is refused
+  wherever LLVM lists the blocks. A field set on an aggregate that carries
+  owned values without an `insertvalue` here building it (a phi of
+  literals) is unsupported. And a pointer a call returns counts as outside
+  the frame only when every argument is a scalar, a constant or traced
+  outside the frame: one traced nowhere may hand the frame's own storage
+  back. The corpus totals are unchanged.
+- Fifth round: an aggregate handed to a `sink` takes what it carries, so a
+  release of one of those afterwards is a mismatch; an `alloca` with a count
+  other than one, or an address space, is unsupported (it was read as a slot
+  that owns nothing); `volatile` and `atomic` flag stores set the flag as a
+  plain store does; and types compare without their whitespace. New
+  selftest program `literal_of_clones_handed_to_a_sink.nu`. The corpus
+  totals are unchanged.
+- A pointer read out of a global is what was stored there, not the global:
+  it counts as outside the frame only when every store into that global in
+  the function is.
+- An integer handed to a call may be one of the frame's own pointers turned
+  into one (`ptrtoint`): where the frame does that to a pointer not traced
+  outside, the pointer such a call returns is not taken for outside storage.
+  11 corpus functions move from validated to unsupported (98054 / 7888 / 0).
+- The same holds for a floating-point argument (a pointer's bits bitcast to
+  a float), and the question of what a frame turns into integers no longer
+  asks itself into a recursion: asked again while it is answered, it is
+  unsupported.
+- An aggregate handed to a `sink` is checked member by member first: one
+  already released or handed on is a mismatch.
+- A parameter the function only borrows, moved into an aggregate (directly
+  or loaded back from a slot), is unsupported, and a member of an aggregate
+  handed to a `sink` that is a borrowed parameter is a mismatch. No corpus
+  function does either.
+
+- **`tools/ncore/tolean.py` changes a loop's element through the element
+  itself** (AGORA-994). A change of a `foreach` element's elements, such as
+  `string_push_str x …`, `vec_clear` or `vec_truncate`, went through a fresh
+  borrow of the element. The element, reached `.inner` from the container,
+  then ended with the change made through it, so the verified checker
+  refused a program that grows a loop element and reads it again. The
+  change now goes through the element binding, as the program's own call
+  does. `loop_element_grown_through_itself_then_read_runs_clean` is
+  accepted. No other verdict among the sweep's translated programs changes,
+  and every one that must be rejected still is.
+- **`tools/ncore/tolean.py` hands a string literal to a raw-string parameter
+  as text** (AGORA-994). A literal argument was translated as an integer, so
+  a call passing a literal to an `s` parameter failed to type and the
+  program was refused. It is now a buffer of its own for the call, as a raw
+  string bound from a literal already is. That is stricter than the
+  program, where the literal never dies. `local_option_moved_into_inout`,
+  `inout_option_replaced_leaks` and
+  `struct_owners_rotated_by_assignment_in_a_loop_runs_clean` are accepted.
+  No other translation changes.
+- **`tools/ncore/tolean.py` takes a parameter nurlc infers consumed as
+  `sink`** (AGORA-994). It read a parameter's mode only from the flag the
+  IR's variable line carries, so a parameter that the walk infers consumed
+  (handed on to a `sink`, recorded in the summary's `sink=`) was translated
+  as lent. The caller was then charged with a drop nurlc never makes, and
+  the move refused. `kwargs_forward_consuming_callee` is accepted; the two
+  other programs whose translation changes must be rejected and still are.
+- **`tools/ncore/tolean.py` captures a buffer that a closure literal moves
+  in by value** (AGORA-994). A captured String or `Vec` was always
+  translated as captured by name, a read of the creating binding. That is
+  right for a closure that shares a handle with a binding that lives on,
+  but not for one whose literal takes the binding over: the creating
+  function never releases or reads it again, so the environment owns it.
+  Such a closure handed back over its local was refused as escaping. A
+  capture that every literal of the code moves in is now a capture by value
+  in the environment. `string_captured_by_a_returned_closure_runs_clean` is
+  accepted; all 11 must-reject programs whose translation changes are still
+  refused.
+- **`tools/ncore/tolean.py` gives a parameter changed through its handle
+  the mode of the change** (AGORA-994). A `Vec` or String parameter that
+  the function clears, truncates, grows or sets elements of, with no
+  `inout` written, was translated as read-only (`inp`), so the change
+  through it was refused. Its mode now comes from the walk's summary:
+  `inout` at the bound of what the function does (`drops`/`mutates` give
+  `.drop`, `reallocs` gives `.realloc`, `ireallocs` gives `.dropIn`). The
+  caller's views end as nurlc ends them, and the callee is checked against
+  that bound. `owner_read_after_an_earlier_operands_call_cleared_it_runs_clean`
+  is accepted; all 17 must-reject programs whose translation changes are
+  still refused.
+- **`tools/ncore/tolean.py` takes a parameter a function keeps on some
+  path as `sink`** (AGORA-994). nurlc counts a parameter the callee stores
+  on some path (the summary's `keeps=`) as one the callee owns, together
+  with the `sink=` ones: the caller hands its argument over, and the callee
+  releases it through its drop flag on the paths that do not store it. The
+  translation read only `sink=`, so such a parameter was lent and its store
+  refused. `string_parameter_bound_from_a_callee_that_lends_nothing_kept_on_one_path_runs_clean`
+  and `in_params_one_taken_over_before_a_returned_literal_of_both_runs_clean`
+  are accepted. Over the whole hole sweep, no program that must be rejected
+  is accepted. One of them now reports `unsupported` (a kept destructor
+  value), not `refused`.
+- **`tools/ncore/tolean.py` takes a capture a returned closure's
+  environment owns as a value of the environment** (AGORA-978,
+  github#2290). nurlc moves a handle capture into the environment of a
+  closure returned where it is made, or copies it in where the binding
+  borrows, and the core IR now flags such a capture (`CORE_VF_ENVOWN`).
+  The translation reads the flag: the capture is no longer one by name but
+  a value of the environment, as a number is, moved in by the literal and
+  lent from the environment where the body reads it. A literal's captures
+  are matched to the code's by position, all of them, and a count that
+  differs is unsupported. `clo_returned_owning_a_vec_capture` is accepted;
+  no closure probe that must be rejected is accepted.
+
+- **A function forwarding a call that hands back its argument wrapped no longer leaks** (AGORA-995). Example: `^ ( wrapo ( string_from … ) k )` with `wrapo` returning `@ ?String { T p }`. The function's scalar parameter `k`, passed on, counted as a lend, so the caller took the result for a borrow and never released it (LeakSanitizer on main 4b154b9d). A scalar parameter of safe code is no lend now, where the result is no view or pointer.
+
+- **A closure whose body hands a capture to an `inout` callee that may give it to a `sink` now leaves the capture moved after the closure runs** (AGORA-996). AGORA-991 made the caller's argument moved on some paths after a direct call of such a callee. A closure body that made the same call on its capture still left the caller's binding looking usable, though the callee could have emptied it. A push through it then stored through a null data pointer. Now running the closure, whether by name, through `recover`, through a closure parameter or from another closure, marks the capture moved on those paths. Using the capture before it gets a new value is refused, with the same message as for the direct call. Migration: give the capture a new value after running the closure (`= w ( vec_new [i] )`). No code in this repository needed it.
+
+- **A function that hands back a parameter on one path and a fresh value on another no longer leaks the fresh value when its result is an option or a result with no copy** (AGORA-999). Take `@ maybe ? ( Vec D ) a i k → ?( Vec D ) { ? == k 0 { ^ a } {} ^ ( mk … ) }`, with `D` a `% Drop` type with no copy. Its result was taken as one that always lends, so the caller never dropped the fresh value. Such a result now answers per call whether the caller owns it, as a `( Vec D )` result already did, and the caller drops it on the runs that handed over a fresh value. This holds through a forwarder, in a loop, for an option of an option and for a result type. As for a `( Vec D )`, take a temporary argument the caller owns: a fresh value that no binding holds. A callee that can hand back only that argument, whole, makes the temporary its result, as `( sh ( maybe ( mk … ) 0 ) )` does. A call whose result may instead be part of such a temporary, or one of two arguments, is refused, because the result has no copy to fall back on: bind the argument to a name first, as the error says. A temporary that another call always lends is its owner's and is not refused. One from a call that lends only on some runs, answering per call, may be the caller's own, and is refused like a fresh value.
+
+- **A callee can no longer store into its `inout` parameter a closure that holds one of its locals by reference** (AGORA-1001). A closure that assigns a local `: ~` scalar captures it by reference, so its environment points into the callee's stack frame. Returning such a closure was already refused. Assigning it to an `inout` parameter, or storing it into a field of one, was not, and the caller then ran it through a dead stack slot. Both are now refused: "assigning to 'c', storage the caller holds (an 'inout' parameter), a value that references a stack binding of this function by pointer — it dangles after this function returns". Migration: capture the local by value (read it only), or keep the data in a heap-backed handle. No code in this repository needed it.
+
+- **`^ ( pick x p k )`, handing back a call's result that may be a local or a parameter, no longer leaks** (AGORA-1004). The return copies the result on every run on which `pick` lent, because it may be the local `x`. The function's summary still said it lent the parameter `p`, so its caller took the copy for a lend of `p` and never released it. That leaked on every run, also with a third, fresh path and through a caller that binds the result. The summary now says the result is the function's own there. A call whose result is not copied, `^ ( pick p q k )` with two parameters, still lends them, as before. No program's verdict changes.
+
+- **The ownership engine and the reference checker no longer hand an owner's old value to a binding the generated code never linked to it** (AGORA-1005). Take `: String k ( idg [String] s )`, then `= s ( … )`, then a read of `k`, where `idg` is generic or defined below the function. The generated code links `k` to nothing, because at the call nothing the callee hands back is known yet. So `= s` frees the old value under `k`. The compiler refused this program, but the engine and the checker accepted it, which is a heap-use-after-free. The core IR now flags such a binding (variable flag 4096, `CORE_VF_UNLINKED`), and both read the flag. A later `=` by name still links the binding, as before. Nothing the compiler accepts or refuses changes.
+
+- **The ownership engine and the reference checker hand an owner's old value only to a reader of the owner's own type** (AGORA-1000). Take `: ?String k ( wrap s )`, with `wrap` returning `@ ?String { T p }`, then `= s ( … )`, then a read of `k`'s payload. The generated code hands `s`'s old value to no one, and `= s` frees it under the payload. The compiler refused this program, but the engine (`--engine`) and `tools/ncore/check.py` handed the old value to `k`, which aliases `s` whole, and accepted it: a heap-use-after-free. A binding now takes the old value only where its type is the type of the place it reads (or of that place's payload), so an option or a result a call wrapped the place in is not handed it. Nothing the compiler accepts or refuses changes.
+
+- **The ownership engine and the reference checker refuse a temporary handed to a forwarder of a literal that names its parameter twice** (AGORA-995, github#2299). With `@ dup D p → K2 { ^ @ K2 { p p } }`, `D` a type with no copy, and `@ fwd D p → K2 { ^ ( dup p ) }`, the compiler refuses `( fwd ( mkd ) )`: the result names the temporary twice, so the call is no whole handover of it. The engine and `tools/ncore/check.py` took the temporary for the result's own and accepted it. Both now carry a call's twice-named parameters through a temporary, a `:` binding, a join's arms and a binding of the parameter, and fold them into the function's own at its return. Nothing the compiler accepts or refuses changes.
+
+- **The reference checker and the ownership engine no longer refuse two shapes the compiler accepts** (AGORA-915, AGORA-971). An owned slice that a lending call hands back whole, `^ ( id ( mk ) )` with `mk` returning a `[T`, is now taken as the result's own by both, as a handle or a raw string already was; both refused it as a view of a released temporary escaping (AGORA-915). `tools/ncore/check.py` also refused a closure capture given a `:` binding that the generated code copies (marked `CORE_VF_CPCOPY`), when the binding's type has no clone, such as a join over a nested `None` and a local option bound twice; such a binding now owns what it is given (AGORA-971). No false accept is added. Ordinary compiles are unchanged: the engine runs only under `--engine`.
+
+- **`tools/ncore/engcmp.py --verdicts` counts a program the engine did not finish as no verdict** (AGORA-912). A timeout, a crash or a missing `eng verdict` line is listed apart as "did not run", neither agreeing nor differing, and the exit status is 2 when any did (1 still wins when a verdict differs). Every difference is listed, sorted, so two runs on one compiler print the same lines. The per-program timeout is `NCORE_ENGCMP_TIMEOUT` (default 300 s).
+
+- **A generic's `sink A` made at a raw string `s` no longer copies its argument into a value that never frees it** (AGORA-1028, a regression of github#2280). Since github#2280, ``( pair_new [s i] `key` 42 )`` handed `pair_new` a copy of the literal, because `pair_new` declares its first parameter `sink A`. The `( Pair s i )` it went into borrows its string and never released the copy, so `pair_basic` and `compound_type_args` leaked under LeakSanitizer. A user generic of the same shape, `@ box1_new [A] sink A x → ( Box1 A )` made at `s`, was refused outright: "'x' owns its string, and this struct is handed back holding it in a raw string field". And a binding of a view, handed to such a parameter, was refused as a borrow "handed over here as if it owned the value" (`( pair_new [s i] k 1 )`, with `k` a String's view). Now a `sink A` whose type is a bare type parameter, made at `s`, is an ordinary parameter of that instance. Its call sites read it that way too, including ones compiled before the instance is made. An `s` is a view, as a `( Vec s )` holds views, so the value borrows the string and nothing is copied. A `sink s` written as such is still the callee's own string (docs/MEMORY.md, "Raw strings"). **Break:** a fresh raw string handed straight to such a parameter, as in `( pair_new [s i] ( nurl_str_cat a b ) 1 )`, is now refused. Before, it leaked. The new error is "the string made here is handed to 'pair_new' (argument 1), which keeps it", the same answer as for any other value that keeps a raw string. Migration: bind the string first (`: s x ( nurl_str_cat a b )`, so the binding releases it and the Pair views it), or keep a `String`. No code in this repository needed a change: `tools/tree_sweep.sh` shows no verdict change over 7457 files.
+
+### Known issues
+
+- **No soundness hole is known open.** Closed in this release: agora
+  #242, #942, #952, #965, #967.
+
 ## [0.94.0] — 2026-11-21
 
 ### Added

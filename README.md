@@ -265,9 +265,9 @@ nurl/
 │   └── tests/             — .nu test programs + snapshot runner + golden baseline
 ├── stdlib/
 │   ├── runtime.c           — C runtime (I/O, string helpers, FFI surface)
-│   ├── core/ std/ ext/ net/ dist/ hal/ — the NURL standard library (239 modules)
+│   ├── core/ std/ ext/ net/ dist/ hal/ — the NURL standard library (243 modules)
 │   └── runtime.o, …      — runtime objects (build outputs of build.sh)
-├── formal/                 — Lean 4 mechanized soundness proof (phases A1, A2, A3)
+├── formal/                 — Lean 4 mechanized soundness proof (phases A1–A3 and B; C's verified checker; D under way)
 ├── packages/               — first-party packages published to reg.nurl-lang.org
 ├── examples/               — curated .nu programs (see examples/README.md)
 ├── nurlapi/                — NURL-native container: compiler-as-a-service + playground + MCP

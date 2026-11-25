@@ -1,3 +1,0 @@
-### Fixed
-
-- **The ownership engine and the reference checker no longer hand an owner's old value to a binding the generated code never linked to it** (AGORA-1005). Take `: String k ( idg [String] s )`, then `= s ( … )`, then a read of `k`, where `idg` is generic or defined below the function. The generated code links `k` to nothing, because at the call nothing the callee hands back is known yet. So `= s` frees the old value under `k`. The compiler refused this program, but the engine and the checker accepted it, which is a heap-use-after-free. The core IR now flags such a binding (variable flag 4096, `CORE_VF_UNLINKED`), and both read the flag. A later `=` by name still links the binding, as before. Nothing the compiler accepts or refuses changes.

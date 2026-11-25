@@ -1,3 +1,0 @@
-### Fixed
-
-- **`^ ( pick x p k )`, handing back a call's result that may be a local or a parameter, no longer leaks** (AGORA-1004). The return copies the result on every run on which `pick` lent, because it may be the local `x`. The function's summary still said it lent the parameter `p`, so its caller took the copy for a lend of `p` and never released it. That leaked on every run, also with a third, fresh path and through a caller that binds the result. The summary now says the result is the function's own there. A call whose result is not copied, `^ ( pick p q k )` with two parameters, still lends them, as before. No program's verdict changes.

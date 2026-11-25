@@ -1,3 +1,0 @@
-### Fixed
-
-- **A `% Drop` that may panic now counts as a way out of the function** (AGORA-942). A field of an `inout` parameter that a `sink` took may not stay empty across the release of a value whose destructor may panic. The release can be a temporary, a scope's end, or a `=` over the old value. Likewise, an `inout` parameter may not view a value of the function across such a release. Before, `recover` handed the caller the parameter with the field empty, and its next use read a null handle (a SEGV), or a view of freed memory. Whether a destructor may panic is the module's own answer, so one that cannot panic refuses nothing.

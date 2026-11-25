@@ -660,7 +660,8 @@ new language features.
   #267, a field read out of an element borrow; #274, a moved owner as a
   block arm's tail; #279, a payload lent out of a local Vec through a
   nested match; and the common shapes of #242, a join bound by `:` and
-  handed on by name. The open ones are listed, each with a fix in progress, in
+  handed on by name, whose last shapes closed in 0.95.0. A hole found open
+  is listed, with its fix in progress, in
   [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
 - [ ] **Mechanized soundness proof** ([`formal/`](formal/README.md)) —
   phases A1 (the core calculus), A2 (structs, enums, closures and trait
@@ -671,8 +672,13 @@ new language features.
   objects across threads, module globals, data-race freedom) are proven in
   Lean 4 (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`,
   `A2.no_leak_panic`, `A3.claim_full`, `A3.claim_made_full`), building without a
-  warning on Lean 4.35. Open: B (the standard library's `unsafe` base), C (nurlc
-  implements the rules, by certificate) and D (code generation).
+  warning on Lean 4.35. B (the standard library's `unsafe` base) has a
+  proven model of each piece it names (B1–B9); C (nurlc implements the
+  rules, by certificate) has a verified checker for A1–A3 and per-program
+  certificates (`nurl --certify` / `nurl verify`, with the translation from
+  the core IR still trusted); D (code generation) is under way, by
+  translation validation of the drops and the panic journal (D0–D2). Open:
+  C for every program nurlc accepts, and the rest of D.
 
 ### Evidence for the "LLM-native" thesis
 

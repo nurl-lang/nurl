@@ -546,7 +546,9 @@ error when a stack reference reaches:
   detaches it: a thread or a fiber (`thread_spawn`, `thread_spawn_owned`,
   `spawn`, `spawn_owned`, `spawn_joinable`) or `signal_install`
   (h503–h505),
-- an assignment into a binding of a longer-lived scope.
+- an assignment into a binding of a longer-lived scope, or into an
+  `inout` parameter or a field of one: storage the caller holds
+  (AGORA-1001).
 
 ```text
 error: returning a value that references a stack binding by pointer
@@ -2764,8 +2766,10 @@ are dropped, moved and copied by the same rules:
   handed `s` `inout` ends it only when it may replace that field. A store
   replacing that very field hands the binding the value it held, and a
   `sink` handed the binding takes the field over (a String, Vec or
-  handle field, emptied where it lives). A String or a Vec left empty is
-  still one; a library handle field left empty holds none, so a binding
+  handle field, emptied where it lives). The field is then moved, as one
+  handed to the `sink` directly is (§2.1): using it is an error until it
+  is given a new value (AGORA-991). A library handle field left empty
+  holds none, so a binding
   read out of one takes its struct along when it is consumed — handed to
   a `sink`, or to another thread — and reading the struct after is an
   error until it is given a fresh value (h348, h356).

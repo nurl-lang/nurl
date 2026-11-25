@@ -1,3 +1,0 @@
-### Changed
-
-- **In the formal proof, a parameter now holds its region by its handle rather than as a view** (AGORA-937). A parameter that holds views holds a region, which stands for what the caller's argument holds. The proof now records the region by its handle (`⟨π p, .self⟩` instead of `⟨π p, .view⟩`). When a call is placed in the caller, composing kinds then gives back each of the argument's dependencies in its own way. Before, an argument's dependency on a handle came back as a view. Every kill that spares a view also spares a handle, so no rule changes and nothing changes in nurlc. The proof is complete with no theorem weakened.
