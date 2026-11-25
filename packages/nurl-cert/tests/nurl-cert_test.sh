@@ -159,6 +159,10 @@ fresh; edit_manifest 'm["tool"]["name"] = "some-other-tool"'
 expect_fail "a fixed value changed (tool.name)" "every member is the schema's"
 fresh; edit_manifest 'm["hashes"]["extra"] = "x"'
 expect_fail "a member added (hashes.extra)" "every member is the schema's"
+fresh; edit_manifest 'm["coverage"]["bad"] = -1'
+expect_fail "a negative coverage count" "every member is the schema's"
+fresh; edit_manifest 'm["program"]["slots"] = 1.5'
+expect_fail "a fractional slot count" "every member is the schema's"
 fresh; edit_manifest 'm["coverage"]["functions"][0]["name"] = None'
 expect_fail "a coverage row's string field made null" "every member is the schema's"
 

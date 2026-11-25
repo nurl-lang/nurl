@@ -93,7 +93,7 @@ $ `stdlib/std/random.nu`
 // each path into `paths` and the sha256 of the bytes nurlc compiled into
 // `shas`. F when a record is cut short. A line a diagnostic quotes from a
 // source cannot pass for a record: TAG is fresh and random per run.
-@ __ct_records String err s tag ( Vec String ) paths ( Vec String ) shas → b {
+@ cert_records String err s tag ( Vec String ) paths ( Vec String ) shas → b {
     : String head ( string_from `source:` )
     ( string_push_str head tag )
     ( string_push_str head ` ` )
@@ -376,7 +376,7 @@ $ `stdlib/std/random.nu`
     // need not be: the recorded hash is still of the compiled bytes.
     : ( Vec String ) sources ( vec_new [String] )
     : ( Vec String ) shas ( vec_new [String] )
-    ? ! ( __ct_records . r1 err ( string_data tag ) sources shas ) { ^ ( __ct_fail `nurlc's list of sources is cut short` ) } {}
+    ? ! ( cert_records . r1 err ( string_data tag ) sources shas ) { ^ ( __ct_fail `nurlc's list of sources is cut short` ) } {}
     ? == 0 ( vec_len [String] sources ) { ^ ( __ct_fail `nurlc listed no sources` ) } {}
     : ( Vec String ) disk ( __ct_hash_all sources )
     ? ! ( cert_same shas disk ) {

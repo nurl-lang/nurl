@@ -255,12 +255,31 @@ $ `certify.nu`
         ?? ( env_chdir ( string_data . o stdlib ) ) { T _ → {} F _ → {} }
         : ( Vec String ) a1 ( vec_new [String] )
         ( vec_push [String] a1 ( string_from `--emit-core` ) )
+        : String tag ( rand_hex_str 16 )
+        : String tag_arg ( string_from `--list-sources=` )
+        ( string_push_str tag_arg ( string_data tag ) )
+        ( vec_push [String] a1 tag_arg )
         ( vec_push [String] a1 ( string_clone src ) )
         : Run r1 ( nc_run ( string_data . o nurlc ) a1 )
         ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
         : String core_have ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
         ( __vf_check t & & . r1 started == . r1 code 0 ( string_eq . r1 out core_have )
         `--rebuild: nurlc makes Program.core from the sources again` `` )
+        // and the bytes that compile read are the recorded ones: the hashes
+        // of its own snapshots, in the same run, against the manifest's
+        : ( Vec String ) rp ( vec_new [String] )
+        : ( Vec String ) rs ( vec_new [String] )
+        : b rec_ok ( cert_records . r1 err ( string_data tag ) rp rs )
+        : ( Vec String ) mp ( vec_new [String] )
+        : ( Vec String ) ms ( vec_new [String] )
+        : ~ i q 0
+        ~ ( __vf_has m ( string_data ( __vf_path `hashes.sources.` q `` ) ) ) {
+            ( vec_push [String] mp ( mj_get_str m ( string_data ( __vf_path `hashes.sources.` q `.path` ) ) ) )
+            ( vec_push [String] ms ( mj_get_str m ( string_data ( __vf_path `hashes.sources.` q `.sha256` ) ) ) )
+            = q + q 1
+        }
+        ( __vf_check t & & rec_ok ( cert_same rp mp ) ( cert_same rs ms )
+        `--rebuild: the compile read exactly the recorded source bytes` `` )
         : String plp ( nc_join bundle `Program.lean` )
         ? ( file_exists ( string_data plp ) ) {
             : Translated tr ( cert_translate ( string_data . o tolean ) ( string_data ( nc_join bundle `Program.core` ) ) )
@@ -322,7 +341,7 @@ $ `certify.nu`
     ? ! ( nc_is ( mj_get_str m `tool.name` ) `nurl-cert` ) { ( string_push_str bad `tool.name ` ) } {}
     ( __vf_strings m `tool.version program.source program.verdict program.reason hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain` bad )
     ? ! ( __vf_enum ( mj_get_str m `program.verdict` ) `accepted refused unsupported error` ) { ( string_push_str bad `program.verdict ` ) } {}
-    ? ! ?? ( json_get m `program.slots` ) { T j → ( json_is_num j ) F → F } { ( string_push_str bad `program.slots ` ) } {}
+    ? ! ?? ( json_get m `program.slots` ) { T j → ( __vf_count j ) F → F } { ( string_push_str bad `program.slots ` ) } {}
     ( __vf_sha m `hashes.core_ir` T bad )
     ( __vf_sha m `hashes.llvm_ir` F bad )
     ( __vf_sha m `hashes.program_lean` F bad )
@@ -373,7 +392,7 @@ $ `certify.nu`
                 ? ( nc_is key `functions` ) { = has_fns T } {
                     : String kp ( string_from `coverage.` )
                     ( string_push_str kp ( string_data key ) )
-                    ? ! ?? ( json_get m ( string_data kp ) ) { T j → ( json_is_num j ) F → F } {
+                    ? ! ?? ( json_get m ( string_data kp ) ) { T j → ( __vf_count j ) F → F } {
                         ( string_push_str bad ( string_data kp ) )
                         ( string_push_str bad ` ` )
                     } {}
@@ -592,4 +611,21 @@ $ `certify.nu`
         ( string_push_str bad path )
         ( string_push_str bad ` ` )
     } {}
+}
+
+// A count: a JSON number that is a nonnegative integer (digits only, as
+// the schema's `integer, minimum 0`; no sign, fraction or exponent).
+@ __vf_count Json j → b {
+    ? ! ( json_is_num j ) { ^ F } {}
+    : String txt ( json_stringify j )
+    : ( Slice u ) tv ( slice_of_str ( string_data txt ) )
+    : i n ( slice_len [u] tv )
+    ? == n 0 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte tv k )
+        ? | < c 48 > c 57 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
 }
