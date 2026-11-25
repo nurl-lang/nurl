@@ -20,6 +20,7 @@ import C.A2Glue
 import C.DedupWitness
 import C.Cert
 import C.Cert3
+import C.Elab
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
@@ -44,4 +45,6 @@ boolean (`certOK2B`), and A2's memory safety and leak freedom for it
 `packages/nurl-cert` instantiates with its program's term. C14, a threaded
 program's (`C/Cert3.lean`, AGORA-1020): `certOK3B` adds A3's conditions
 (the spawned functions, no module global), and `cert3_safe`, `cert3_race`
-and `cert3_leak` give A3's claim on every interleaving from the entry. -/
+and `cert3_leak` give A3's claim on every interleaving from the entry.
+`C/Elab.lean` (AGORA-1029): the core IR as words (`C.Elab.IR`) and its
+reader, in the kernel, the first part of building the term inside it. -/
