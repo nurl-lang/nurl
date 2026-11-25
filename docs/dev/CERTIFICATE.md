@@ -67,10 +67,33 @@ The proofs are one line each. `formal/C/Cert.lean` (C13) gives
 The kernel profile adds no axiom: `#print axioms` lists only `propext`,
 `Classical.choice` and `Quot.sound`.
 
-`M.race` (A3's data-race freedom) is not claimed yet. A program that
-spawns a thread or has globals is not translated at all. A3's claim
-(`C.checked_claim_made_full`) needs the spawn list and the declarations in
-the term, and the translator does not put them there yet (AGORA-1020).
+**A threaded program** (one that calls `thread_spawn_owned`) is certified
+against A3, since A2 has no threads (AGORA-1020). Program.lean then ends
+with `def spawns : List Nat := [...]`, the spawned functions, and
+Claims.lean imports `C.Cert3` and proves three claims over every
+interleaving of its threads, from `C.certOK3B P spawns entry 1`
+(`formal/C/Cert3.lean`, C14):
+
+```lean
+theorem Cert.m_safe : ∀ C, A3.Reach P (fun f => decide (f ∈ spawns)) (A3.Cfg.init entry 1) C →
+    ∀ (i : Nat) (t : A3.Thread), C.ths[i]? = some t → ¬ A2.Stuck P (C.view t) t.s
+theorem Cert.m_leak : ∀ C, A3.Reach … C → (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false
+theorem Cert.m_race : ∀ C, A3.Reach … C → ¬ A3.Race P C
+```
+
+- `M.race` rests on one more ledger row, `drf-sc`: the C11 / LLVM memory
+  model's guarantee that a race-free program behaves sequentially
+  consistently. It is cited, not mechanized.
+- A spawn is A3's spawn-only call of a wrapper function. The wrapper takes
+  the closure over (class `send`: its environment holds no view and no
+  binding by name) and calls it.
+- The join is a read. Modelling no join only adds interleavings, so the
+  claims hold all the more with it.
+- `thread_spawn_owned` gives the thread its own copy of the environment.
+  The translation moves it instead, which is stricter: a program that uses
+  the closure again after spawning it is refused. That is a precision gap,
+  never a hole.
+- Module globals are not translated yet: such a program is `unsupported`.
 
 ## 2. The bundle
 
@@ -141,7 +164,7 @@ tool        { name, version }
 profile     "kernel" | "fast"
 program     { source, verdict: accepted | refused | unsupported | error, reason, slots }
 claims      [ { id, lean, status, sentence { en, fi }, reason, axioms [..], premises [ledger ids] } ]
-            M.safe, M.leak, then M.unsafe, in this order
+            M.safe, M.leak, (a threaded program) M.race, then M.unsafe, in this order
 coverage    { functions: [ { name, file, line, status, reason } ], <status>: count }
 hashes      { sources: [ { path, sha256 } ], core_ir, llvm_ir?, program_lean?, claims_lean?,
               binary?: { path, sha256 } }
@@ -183,6 +206,7 @@ One row per thing the claims rest on and do not prove:
 | `translation` | the step from source to term: `nurlc --emit-core`, then nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`; AGORA-1020 takes it out of the trusted path) |
 | `library-summaries` | the standard library as the term has it, A2 primitives and declared summaries; the models follow the library by inspection (AGORA-1014) |
 | `llvm`, `linker`, `os`, `c-runtime` | the path from the IR to a running binary |
+| `drf-sc` | (a threaded program) the C11 / LLVM memory model's DRF-SC guarantee, for `M.race` |
 | `unsafe-report` | `M.unsafe` is what nurlc's `--unsafe-report` says |
 | `unsafe-<n>` | one row per line of that report: each `unsafe` function, `unsafe % Send` / `% Sync` assertion and foreign-declaration claim of the program |
 

@@ -151,15 +151,109 @@ expect_internal "an end with no block open" "$TMP/r2b.core" "malformed block: ma
 awk '/^fn\tmain\t/{m=1} m && /^scope$/ && !d {print; print "scope"; print "end"; d=1; next} {print}' "$TMP/s.core" > "$TMP/r2c.core"
 rc=$(tl "$TMP/r2c.core"); [ "$rc" = 0 ] && ok "an empty scope translates" || bad "an empty scope translates (exit $rc)"
 
+# Deliberately stricter than tolean.py too (`malformed`): counts below 0,
+# a function left open, ids below 0, kinds outside 0-3.
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t-1\tV\t0\n'; } > "$TMP/q1.core"
+expect_internal "a ty line's field count -1" "$TMP/q1.core" "malformed: a ty line's field count below 0"
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t0\tV\t0\n'; } > "$TMP/q1b.core"
+rc=$(tl "$TMP/q1b.core"); [ "$rc" = 0 ] && ok "a ty line's field count 0 reads" || bad "a ty line's field count 0 reads (exit $rc)"
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t-2\tF\t0\tV\t0\n'; } > "$TMP/q1c.core"
+expect_internal "a ty line's type-argument count -2" "$TMP/q1c.core" "malformed: a ty line's type-argument count below 0"
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t0\tV\t2\tA\t0\n'; } > "$TMP/q1d.core"
+expect_internal "a ty line with fewer variants than it counts" "$TMP/q1d.core" "malformed: a ty line with fewer variants than it counts"
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t0\tV\t1\tA\t-1\n'; } > "$TMP/q1e.core"
+expect_internal "a variant's payload count -1" "$TMP/q1e.core" "malformed: a variant's payload count below 0"
+sed 's/^fn\tmain\ti64\t0/fn\tmain\ti64\t-1/' "$TMP/s.core" > "$TMP/q2.core"
+expect_internal "a parameter count -1" "$TMP/q2.core" "malformed: an fn line's parameter count below 0"
+sed -n 6p "$TMP/s.core" | grep -qx endfn || bad "the small program's first endfn is line 6"
+awk 'NR==6 && /^endfn$/ {next} {print}' "$TMP/s.core" > "$TMP/q3.core"
+expect_internal "an fn line while a function is open" "$TMP/q3.core" "malformed: an fn line while function helper is open"
+head -n -1 "$TMP/s.core" > "$TMP/q4.core"
+expect_internal "the input ending inside a function" "$TMP/q4.core" "malformed: the input ends inside function main"
+sed 's/^eval call helper 1 c$/eval call helper -1/' "$TMP/s.core" > "$TMP/q5.core"
+expect_internal "a call that counts -1 operands" "$TMP/q5.core" "malformed operands: main, statement 2: a call that counts -1 operands"
+sed 's/^v\t0\t0\t0\t0/v\t-1\t0\t0\t0/' "$TMP/s.core" > "$TMP/q6.core"
+expect_internal "a variable id -1" "$TMP/q6.core" "malformed: a variable's id below 0"
+sed 's/^v\t0\t0\t0\t0/v\t0\t7\t0\t0/' "$TMP/s.core" > "$TMP/q7.core"
+expect_internal "a variable kind 7" "$TMP/q7.core" "malformed: a variable's kind is not 0 to 3"
+awk '/^fn\tmain\t/{m=1} m && /^ret c$/ {print "let -3 use c"} {print}' "$TMP/s.core" > "$TMP/q8.core"
+expect_internal "a statement's variable id -3" "$TMP/q8.core" "malformed: a variable id below 0"
+
 # A word a statement does not have.
 sed 's/^ret c$/ret/' "$TMP/s.core" > "$TMP/n7.core"
 expect_internal "a ret with no operand word" "$TMP/n7.core" "a word the core IR's statement does not have"
+
+echo "== 1b. threads (A3; beyond tolean.py)"
+# A program that spawns (`thread_spawn_owned`) is translated for A3: the
+# closure of class `send`, a spawn wrapper, `def spawns`, the claim
+# certOK3B. One that spawns nothing is translated as before.
+cat > "$TMP/th1.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+@ main → i {
+    : i n 41
+    : ( @ v ) body \ → v { : i m + n 1 }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    ^ ?? r { T t → ( thread_join t ) F _ → 1 }
+}
+NU
+cat > "$TMP/th2.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/channel.nu`
+@ main → i {
+    : ( Channel i ) ch ( chan_new [i] )
+    : ( Channel i ) tx ( Channel_share [i] ch )
+    : ( @ v ) body \ → v { ( chan_send [i] tx 41 ) }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    : i j ?? r { T t → ( thread_join t ) F _ → 1 }
+    : ?i got ( chan_recv [i] ch )
+    ^ ?? got { T v → + v j F → 0 }
+}
+NU
+# The alias form moves the handle (nurlc: one owner); it is no share.
+cat > "$TMP/th2b.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/channel.nu`
+@ main → i {
+    : ( Channel i ) ch ( chan_new [i] )
+    : ( Channel i ) tx ch
+    : ( @ v ) body \ → v { ( chan_send [i] tx 41 ) }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    ^ ?? r { T t → ( thread_join t ) F _ → 1 }
+}
+NU
+cat > "$TMP/th3.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+$ `stdlib/core/string.nu`
+@ main → i {
+    : String s ( string_from `abc` )
+    : ( @ v ) body \ → v { : i k ( string_len s ) }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    : i n ( string_len s )
+    ^ ?? r { T t → ( thread_join t ) F _ → n }
+}
+NU
+for k in th1 th2 th3; do "$NURLC" --emit-core "$TMP/$k.nu" > "$TMP/$k.core" 2> /dev/null || bad "$k: nurlc --emit-core"; done
+for k in th1 th2; do
+    rc=$(tl "$TMP/$k.core")
+    if [ "$rc" = 0 ] && head -1 "$TMP/out" | grep -qx 'import C.Cert3' && grep -q '^def spawns : List Nat := \[[0-9]' "$TMP/out" \
+        && grep -q 'params := \[(.sink, (.fn \[[0-9]*\] .send))\]' "$TMP/out" && grep -q '(.letcall [0-9]* [0-9]* \[[0-9]*\] ' "$TMP/out" \
+        && grep -qx '#eval certOK3B P spawns entry 1' "$TMP/out" && ! grep -q '@W' "$TMP/out"; then ok "$k: a spawn translates for A3 (wrapper, send class, spawns)"
+    else bad "$k: a spawn translates for A3 (exit $rc)"; sed 's/^/        /' "$TMP/err" | head -3; fi
+done
+grep -q '(.lockClone ' "$TMP/out" && ok "th2: Channel_share is a new share (lockClone)" || bad "th2: Channel_share is a new share (lockClone)"
+"$NURLC" --emit-core "$TMP/th2b.nu" > "$TMP/th2b.core" 2> /dev/null || bad "th2b: nurlc --emit-core"
+"$CERT" translate "$TMP/th2b.core" > "$TMP/th2b.out" 2>&1
+if grep -q '(.lockClone ' "$TMP/th2b.out"; then bad "th2b: a channel bound from another binding moves (no lockClone)"
+else ok "th2b: a channel bound from another binding moves (no lockClone)"; fi
+expect_unsupported "a spawned closure capturing a String by name" "$TMP/th3.core" "__closure_1: a spawned closure capturing s by name"
 
 echo "== 2. the reference (tools/ncore/tolean.py)"
 if command -v python3 > /dev/null; then
     n=0; same=0
     for f in tools/ncore/certify/*.nu; do
         k=$(basename "$f" .nu)
+        # a threaded program is beyond tolean.py (A3, part 1b above)
+        case "$k" in thread_*) continue ;; esac
         "$NURLC" --emit-core "$f" > "$TMP/$k.core" 2> /dev/null || { bad "$k: nurlc --emit-core"; continue; }
         n=$((n + 1))
         python3 tools/ncore/tolean.py "$TMP/$k.core" > "$TMP/$k.py.out" 2> "$TMP/$k.py.err"; prc=$?

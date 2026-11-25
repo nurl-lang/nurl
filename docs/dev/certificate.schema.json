@@ -4,127 +4,342 @@
   "title": "nurl-cert/1 manifest",
   "description": "manifest.json of a NURL certificate bundle (docs/dev/CERTIFICATE.md, AGORA-1019).",
   "type": "object",
-  "required": ["schema", "tool", "profile", "program", "claims", "coverage", "hashes", "versions", "ledger"],
+  "required": [
+    "schema",
+    "tool",
+    "profile",
+    "program",
+    "claims",
+    "coverage",
+    "hashes",
+    "versions",
+    "ledger"
+  ],
   "additionalProperties": false,
   "$defs": {
-    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "status": { "enum": ["proved", "validated", "assumed", "open", "refuted", "not-claimed"] },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "status": {
+      "enum": [
+        "proved",
+        "validated",
+        "assumed",
+        "open",
+        "refuted",
+        "not-claimed"
+      ]
+    },
     "claim": {
       "type": "object",
-      "required": ["id", "lean", "status", "sentence", "reason", "axioms", "premises"],
+      "required": [
+        "id",
+        "lean",
+        "status",
+        "sentence",
+        "reason",
+        "axioms",
+        "premises"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^[MFNB]\\.[A-Za-z0-9_.]+$" },
-        "lean": { "type": "string", "description": "the theorem's Lean name; empty for a claim no theorem states" },
-        "status": { "$ref": "#/$defs/status" },
+        "id": {
+          "type": "string",
+          "pattern": "^[MFNB]\\.[A-Za-z0-9_.]+$"
+        },
+        "lean": {
+          "type": "string",
+          "description": "the theorem's Lean name; empty for a claim no theorem states"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
         "sentence": {
           "type": "object",
-          "required": ["en", "fi"],
+          "required": [
+            "en",
+            "fi"
+          ],
           "additionalProperties": false,
-          "properties": { "en": { "type": "string" }, "fi": { "type": "string" } }
+          "properties": {
+            "en": {
+              "type": "string"
+            },
+            "fi": {
+              "type": "string"
+            }
+          }
         },
-        "reason": { "type": "string" },
-        "axioms": { "type": "array", "items": { "type": "string" } },
-        "premises": { "type": "array", "items": { "type": "string" }, "description": "ledger row ids" }
+        "reason": {
+          "type": "string"
+        },
+        "axioms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "premises": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "ledger row ids"
+        }
       }
     },
     "row": {
       "type": "object",
-      "required": ["id", "what", "why", "where", "vouches", "claims"],
+      "required": [
+        "id",
+        "what",
+        "why",
+        "where",
+        "vouches",
+        "claims"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string" },
-        "what": { "type": "string" },
-        "why": { "type": "string" },
-        "where": { "type": "string" },
-        "vouches": { "type": "string" },
-        "claims": { "type": "array", "items": { "type": "string" } }
+        "id": {
+          "type": "string"
+        },
+        "what": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        },
+        "vouches": {
+          "type": "string"
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "file": {
       "type": "object",
-      "required": ["path", "sha256"],
+      "required": [
+        "path",
+        "sha256"
+      ],
       "additionalProperties": false,
-      "properties": { "path": { "type": "string" }, "sha256": { "$ref": "#/$defs/sha256" } }
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
     }
   },
   "properties": {
-    "schema": { "const": "nurl-cert/1" },
+    "schema": {
+      "const": "nurl-cert/1"
+    },
     "tool": {
       "type": "object",
-      "required": ["name", "version"],
-      "additionalProperties": false,
-      "properties": { "name": { "const": "nurl-cert" }, "version": { "type": "string" } }
-    },
-    "profile": { "enum": ["kernel", "fast"] },
-    "program": {
-      "type": "object",
-      "required": ["source", "verdict", "reason", "slots"],
+      "required": [
+        "name",
+        "version"
+      ],
       "additionalProperties": false,
       "properties": {
-        "source": { "type": "string" },
-        "verdict": { "enum": ["accepted", "refused", "unsupported", "error"] },
-        "reason": { "type": "string" },
-        "slots": { "type": "integer", "minimum": 0 }
+        "name": {
+          "const": "nurl-cert"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "profile": {
+      "enum": [
+        "kernel",
+        "fast"
+      ]
+    },
+    "program": {
+      "type": "object",
+      "required": [
+        "source",
+        "verdict",
+        "reason",
+        "slots"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "accepted",
+            "refused",
+            "unsupported",
+            "error"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "slots": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "claims": {
       "type": "array",
-      "items": { "$ref": "#/$defs/claim" },
+      "items": {
+        "$ref": "#/$defs/claim"
+      },
       "minItems": 3,
-      "maxItems": 3,
+      "maxItems": 4,
       "prefixItems": [
-        { "properties": { "id": { "const": "M.safe" }, "lean": { "const": "Cert.m_safe" } } },
-        { "properties": { "id": { "const": "M.leak" }, "lean": { "const": "Cert.m_leak" } } },
-        { "properties": { "id": { "const": "M.unsafe" }, "lean": { "const": "" }, "status": { "enum": ["assumed", "open"] } } }
-      ]
+        {
+          "properties": {
+            "id": {
+              "const": "M.safe"
+            },
+            "lean": {
+              "const": "Cert.m_safe"
+            }
+          }
+        },
+        {
+          "properties": {
+            "id": {
+              "const": "M.leak"
+            },
+            "lean": {
+              "const": "Cert.m_leak"
+            }
+          }
+        }
+      ],
+      "description": "M.safe, M.leak, then (a threaded program) M.race, then M.unsafe"
     },
     "coverage": {
       "type": "object",
-      "required": ["functions"],
+      "required": [
+        "functions"
+      ],
       "properties": {
         "functions": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["name", "file", "line", "status", "reason"],
+            "required": [
+              "name",
+              "file",
+              "line",
+              "status",
+              "reason"
+            ],
             "additionalProperties": false,
             "properties": {
-              "name": { "type": "string" },
-              "file": { "type": "string" },
-              "line": { "type": "string" },
-              "status": { "enum": ["proved", "validated", "open", "refused", "unsupported", "error"] },
-              "reason": { "type": "string" }
+              "name": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "proved",
+                  "validated",
+                  "open",
+                  "refused",
+                  "unsupported",
+                  "error"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         }
       },
-      "additionalProperties": { "type": "integer", "minimum": 0 }
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
     },
     "hashes": {
       "type": "object",
-      "required": ["sources", "core_ir"],
+      "required": [
+        "sources",
+        "core_ir"
+      ],
       "additionalProperties": false,
       "properties": {
-        "sources": { "type": "array", "items": { "$ref": "#/$defs/file" }, "minItems": 1 },
-        "core_ir": { "$ref": "#/$defs/sha256" },
-        "llvm_ir": { "$ref": "#/$defs/sha256" },
-        "program_lean": { "$ref": "#/$defs/sha256" },
-        "claims_lean": { "$ref": "#/$defs/sha256" },
-        "binary": { "$ref": "#/$defs/file" }
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/file"
+          },
+          "minItems": 1
+        },
+        "core_ir": {
+          "$ref": "#/$defs/sha256"
+        },
+        "llvm_ir": {
+          "$ref": "#/$defs/sha256"
+        },
+        "program_lean": {
+          "$ref": "#/$defs/sha256"
+        },
+        "claims_lean": {
+          "$ref": "#/$defs/sha256"
+        },
+        "binary": {
+          "$ref": "#/$defs/file"
+        }
       }
     },
     "versions": {
       "type": "object",
-      "required": ["nurlc", "formal_tree", "formal_commit", "lean_toolchain"],
+      "required": [
+        "nurlc",
+        "formal_tree",
+        "formal_commit",
+        "lean_toolchain"
+      ],
       "additionalProperties": false,
       "properties": {
-        "nurlc": { "type": "string" },
-        "formal_tree": { "$ref": "#/$defs/sha256" },
-        "formal_commit": { "type": "string" },
-        "lean_toolchain": { "type": "string" }
+        "nurlc": {
+          "type": "string"
+        },
+        "formal_tree": {
+          "$ref": "#/$defs/sha256"
+        },
+        "formal_commit": {
+          "type": "string"
+        },
+        "lean_toolchain": {
+          "type": "string"
+        }
       }
     },
-    "ledger": { "type": "array", "items": { "$ref": "#/$defs/row" }, "minItems": 1 }
+    "ledger": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/row"
+      },
+      "minItems": 1
+    }
   }
 }

@@ -11,7 +11,8 @@
 #
 #  1. The certify programs (tools/ncore/certify/*.nu): each one whose name
 #     does not end in _refused gets a bundle whose M.safe and M.leak are
-#     `proved` under the kernel profile, and that bundle verifies; each
+#     `proved` under the kernel profile (a thread_* one M.race too, from
+#     A3's claim), and that bundle verifies; each
 #     *_refused one is refused (exit 3), its bundle has no Claims.lean and
 #     no claim above `open`, and it verifies as such.
 #  2. Tampering: a fresh bundle verifies, and `verify` fails, naming the
@@ -58,8 +59,10 @@ one() {
                 echo "ok $n refused"
             else echo "FAIL $n: expected refused (certify rc $rc, verify rc $vrc)"; fi ;;
         *)
+            race=ok
+            case "$n" in thread_*) grep -q "M.race proved" "$d/certify.out" || race=missing ;; esac
             if [ "$rc" = 0 ] && [ "$vrc" = 0 ] && grep -q "M.safe proved" "$d/certify.out" \
-                && grep -q "M.leak proved" "$d/certify.out"; then
+                && grep -q "M.leak proved" "$d/certify.out" && [ "$race" = ok ]; then
                 echo "ok $n accepted"
             else echo "FAIL $n: expected M.safe and M.leak proved (certify rc $rc, verify rc $vrc)"; fi ;;
     esac

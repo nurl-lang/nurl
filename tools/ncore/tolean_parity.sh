@@ -17,7 +17,14 @@
 # NURL translator refuses (`internal: malformed …`) a statement whose
 # operand count exceeds its operand words, and a block with no `end` (or a
 # closer out of place), which tolean.py reads; nurlc prints neither, so the
-# corpus sees no difference from them.
+# corpus sees no difference from them. Nor (coreir.nu) a core IR record
+# malformed in shape: a count below 0, a function left open, a variable id
+# below 0 or a kind outside 0-3.
+#
+# Beyond tolean.py: a program that spawns (`call thread_spawn_owned` in a
+# function of its own) is translated for A3 (docs/dev/CERTIFICATE.md),
+# which tolean.py does not do. Such programs are counted apart ("threaded")
+# and their outcomes listed, not compared; every other program must match.
 #
 # Env: NURLC (default build/nurlc), NURL_CERT (default build/nurl-cert),
 #      JOBS (default nproc), PARITY_DIR (keep the work there; default a
@@ -70,10 +77,16 @@ class() {   # class DIR K: ok | unsupported | other
     elif [ "$rc" = 2 ] && head -c 13 "$1/$2.err" | grep -q '^unsupported: '; then echo unsupported
     else echo "other(rc $rc)"; fi
 }
-n_ok=0; n_uns=0; n_other=0; n_diff=0
-: > "$W/diffs.txt"
+n_ok=0; n_uns=0; n_other=0; n_diff=0; n_thr=0
+: > "$W/diffs.txt"; : > "$W/threaded.txt"
 while read -r k; do
     p=$(cat "$W/core/$k.path")
+    if awk -F'\t' '/^fn\t/{p=($6 !~ /^stdlib\//)} p && / call thread_spawn_owned /{f=1} END{exit !f}' "$W/core/$k.core"; then
+        n_thr=$((n_thr + 1))
+        printf 'THREADED  %s  tolean.py: %s  nurl: %s%s\n' "$p" "$(class "$W/py" "$k")" "$(class "$W/nu" "$k")" \
+            "$( [ "$(cat "$W/nu/$k.rc")" = 0 ] || printf '  (%s)' "$(head -1 "$W/nu/$k.err")")" >> "$W/threaded.txt"
+        continue
+    fi
     cp_=$(class "$W/py" "$k"); cn=$(class "$W/nu" "$k")
     why=""
     if [ "$cp_" != "$cn" ]; then why="class: python $cp_, nurl $cn"
@@ -91,12 +104,14 @@ while read -r k; do
 done < "$W/ok.txt"
 
 cat "$W/diffs.txt"
+cat "$W/threaded.txt"
 echo "programs:          $nprog"
 echo "nurlc failed:      $nfail"
 echo "core IR made:      $ncore"
 echo "  translated (ok): $n_ok"
 echo "  unsupported:     $n_uns"
 echo "  other (python):  $n_other"
+echo "threaded (A3):     $n_thr (not compared)"
 echo "differences:       $n_diff"
 LC_ALL=C printf 'time, %s jobs: tolean.py %.2f s, nurl-cert translate %.2f s\n' "$JOBS" \
     "$(echo "$t1 - $t0" | bc)" "$(echo "$t2 - $t1" | bc)"

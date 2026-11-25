@@ -92,7 +92,12 @@ $ `certify.nu`
     ( __vf_check t ( nc_is schema CERT_SCHEMA ) `the manifest's schema is nurl-cert/1` ( string_data schema ) )
     : String prof ( mj_get_str m `profile` )
     ( __vf_check t ( cert_profile_ok ( string_data prof ) ) `the profile is kernel or fast` ( string_data prof ) )
-    ( __vf_structure t m ( string_data prof ) )
+    // A threaded program's claims are A3's (one more, M.race): it is
+    // threaded when its Program.lean, held to the grammar, names spawns.
+    : String ptext0 ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → ( string_new ) }
+    : ShapeRes sh0 ( cert_shape ( string_data ptext0 ) )
+    : b threads & . sh0 ok . sh0 threads
+    ( __vf_structure t m ( string_data prof ) threads )
 
     // The sources.
     : ~ i k 0
@@ -147,7 +152,7 @@ $ `certify.nu`
 
     // The claims.
     : String verdict ( mj_get_str m `program.verdict` )
-    : i nclaims ( cert_claim_count )
+    : i nclaims ( cert_claim_count threads )
     : String claims_path ( nc_join bundle `Claims.lean` )
     ? ( nc_is verdict `accepted` ) {
         ( __vf_hash t m bundle `Program.lean` `program_lean` )
@@ -157,7 +162,7 @@ $ `certify.nu`
         ( __vf_check t . sh ok `Program.lean only defines the program` ( string_data . sh why ) )
         : i slots ?? ( json_get m `program.slots` ) { T j → ( json_as_int j ) F → -1 }
         ( __vf_check t == slots . sh nv `the claims are stated over the program's slots` `` )
-        : String want ( cert_claims_lean ( string_data prof ) . sh nv )
+        : String want ( cert_claims_lean ( string_data prof ) . sh nv threads )
         : String have ?? ( nc_read ( string_data claims_path ) ) { T x → x F → ( string_new ) }
         ( __vf_check t ( string_eq want have ) `Claims.lean is the claims' template, byte for byte` `its statements or proofs were edited` )
         // Lean, again, and only on files every check above passed: Lean runs
@@ -324,7 +329,7 @@ $ `certify.nu`
 
 @ __vf_has Json m s path → b { ^ ?? ( json_get m path ) { T _ → T F → F } }
 
-@ __vf_structure inout Tally t Json m s prof → v {
+@ __vf_structure inout Tally t Json m s prof b threads → v {
     // the top-level members, exactly
     : ( Vec String ) keys ( json_obj_keys m )
     : ( Vec String ) want ( string_split ( string_from `schema tool profile program claims coverage hashes versions ledger` ) ` ` )
@@ -363,7 +368,7 @@ $ `certify.nu`
         = q + q 1
     }
     ? == q 0 { ( string_push_str bad `hashes.sources ` ) } {}
-    : i ncl + ( cert_claim_count ) 1
+    : i ncl + ( cert_claim_count threads ) 1
     : ~ i c 0
     ~ < c ncl {
         : String cp ( __vf_path `claims.` c `` )
@@ -439,15 +444,14 @@ $ `certify.nu`
     }
     ( __vf_check t == 0 ( string_len bad ) `every member is the schema's, with its required fields and value types` ( string_data bad ) )
     // the claims: the template's, in its order
-    : i nc ( cert_claim_count )
-    : String prem_m ( string_from `lean-kernel claim-definitions translation library-summaries` )
-    ? != 0 ( nurl_str_eq prof `fast` ) { ( string_push_str prem_m ` lean-compiler` ) } {}
+    : i nc ( cert_claim_count threads )
     : ~ b claims_ok T
     : ~ i c 0
     ~ <= c nc {
         : s id ? == c nc `M.unsafe` ( cert_claim_id c )
         : s lean ? == c nc `` ( cert_claim_lean c )
-        : s prem ? == c nc `unsafe-report` ( string_data prem_m )
+        : String prem_c ( cert_claim_premises prof c )
+        : s prem ? == c nc `unsafe-report` ( string_data prem_c )
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.id` ) ) ) id ) { = claims_ok F } {}
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.lean` ) ) ) lean ) { = claims_ok F } {}
         ? == c nc {} {
@@ -480,7 +484,7 @@ $ `certify.nu`
             F → { = more F }
         }
     }
-    : Json lw ( cert_ledger prof urows )
+    : Json lw ( cert_ledger prof urows threads )
     : String lws ( json_stringify lw )
     : String lhs ?? ( json_get m `ledger` ) { T j → ( json_stringify j ) F → ( string_new ) }
     ( __vf_check t ( string_eq lws lhs ) `the trust ledger is the one certify writes (no row dropped or reworded)` `` )

@@ -140,22 +140,27 @@ A2: (kernel) deep recursion detected                2.43 s, 798 MB
 B:  checks                                          1.10 s, 527 MB
 ```
 
+## Threads (done, AGORA-1020)
+
+A program that calls `thread_spawn_owned` is translated for A3 and gets
+`M.race` with `M.safe` and `M.leak` (CERTIFICATE.md §1).
+- The checker's closure literal now takes the class the literal's
+  interface declares, where it fits (`C.packClass`, C8p). A spawned
+  closure's interface is of class `send`; every other closure keeps
+  `any`, so no verdict changed (all 4505 probes compared).
+- One encoding was caught being wrong while this was built: a channel
+  bound from another binding (`: ( Channel i ) tx ch`) had been read as a
+  new share. nurlc moves it (one owner), and with the share reading a
+  program nurlc rejects certified. It is a move again. The program is now
+  a refused certify program (`thread_channel_read_after_an_alias_took_it_refused`).
+  This is the class of error the per-encoding rows above exist for.
+
 ## Next
 
-Both remaining parts stay under AGORA-1020:
-- **Threads and globals (part 1's rest).** nurlc lowers a spawn to a call
-  of `thread_spawn` / `thread_spawn_owned` with a closure, returning a
-  `!Thread ThreadErr` handle that is joined later. A3's spawn is a
-  `letcall` of a function marked spawn-only (`TStep.spawn`). The
-  translator is to map the closure's code to such a function, with its
-  environment moved, the handle to an integer and the join to a read. That
-  is sound because ignoring the join only adds interleavings. Globals
-  become A3's declarations. certify then states `M.race` from
-  `C.checked_claim_made_full`.
-- **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
-  rules over words. Then:
-  - the certificate states its claims about `elab ir`;
-  - `verify` checks the words against `Program.core`;
-  - the per-encoding rows above replace `translation`;
-  - kernel time is measured on the corpus;
-  - `elab`'s parity with the NURL translator is shown over the sweep.
+**`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
+rules over words. Then:
+- the certificate states its claims about `elab ir`;
+- `verify` checks the words against `Program.core`;
+- the per-encoding rows above replace `translation`;
+- kernel time is measured on the corpus;
+- `elab`'s parity with the NURL translator is shown over the sweep.

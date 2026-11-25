@@ -27,11 +27,26 @@
 // (`intrinsic`). Anything else is unsupported, and the program is not
 // emitted.
 //
+// Beyond tolean.py (A3, AGORA-1020): a program that spawns
+// (`thread_spawn_owned` in a function of its own) is translated for A3's
+// checker (`C.certOK3B P spawns entry 1`, formal/C/Cert3.lean): a thread
+// handle and its error enum are integers, a result `{ i1, T, E }` is
+// `sum E T` (the error the first variant, as an option's None), a channel
+// share (`Channel_share`) is A2's `lockClone` (a binding bound from
+// another one moves it, as nurlc says: one owner), and a spawned closure is of class `send`: its captures held by value (numbers,
+// Vecs of numbers, channel shares), none by name. Each closure code spawned
+// gets a spawn wrapper, a function that takes the closure over (`sink`) and
+// calls it; the spawn is a call of the wrapper (A3 runs it as a thread,
+// `def spawns` lists the wrappers), and its result the ok variant around a
+// handle; `thread_join` reads the handle and answers a number. A program
+// that does not spawn is translated exactly as tolean.py translates it.
+//
 // Intentional deviations from tolean.py (fail closed on malformed IR):
 // where tolean.py reads a core IR nurlc never prints as if it were well
 // formed, this translator refuses it (`internal: malformed …`, exit 1 of
 // `nurl-cert translate`), before translating the function:
-// - a statement whose operand count exceeds the operand words it has
+// - a statement whose operand count is below 0 or exceeds the operand
+//   words it has
 //   (`call`, `closure`, `callind`, `scalar`, `agg`), or whose count is not
 //   a number: tolean.py takes the words there are (`eval call f 1` became
 //   a call of no argument), or stops where it first reads the count;
@@ -40,6 +55,10 @@
 //   (an `end` with no block open, an `else` not in an `if`, an `arm` not
 //   in a `match`, a `loopcond` not in a `loop`): tolean.py ran an unclosed
 //   block to the function's end. An empty `scope` … `end` stays valid.
+// - a variable id below 0 in a statement (`malformed: …`), and in the
+//   core IR's records (coreir.nu: a count below 0, a function left open, a
+//   variable's id below 0 or kind outside 0–3, a type's counts past its
+//   line).
 // (A limit, not a choice: a variable id past core_id_max, or a count or
 // parameter number past 64 bits, which tolean.py reads as an unbounded
 // integer, is refused here too.)
@@ -122,7 +141,8 @@ $ `coreir.nu`
     : String x ( __from a k )
     ?? ( core_parse_int ( string_data x ) ) {
         T v → {
-            ? | > v ( core_id_max ) < v - 0 ( core_id_max ) { ( panic `internal: a variable id past the bound the core IR keeps to (2^62)` ) } {}
+            ? > v ( core_id_max ) { ( panic `internal: a variable id past the bound the core IR keeps to (2^62)` ) } {}
+            ? < v 0 { ( panic `internal: malformed: a variable id below 0` ) } {}
             ^ v
         }
         F → {}
@@ -302,6 +322,18 @@ $ `coreir.nu`
     // per program function (closure code): MOVED_CAPS, the captures every
     // literal of it moves into the environment
     ( Vec ( Vec i ) ) moved
+    // A3 (beyond tolean.py): does the program spawn (`thread_spawn_owned`
+    // in a function of its own)? Only then are threads, results, channel
+    // shares and spawned closures translated: a program that does not
+    // spawn is translated exactly as tolean.py translates it.
+    b threaded
+    // per program function: the closure values (core ids) a spawn takes,
+    // through their `use` copies back to their literal, and each one's code
+    ( Vec ( Vec i ) ) sendv
+    ( Vec ( Vec i ) ) sendc
+    // the closure codes spawned (program indices), in the order first seen:
+    // spawn wrapper j is the one of spawned[j]
+    ( Vec i ) spawned
 }
 
 // What the translation changes as it goes: the closure interfaces and the
@@ -330,6 +362,8 @@ $ `coreir.nu`
     b res_own
     ( Vec i ) views
     ( Vec String ) lends
+    // spawn wrapper j's interface (the spawned closure's σ), -1 not yet seen
+    ( Vec i ) wsig
 }
 
 // (temporaries bound before a statement: A2 variable, right-hand side)
@@ -589,6 +623,14 @@ $ `coreir.nu`
     ^ + . t clo_base n
 }
 
+// The interface index of closure type `ty` taken at class `send` (A3: a
+// spawned closure's): an interface of its own, apart from the type's `any`
+// one (clo_list holds it as `send:` + ty).
+@ __clo_index_send inout TlSt t s ty → i {
+    : String k ( __f1 `send:%` ty )
+    ^ ( __clo_index t ( string_data k ) )
+}
+
 // no_clo: a type inside another (an element, a payload, a field, a
 // channel's element) is no closure: nurlc copies a closure stored in a
 // value (`nurl_closure_own_copy`), which the core IR does not show.
@@ -713,6 +755,46 @@ $ `coreir.nu`
     ^ @ !String String { F ( __f1 `a channel of %` ty ) }
 }
 
+// A result's members (`T, E` of `{ i1, T, E }`): the index of the comma
+// between them at the top level, or -1 (an option's one member).
+@ __result_split s inner → i {
+    : ( Slice u ) t ( slice_of_str inner )
+    : i n ( slice_len [u] t )
+    : ~ i d 0
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte t k )
+        ? | == c 123 == c 40 { = d + d 1 } {}
+        ? | == c 125 == c 41 { = d - d 1 } {}
+        ? & & == d 0 == c 44 < + k 1 n { ? == ( slice_byte t + k 1 ) 32 { ^ k } {} } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
+// Is `ty` a result type (`{ i1, T, E }`)?
+@ __is_result s ty → b {
+    ? ! & ( __sw ty `{ i1, ` ) ( __ew ty ` }` ) { ^ F } {}
+    : String inner ( __sl ty 6 -2 )
+    ^ >= ( __result_split ( string_data inner ) ) 0
+}
+
+// %ThreadErr (A3): an enum whose variants carry only numbers, an integer.
+@ __scalar_enum TlMod m s ty → b {
+    : i k ( core_ty_index . m ir ty )
+    ? < k 0 { ^ F } {}
+    : CoreTy ct ( vec_at [CoreTy] . . m ir tys k )
+    ? > ( vec_len [String] . ct ftys ) 0 { ^ F } {}
+    : i n ( vec_len [String] . ct vtys )
+    : ~ i j 0
+    ~ < j n {
+        : s x ( string_data ( vec_at [String] . ct vtys j ) )
+        ? ! | ( __int_ty x ) ( __sc x ) { ^ F } {}
+        = j + j 1
+    }
+    ^ T
+}
+
 // lean_ty: an IR type as an A2 type.
 @ __lean_ty TlMod m inout TlSt t s ty → !String String {
     : String ls ( __lstrip_pct ty )
@@ -739,6 +821,21 @@ $ `coreir.nu`
         : i ci ( __clo_index t ty )
         ^ @ !String String { T ( __f1 `(.fn [%] .any)` ( string_data ( __ns ci ) ) ) }
     } {}
+    ? & & . m threaded ( __sw ty `{ i1, ` ) ( __ew ty ` }` ) {
+        // A3: a result `{ i1, T, E }` is `sum E T`: the error (F) the first
+        // variant, as an option's None, the value (T) the second
+        : String inner ( __sl ty 6 -2 )
+        : i cm ( __result_split ( string_data inner ) )
+        ? >= cm 0 {
+            : String a ( __sl ( string_data inner ) 0 cm )
+            : String e ( __from ( string_data inner ) + cm 2 )
+            \ ( __no_clo ( string_data a ) )
+            \ ( __no_clo ( string_data e ) )
+            : String le \ ( __lean_ty m t ( string_data e ) )
+            : String la \ ( __lean_ty m t ( string_data a ) )
+            ^ @ !String String { T ( __f2 `(.sum % %)` ( string_data le ) ( string_data la ) ) }
+        } {}
+    } {}
     ? & ( __sw ty `{ i1, ` ) ( __ew ty ` }` ) {
         // an option: `sum int t`, None the first variant
         : String inner ( __sl ty 6 -2 )
@@ -749,6 +846,15 @@ $ `coreir.nu`
     // (a type argument's name, inside another: `%Vec__String`)
     : String tt ? ( __sw ty `%` ) ( string_from ty ) ( __pct ty )
     : s t2 ( string_data tt )
+    ? . m threaded {
+        // A3: a thread's handle is an integer (A3 has none: modelling no
+        // join only adds interleavings); its error an enum of numbers
+        ? ( __eq t2 `%Thread` ) { ^ @ !String String { T ( string_from `.int` ) } } {}
+        ? ( __eq t2 `%ThreadErr` ) {
+            ? ! ( __scalar_enum m t2 ) { ^ @ !String String { F ( string_from `type %ThreadErr: an enum holding more than numbers` ) } } {}
+            ^ @ !String String { T ( string_from `.int` ) }
+        } {}
+    } {}
     ? ( __sw t2 `%Vec__` ) {
         : String inner ( __from t2 6 )
         \ ( __no_clo ( string_data inner ) )
@@ -810,21 +916,24 @@ $ `coreir.nu`
 
 // cap_ty: a capture by value's A2 type, where the translation follows it:
 // a number, or a buffer of numbers (a String, a `Vec` of numbers).
-@ __cap_ty TlMod m inout TlSt t s ty → !String String {
+// A3: a spawned closure's capture may also be a channel's share
+// (`lk …`), held by value (the spawned code `q`).
+@ __cap_ty TlMod m inout TlSt t i q s ty → !String String {
     : String lt \ ( __lean_ty m t ty )
     ? | ( __eq ( string_data lt ) `.int` ) ( __eq ( string_data lt ) `(.vec .int)` ) { ^ @ !String String { T lt } } {}
+    ? & & . m threaded ( __in . m spawned q ) ( __sw ( string_data lt ) `(.lk ` ) { ^ @ !String String { T lt } } {}
     ^ @ !String String { F ( __f1 `a capture of type %` ty ) }
 }
 
-@ __by_name TlMod m inout TlSt t s ty → !b String {
-    : String c \ ( __cap_ty m t ty )
+@ __by_name TlMod m inout TlSt t i q s ty → !b String {
+    : String c \ ( __cap_ty m t q ty )
     ^ @ !b String { T ! ( __eq ( string_data c ) `.int` ) }
 }
 
 // named_cap: is capture `k` of closure code `q` one by name? A buffer is,
 // unless its env owns it (CORE_VF_ENVOWN, 2048: AGORA-978).
 @ __named_cap TlMod m inout TlSt t i q i k → !b String {
-    : b bn \ ( __by_name m t ( __vty m q k ) )
+    : b bn \ ( __by_name m t q ( __vty m q k ) )
     ^ @ !b String { T & bn == 0 & ( __vflags m q k ) 2048 }
 }
 
@@ -856,7 +965,7 @@ $ `coreir.nu`
 // (`inp`), or, taken by pointer or changed in place, `inout` at `drop`.
 @ __cap_mode TlMod m inout TlSt t i q i k → !String String {
     ? & == 0 & ( __vflags m q k ) 8 ! ( __changes m q k ) { ^ @ !String String { T ( string_from `.inp` ) } } {}
-    : String c \ ( __cap_ty m t ( __vty m q k ) )
+    : String c \ ( __cap_ty m t q ( __vty m q k ) )
     ? ! ( __eq ( string_data c ) `(.vec .int)` ) { ^ @ !String String { F ( __u m q `a number capture taken by pointer` ) } } {}
     ^ @ !String String { T ( string_from `(.inout .drop)` ) }
 }
@@ -878,14 +987,16 @@ $ `coreir.nu`
 @ __fn_sigma s ty → !i String {
     : ( Slice u ) t ( slice_of_str ty )
     : i n ( slice_len [u] t )
-    ? & ( __sw ty `(.fn [` ) ( __ew ty `] .any)` ) {
+    : b tail_ok | ( __ew ty `] .any)` ) ( __ew ty `] .send)` )
+    : i tl ? ( __ew ty `] .any)` ) 7 8
+    ? & ( __sw ty `(.fn [` ) tail_ok {
         : ~ i k 6
         : ~ i v 0
         ~ & < k n & >= ( slice_byte t k ) 48 <= ( slice_byte t k ) 57 {
             = v + * v 10 - ( slice_byte t k ) 48
             = k + k 1
         }
-        ? & > k 6 == + k 7 n { ^ @ !i String { T v } } {}
+        ? & > k 6 == + k tl n { ^ @ !i String { T v } } {}
     } {}
     ^ @ !i String { F ( __f1 `a call through a value of type %` ty ) }
 }
@@ -1042,6 +1153,22 @@ $ `coreir.nu`
 @ __vlean TlMod m inout TlSt t i k → !String String {
     : s ty ( __vty m . t p k )
     ? & ( __eq ty `i8*` ) ( __in . t views k ) { ^ @ !String String { T ( string_from `(.slice .int)` ) } } {}
+    ? & . m threaded ( __in ( vec_at [( Vec i )] . m sendv . t p ) k ) {
+        // A3: a closure value a spawn takes is of class `send` (its
+        // environment holds no view and nothing by name: `.fn ms .send`)
+        : ( Vec String ) sig ( vec_new [String] )
+        : b isclo \ ( __clo_sig ty sig )
+        ? isclo {
+            : i ns ( vec_len [String] sig )
+            : ~ i j 0
+            ~ < j ns {
+                : String _x \ ( __lean_ty m t ( string_data ( vec_at [String] sig j ) ) )
+                = j + j 1
+            }
+            : i ci ( __clo_index_send t ty )
+            ^ @ !String String { T ( __f1 `(.fn [%] .send)` ( string_data ( __ns ci ) ) ) }
+        } {}
+    } {}
     ^ ( __lean_ty m t ty )
 }
 
@@ -1204,6 +1331,7 @@ $ `coreir.nu`
     : s k ( __rw m t r off 0 )
     : s w1 ? | | | ( __eq k `agg` ) ( __eq k `use` ) ( __eq k `payload` ) ( __eq k `scalar` ) ( __rw m t r off 1 ) ``
     ? & & ( __eq k `agg` ) | ( __eq w1 `T` ) ( __eq w1 `F` ) != dest ( __nil ) {
+        ? & . m threaded ( __is_result ( __vty m p dest ) ) { ^ @ !String String { F ( __u m p `a result literal` ) } } {}
         : String ty \ ( __lean_ty m t ( __vty m p dest ) )
         ? ! ( __sw ( string_data ty ) `(.sum .int ` ) { ^ @ !String String { F ( __u m p ( string_data ( __f1 `aggregate of type %` ( string_data ty ) ) ) ) } } {}
         : String pay ( __sl ( string_data ty ) 11 -1 )
@@ -1222,6 +1350,13 @@ $ `coreir.nu`
     ? & ( __eq k `payload` ) & ( __eq ( __rw m t r off 2 ) `T` ) ( __eq ( __rw m t r off 3 ) `0` ) {
         : i x \ ( __pvar m t w1 )
         ^ @ !String String { T ( __f1 `.getr %` ( string_data ( __ns x ) ) ) }
+    } {}
+    ? & & . m threaded ( __eq k `payload` ) & ( __eq ( __rw m t r off 2 ) `F` ) ( __eq ( __rw m t r off 3 ) `0` ) {
+        // A3: a result's error, its first variant's payload, lent
+        ? & ( __vref w1 ) ( __is_result ( __vtyd m p ( __pint_from w1 1 ) `` ) ) {
+            : i x \ ( __pvar m t w1 )
+            ^ @ !String String { T ( __f1 `.getl %` ( string_data ( __ns x ) ) ) }
+        } {}
     } {}
     ? ( __eq k `none` ) {
         // a slot not yet given a value: only a scalar's is translated
@@ -1415,6 +1550,51 @@ $ `coreir.nu`
     : s f ( __rw m t r off 1 )
     : i n ( __pcount ( __rw m t r off 2 ) )
     : ~ i x x0
+    ? & . m threaded ( __eq f `thread_spawn_owned` ) {
+        // A3: a spawn is a call of the closure code's spawn wrapper (A3
+        // runs a call of a spawned function as a new thread, the call's
+        // temporary set to 0); the closure moves to it (its `sink`
+        // parameter), and the result is the ok variant around a handle
+        ? != n 1 { ^ @ !String String { F ( __u m p `thread_spawn_owned of other than one closure` ) } } {}
+        : s op ( __opw m t r off 3 n 0 )
+        ? ! ( __vref op ) { ^ @ !String String { F ( __u m p ( string_data ( __f1 `a spawn of %` op ) ) ) } } {}
+        : i id ( __pint_from op 1 )
+        : ( Vec i ) sv ( vec_at [( Vec i )] . m sendv p )
+        : ~ i q 0
+        ~ & < q ( vec_len [i] sv ) != ( vec_at [i] sv q ) id { = q + q 1 }
+        ? >= q ( vec_len [i] sv ) { ^ @ !String String { F ( __u m p `a spawned closure whose literal is not in the function` ) } } {}
+        : i code ( vec_at [i] ( vec_at [( Vec i )] . m sendc p ) q )
+        : ~ i wj 0
+        ~ != ( vec_at [i] . m spawned wj ) code { = wj + wj 1 }
+        : String vl \ ( __vlean m t id )
+        : i sigma \ ( __fn_sigma ( string_data vl ) )
+        : i old ( vec_at [i] . t wsig wj )
+        ? & >= old 0 != old sigma { ^ @ !String String { F ( __u m p `a closure code spawned at two closure types` ) } } {}
+        ( vec_put [i] . t wsig wj sigma )
+        : i tt ( __fresh t )
+        : i c \ ( __pvar m t op )
+        : String w ( __f1 `@W%@` ( string_data ( __ns wj ) ) )
+        ? == x ( __nil ) {
+            ^ ( __ok ( __f4 `(.letcall % % [%] %)` ( string_data ( __ns tt ) ) ( string_data w ) ( string_data ( __ns c ) ) rest ) )
+        } {}
+        : i u ( __fresh t )
+        : String e \ ( __lean_ty m t `%ThreadErr` )
+        : String us ( __ns u )
+        : String k2 ( __f4 `(.letv % (.expr (.lit 0)) (.letv % (.inr % %) ` ( string_data us ) ( string_data ( __ns x ) ) ( string_data e ) ( string_data us ) )
+        ^ ( __ok ( __f5 `(.letcall % % [%] %%)))` ( string_data ( __ns tt ) ) ( string_data w ) ( string_data ( __ns c ) ) ( string_data k2 ) rest ) )
+    } {}
+    ? & . m threaded ( __eq f `thread_join` ) {
+        // A3: a join reads the handle (an integer) and answers a number
+        ? != n 1 { ^ @ !String String { F ( __u m p `thread_join of other than one handle` ) } } {}
+        : s op ( __opw m t r off 3 n 0 )
+        ? ! ( __vref op ) { ^ @ !String String { F ( __u m p ( string_data ( __f1 `a join of %` op ) ) ) } } {}
+        : i y \ ( __pvar m t op )
+        : i u ( __fresh t )
+        ? == x ( __nil ) {
+            ^ ( __ok ( __f3 `(.letv % (.expr (.var %)) %)` ( string_data ( __ns u ) ) ( string_data ( __ns y ) ) rest ) )
+        } {}
+        ^ ( __ok ( __f4 `(.letv % (.expr (.var %)) (.letv % (.expr (.lit 0)) %))` ( string_data ( __ns u ) ) ( string_data ( __ns y ) ) ( string_data ( __ns x ) ) rest ) )
+    } {}
     ? & & ( __eq f `nurl_println_int` ) == n 1 == x ( __nil ) {
         // it reads a scalar: nothing of memory to check past the read
         ? ( __isc ( __opw m t r off 3 n 0 ) ) { ^ @ !String String { T ( string_from rest ) } } {}
@@ -1766,11 +1946,14 @@ $ `coreir.nu`
         }
         = j + j 1
     }
+    ? & & . m threaded ( __in . m spawned q ) > ( vec_len [String] named ) 0 {
+        ^ @ !String String { F ( __u m p ( string_data ( __f1 `a spawned closure capturing % by name` ( string_data ( vec_at [String] named 0 ) ) ) ) ) }
+    } {}
     : i nc ( vec_len [String] caps )
     : ( Vec String ) tys ( vec_new [String] )
     = j 0
     ~ < j nc {
-        : String ct \ ( __cap_ty m t ( __vty m p ( __pint_from ( string_data ( vec_at [String] caps j ) ) 1 ) ) )
+        : String ct \ ( __cap_ty m t q ( __vty m p ( __pint_from ( string_data ( vec_at [String] caps j ) ) 1 ) ) )
         ( vec_push [String] tys ct )
         = j + j 1
     }
@@ -2197,7 +2380,7 @@ $ `coreir.nu`
 // 0, lent) at the top of its body: one is the environment, more are its
 // pairs' fields. A number is copied; a buffer is lent from it.
 @ __take TlMod m inout TlSt t i c i src → !String String {
-    : String ct \ ( __cap_ty m t ( __vty m . t p c ) )
+    : String ct \ ( __cap_ty m t . t p ( __vty m . t p c ) )
     ? ( __eq ( string_data ct ) `.int` ) { ^ ( __ok ( __f1 `.expr (.var %)` ( string_data ( __ns src ) ) ) ) } {}
     ^ ( __ok ( __f1 `.var %` ( string_data ( __ns src ) ) ) )
 }
@@ -2295,6 +2478,7 @@ $ `coreir.nu`
                     ^ ( __wf_bad m p `operands` l ( string_data ( __f2 `a % whose operand count is not a number: %` h ( __wd m p l cp ) ) ) )
                 } {}
                 : i n ( __pcount ( __wd m p l cp ) )
+                ? < n 0 { ^ ( __wf_bad m p `operands` l ( string_data ( __f2 `a % that counts % operands` h ( __wd m p l cp ) ) ) ) } {}
                 ? > n - nw + cp 1 {
                     ^ ( __wf_bad m p `operands` l ( string_data ( __f3 `a % that counts % operands and has %` h ( __wd m p l cp ) ( string_data ( __ns - nw + cp 1 ) ) ) ) )
                 } {}
@@ -2357,7 +2541,7 @@ $ `coreir.nu`
         : i nc ( vec_len [i] caps )
         = j 0
         ~ < j nc {
-            : String _c \ ( __cap_ty m t ( __vty m p ( vec_at [i] caps j ) ) )
+            : String _c \ ( __cap_ty m t p ( __vty m p ( vec_at [i] caps j ) ) )
             : String _m \ ( __cap_mode m t p ( vec_at [i] caps j ) )
             = j + j 1
         }
@@ -2382,6 +2566,12 @@ $ `coreir.nu`
             = j + j 1
         }
         : i nn ( vec_len [i] named )
+        ? & & . m threaded ( __in . m spawned p ) > nn 0 {
+            // A3: a spawned closure (class `send`) holds nothing by name
+            : i k0 ( __vix m p ( vec_at [i] named 0 ) )
+            : s cn ( string_data . ( vec_at [CoreVar] . ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) vars k0 ) name )
+            ^ @ !v String { F ( __u m p ( string_data ( __f1 `a spawned closure capturing % by name` cn ) ) ) }
+        } {}
         = j 0
         ~ < j nn { ( vec_put [i] . t vmap ( core_bsearch ids ( vec_at [i] named j ) ) + + 1 np j ) = j + j 1 }
         : ( Vec i ) caps2 ( vec_new [i] )
@@ -2531,7 +2721,7 @@ $ `coreir.nu`
         : i nc ( vec_len [i] caps )
         = j 0
         ~ < j nc {
-            : String ct \ ( __cap_ty m t ( __vty m p ( vec_at [i] caps j ) ) )
+            : String ct \ ( __cap_ty m t p ( __vty m p ( vec_at [i] caps j ) ) )
             ( vec_push [String] ets ct )
             = j + j 1
         }
@@ -2718,6 +2908,113 @@ $ `coreir.nu`
     ^ out
 }
 
+// A3: the spawns of each program function: `call thread_spawn_owned 1 vC`
+// whose closure value vC is, through `let v use w` copies, a literal of
+// the function (`let v closure code …`), no binding of the chain assigned.
+// Every value of the chain goes to sendv (its code to sendc), each code to
+// spawned (once). T when the program spawns at all.
+@ __spawn_scan TlMod m ( Vec ( Vec i ) ) sendv ( Vec ( Vec i ) ) sendc ( Vec i ) spawned → b {
+    : ~ b threaded F
+    : i nf ( vec_len [i] . m prog )
+    : ~ i p 0
+    ~ < p nf {
+        : ( Vec i ) sv ( vec_new [i] )
+        : ( Vec i ) sc ( vec_new [i] )
+        : i nl ( __nl m p )
+        : ~ i l 0
+        ~ < l nl {
+            : i nw ( __nw m p l )
+            : ~ i ap -1
+            ? & & & >= nw 6 ( __eq ( __wd m p l 0 ) `let` ) ( __eq ( __wd m p l 2 ) `call` ) ( __eq ( __wd m p l 3 ) `thread_spawn_owned` ) { = ap 5 } {}
+            ? & & & >= nw 5 ( __eq ( __wd m p l 0 ) `eval` ) ( __eq ( __wd m p l 1 ) `call` ) ( __eq ( __wd m p l 2 ) `thread_spawn_owned` ) { = ap 4 } {}
+            ? >= ap 0 {
+                = threaded T
+                : s op ( __wd m p l ap )
+                ? ( __vref op ) {
+                    : ( Vec i ) chain ( vec_new [i] )
+                    : ~ i id ( __pidx ( string_data ( __from op 1 ) ) )
+                    : ~ i code -1
+                    : ~ i steps 0
+                    : ~ b go T
+                    ~ & go < steps nl {
+                        = steps + steps 1
+                        : String vs ( __ns id )
+                        // the statement that binds it
+                        : ~ i d 0
+                        ~ & < d nl ! & & >= ( __nw m p d ) 3 ( __eq ( __wd m p d 0 ) `let` ) ( __eq ( __wd m p d 1 ) ( string_data vs ) ) { = d + d 1 }
+                        ? >= d nl { = go F } {
+                            ( vec_push [i] chain id )
+                            : s h ( __wd m p d 2 )
+                            ? & & ( __eq h `use` ) == ( __nw m p d ) 4 ( __vref ( __wd m p d 3 ) ) {
+                                = id ( __pidx ( string_data ( __from ( __wd m p d 3 ) 1 ) ) )
+                            } {
+                                ? & ( __eq h `closure` ) >= ( __nw m p d ) 4 { = code ( __mget . m names ( __wd m p d 3 ) ) } {}
+                                = go F
+                            }
+                        }
+                    }
+                    // (no binding of the chain given another value)
+                    : ~ b assigned F
+                    : ~ i d2 0
+                    ~ < d2 nl {
+                        ? & >= ( __nw m p d2 ) 2 ( __eq ( __wd m p d2 0 ) `assign` ) {
+                            : s pl ( __wd m p d2 1 )
+                            : ~ i q 0
+                            ~ < q ( vec_len [i] chain ) {
+                                ? ( __is_v pl ( vec_at [i] chain q ) ) { = assigned T } {}
+                                = q + q 1
+                            }
+                        } {}
+                        = d2 + d2 1
+                    }
+                    ? & >= code 0 ! assigned {
+                        : ~ i q 0
+                        ~ < q ( vec_len [i] chain ) {
+                            ( vec_push [i] sv ( vec_at [i] chain q ) )
+                            ( vec_push [i] sc code )
+                            = q + q 1
+                        }
+                        ? ! ( __in spawned code ) { ( vec_push [i] spawned code ) } {}
+                    } {}
+                } {}
+            } {}
+            = l + l 1
+        }
+        ( vec_push [( Vec i )] sendv sv )
+        ( vec_push [( Vec i )] sendc sc )
+        = p + p 1
+    }
+    ^ threaded
+}
+
+// `@W<j>@` → wrapper j's index, base + j.
+@ __subst_wrappers s text i base → String {
+    : ( Slice u ) t ( slice_of_str text )
+    : i n ( slice_len [u] t )
+    : String o ( string_with_cap + n 16 )
+    : ~ i k 0
+    : ~ i st 0
+    ~ < k n {
+        ? & & == ( slice_byte t k ) 64 < + k 1 n == ( slice_byte t + k 1 ) 87 {
+            : ~ i e + k 2
+            : ~ i v 0
+            ~ & < e n & >= ( slice_byte t e ) 48 <= ( slice_byte t e ) 57 {
+                = v + * v 10 - ( slice_byte t e ) 48
+                = e + e 1
+            }
+            ? & < e n == ( slice_byte t e ) 64 {
+                ( string_push_window o t st - k st )
+                ( string_push_int o + base v )
+                = st + e 1
+                = k e
+            } {}
+        } {}
+        = k + k 1
+    }
+    ( string_push_window o t st - n st )
+    ^ o
+}
+
 // The Lean file of the program in core IR `text` (tolean.py's `emit`), or
 // why it is not translated.
 @ __emit s text → !String String {
@@ -2755,12 +3052,21 @@ $ `coreir.nu`
     : i nfn ( vec_len [i] prog )
     : i main_ix ( __mget names `main` )
     ? < main_ix 0 { ^ @ !String String { F ( string_from `no main` ) } } {}
-    : TlMod m @ TlMod { ir prog names dtor flg sinkp ( vec_new [( Vec i )] ) }
+    : TlMod m @ TlMod { ir prog names dtor flg sinkp ( vec_new [( Vec i )] ) F ( vec_new [( Vec i )] ) ( vec_new [( Vec i )] ) ( vec_new [i] ) }
     : ( Vec ( Vec i ) ) moved ( __moved_caps m )
-    : TlMod mm @ TlMod { . m ir . m prog . m names . m dtor . m flg . m sinkp moved }
+    : TlMod m1 @ TlMod { . m ir . m prog . m names . m dtor . m flg . m sinkp moved F ( vec_new [( Vec i )] ) ( vec_new [( Vec i )] ) ( vec_new [i] ) }
+    : ( Vec ( Vec i ) ) sendv ( vec_new [( Vec i )] )
+    : ( Vec ( Vec i ) ) sendc ( vec_new [( Vec i )] )
+    : ( Vec i ) spawned ( vec_new [i] )
+    : b threaded ( __spawn_scan m1 sendv sendc spawned )
+    : TlMod mm @ TlMod { . m1 ir . m1 prog . m1 names . m1 dtor . m1 flg . m1 sinkp . m1 moved threaded sendv sendc spawned }
+    : ( Vec i ) wsig ( vec_new [i] )
+    : ~ i k1 0
+    ~ < k1 ( vec_len [i] . mm spawned ) { ( vec_push [i] wsig -1 ) = k1 + k1 1 }
     : ~ TlSt t @ TlSt { ( vec_new [String] ) nfn ( vec_new [String] ) 0 0 0 F ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F ( vec_new [i] )
-        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( string_new ) F ( vec_new [i] ) ( vec_new [String] ) }
-    : String out ( string_from `import C.A2Prog\nopen A2 C\n\n` )
+        ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( string_new ) F ( vec_new [i] ) ( vec_new [String] ) wsig }
+    // (A3: a program that spawns is decided by A3's checker, C.Cert3)
+    : ~ String out ( string_from ? threaded `import C.Cert3\nopen A2 C\n\n` `import C.A2Prog\nopen A2 C\n\n` )
     : ~ i p 0
     ~ < p nfn {
         \ ( __fn_init mm t p )
@@ -2778,11 +3084,14 @@ $ `coreir.nu`
     // type, made fresh (a number, or an empty buffer)
     : ~ i kc 0
     ~ < kc ( vec_len [String] . t clo_list ) {
-        : String ty ( string_clone ( vec_at [String] . t clo_list kc ) )
+        : String key ( string_clone ( vec_at [String] . t clo_list kc ) )
+        // (`send:` + a type: its interface at class `send`, A3)
+        : b send ( __sw ( string_data key ) `send:` )
+        : String ty ? send ( __from ( string_data key ) 5 ) ( string_clone key )
         : ( Vec String ) sig ( vec_new [String] )
         : b _c \ ( __clo_sig ( string_data ty ) sig )
         : i sigma + nfn kc
-        : String ps ( __f1 `(.inp, (.fn [%] .any))` ( string_data ( __ns sigma ) ) )
+        : String ps ( __f2 `(.inp, (.fn [%] %))` ( string_data ( __ns sigma ) ) ? send `.send` `.any` )
         : i ns ( vec_len [String] sig )
         : ~ i j 1
         ~ < j ns {
@@ -2812,8 +3121,22 @@ $ `coreir.nu`
         ( string_push_str out ( string_data ( __f4 `%    outHolds := [], body := (.block (.seq (.assign % %) (.exit 0))), nvars := % }\n` ( string_data a ) ( string_data ( __ns rs ) ) ( string_data made ) ( string_data ( __ns + rs 1 ) ) ) ) )
         = kc + kc 1
     }
+    // A3: one spawn wrapper per closure code spawned: it takes the closure
+    // over (`sink`, of its class `send`) and calls it, with no arguments;
+    // A3 runs a call of it as the new thread
+    : i nclo ( vec_len [String] . t clo_list )
+    : i nsp ( vec_len [i] . mm spawned )
+    : ~ i wj 0
+    ~ < wj nsp {
+        : i sg ( vec_at [i] . t wsig wj )
+        ? < sg 0 { ^ @ !String String { F ( string_from `internal: a spawned closure code whose spawn was not translated` ) } } {}
+        : String sgs ( __ns sg )
+        : String a ( __f3 `def fn% : Fn :=\n  { params := [(.sink, (.fn [%] .send))], resTy := .int, resOwn := false, lends := [], rholds := [],\n` ( string_data ( __ns + + nfn nclo wj ) ) ( string_data sgs ) `` )
+        ( string_push_str out ( string_data ( __f2 `%    outHolds := [], body := (.block (.seq (.callc 2 0 0 % [] .skip) (.seq (.assign 1 (.expr (.lit 0))) (.exit 0)))), nvars := 3 }\n` ( string_data a ) ( string_data sgs ) ) ) )
+        = wj + wj 1
+    }
     ( string_push_str out `\ndef P : Prog := [` )
-    : i ntot + nfn ( vec_len [String] . t clo_list )
+    : i ntot + + nfn nclo nsp
     = k 0
     ~ < k ntot {
         ? > k 0 { ( string_push_str out `, ` ) } {}
@@ -2823,6 +3146,19 @@ $ `coreir.nu`
     }
     ( string_push_str out `]\ndef entry : Stmt := .letcall 0 ` )
     ( string_push_int out main_ix )
+    ? threaded {
+        ( string_push_str out ` [] .skip\ndef spawns : List Nat := [` )
+        = wj 0
+        ~ < wj nsp {
+            ? > wj 0 { ( string_push_str out `, ` ) } {}
+            ( string_push_int out + + nfn nclo wj )
+            = wj + wj 1
+        }
+        ( string_push_str out `]\n\n#eval certOK3B P spawns entry 1\n` )
+        // the spawn sites name their wrapper `@W<j>@` until the wrappers'
+        // indices are known
+        ^ @ !String String { T ( __subst_wrappers ( string_data out ) + nfn nclo ) }
+    } {}
     ( string_push_str out ` [] .skip\n\n#eval progOK2B P && (checkA2 P entry.vars (fun _ => none) [] entry).isSome && stmtCodesB P entry\n` )
     ^ @ !String String { T out }
 }

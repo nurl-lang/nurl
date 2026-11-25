@@ -11,6 +11,7 @@
 //   def fn<k> : Fn := <term>            (continuation lines indented)
 //   def P : Prog := [fn0, fn1, …]
 //   def entry : Stmt := .letcall 0 <k> [] .skip
+//   def spawns : List Nat := [k, …]     (a threaded program only)
 //
 // where a <term> is built from constructors written `.name`, numbers,
 // `true`/`false`, the structure fields of `Fn`, the names `fn<k>`, and the
@@ -29,6 +30,7 @@ $ `stdlib/core/slice.nu`
     b ok
     i nv
     String why
+    b threads
 }
 
 @ __sh_bad s why i line → ShapeRes {
@@ -36,7 +38,7 @@ $ `stdlib/core/slice.nu`
     ( string_push_str w ` (line ` )
     ( string_push_int w line )
     ( string_push_str w `)` )
-    ^ @ ShapeRes { F 0 w }
+    ^ @ ShapeRes { F 0 w F }
 }
 
 @ __sh_is_alpha i c → b { ^ | | & >= c 65 <= c 90 & >= c 97 <= c 122 == c 95 }
@@ -132,7 +134,7 @@ $ `stdlib/core/slice.nu`
         } {}
         ^ ( __sh_bad `a character the program grammar does not have` line )
     }
-    ^ @ ShapeRes { T 0 ( string_new ) }
+    ^ @ ShapeRes { T 0 ( string_new ) F }
 }
 
 // Does line [a, z) start with `pre`?
@@ -152,6 +154,22 @@ $ `stdlib/core/slice.nu`
     ^ & == - z a ( nurl_str_len want ) ( __sh_starts t a z want )
 }
 
+// `[` already read: `<digits>(, <digits>)*]` up to the line's end, or `]`.
+@ __sh_nat_list ( Slice u ) t i a i z → b {
+    ? & == - z a 1 == ( slice_byte t a ) 93 { ^ T } {}
+    : ~ i k a
+    ~ < k z {
+        : i d0 k
+        ~ & < k z ( __sh_is_digit ( slice_byte t k ) ) { = k + k 1 }
+        ? == k d0 { ^ F } {}
+        ? >= k z { ^ F } {}
+        ? == ( slice_byte t k ) 93 { ^ == + k 1 z } {}
+        ? | >= + k 1 z | != ( slice_byte t k ) 44 != ( slice_byte t + k 1 ) 32 { ^ F } {}
+        = k + k 2
+    }
+    ^ F
+}
+
 // The check. `text` is the whole of Program.lean.
 @ cert_shape s text → ShapeRes {
     : ( Slice u ) t ( slice_of_str text )
@@ -160,6 +178,7 @@ $ `stdlib/core/slice.nu`
     : ~ i line 1
     : ~ b have_p F
     : ~ b have_entry F
+    : ~ b have_spawns F
     : ~ b in_def F
     ~ < a n {
         : ~ i z a
@@ -187,8 +206,19 @@ $ `stdlib/core/slice.nu`
                                 = have_p T
                                 = in_def F
                             } {
+                                ? ( __sh_starts t a z `def spawns : List Nat := [` ) {
+                                    // A threaded program: the functions it spawns (A3),
+                                    // a list of numbers and nothing else, right after entry.
+                                    ? | have_spawns ! have_entry { ^ ( __sh_bad `spawns not right after entry` line ) } {}
+                                    ? ! ( __sh_nat_list t + a 26 z ) { ^ ( __sh_bad `spawns is not a list of function numbers` line ) } {}
+                                    = have_spawns T
+                                    = in_def F
+                                    = a + z 1
+                                    = line + line 1
+                                    continue
+                                } {}
                                 ? ( __sh_starts t a z `def entry : Stmt := .letcall 0 ` ) {
-                                    ? | have_entry ! have_p { ^ ( __sh_bad `entry not right after P` line ) } {}
+                                    ? | | have_entry have_spawns ! have_p { ^ ( __sh_bad `entry not right after P` line ) } {}
                                     // the rest: <digits> [] .skip
                                     : ~ i k + a 31
                                     : i d0 k
@@ -213,5 +243,5 @@ $ `stdlib/core/slice.nu`
         = line + line 1
     }
     ? ! & have_p have_entry { ^ ( __sh_bad `P or entry is missing` line ) } {}
-    ^ @ ShapeRes { T 1 ( string_new ) }
+    ^ @ ShapeRes { T 1 ( string_new ) have_spawns }
 }

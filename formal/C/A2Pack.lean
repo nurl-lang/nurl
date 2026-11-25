@@ -6,11 +6,12 @@ import C.A2Chan
 `.pack fs te ms y cs`: the environment `y` (of type `te`) moves in, as
 `vec_push` takes it (`PushArg`, `pushArg2`), and the captures by name `cs`
 meet `CapsOK` (`capsB`): each read only (`inp`), or a Vec the closure
-changes (`inout b`, a bound short of a new value). The class is `any`, the
-one every closure value of a type shares, whatever environment it carries;
-it fits an environment that holds no destructor value (`Cross.Fits`: `any`
-allows views, cells and shares, and no destructor values). A closure that
-crosses (sent, spawned) needs a class of its own, not decided here.
+changes (`inout b`, a bound short of a new value). The class is the one the
+literal's interface declares where it fits (`packClass`, AGORA-1020: a
+spawned closure's interface is of class `send`), else `any`, the one every
+closure value of a type shares, whatever environment it carries; `any`
+fits an environment that holds no destructor value (`Cross.Fits`: `any`
+allows views, cells and shares, and no destructor values).
 `inferRhs2p` is `inferRhs2c` with it; `inferRhs2p_ok` is sound and keeps
 contexts inside the domain.
 -/
@@ -93,23 +94,83 @@ theorem capsB_sound {Γ : Ctx} {F : List Var} {D : List Dep} {cs : List (Var × 
     | sink => cases hm
   · cases h2
 
+/-- `Cross.Fits`, decided. -/
+def fitsB (q : Cross) (te : Ty) (cs : List (Var × PMode × Ty)) : Bool :=
+  (q.views || (!te.holdsView && cs.isEmpty)) && (q.cells || !te.hasCell) && (q.shares || !te.hasArc) &&
+    (q.drops || !te.holdsDtor) && (q.views || !te.hasGuard)
+
+theorem fitsB_sound {q : Cross} {te : Ty} {cs : List (Var × PMode × Ty)} (h : fitsB q te cs = true) :
+    Cross.Fits q te cs := by
+  simp only [fitsB, Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true', List.isEmpty_iff] at h
+  obtain ⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩ := h
+  refine ⟨fun hq => ?_, fun hq => ?_, fun hq => ?_, fun hq => ?_, fun hq => ?_⟩
+  · rcases h1 with h1 | h1
+    · rw [hq] at h1; cases h1
+    · exact h1
+  · rcases h2 with h2 | h2
+    · rw [hq] at h2; cases h2
+    · exact h2
+  · rcases h3 with h3 | h3
+    · rw [hq] at h3; cases h3
+    · exact h3
+  · rcases h4 with h4 | h4
+    · rw [hq] at h4; cases h4
+    · exact h4
+  · rcases h5 with h5 | h5
+    · rw [hq] at h5; cases h5
+    · exact h5
+
+/-- A closure literal's class (AGORA-1020): the one its interface declares,
+    where that fits the environment, else `any`. A2's `pack` takes any
+    class that fits (`Cross.Fits`), and the literal names no class of its
+    own, so the checker reads the one the program's interface function `m`
+    (the literal's `ms = [m]`) takes the closure at: its first parameter,
+    of type `.fn [m] q`. A closure that is spawned (A3) is of an interface
+    of class `send`; every other one keeps `any`, the class every closure
+    value of a type shares, so what was accepted stays accepted. -/
+def packClass (P : Prog) (ms : List Nat) (te : Ty) (cs : List (Var × PMode × Ty)) : Cross :=
+  match ms with
+  | [m] => match P[m]? with
+    | some fn => match fn.params with
+      | (_, .fn ms' q) :: _ => if decide (ms' = ms) && fitsB q te cs then q else .any
+      | _ => .any
+    | none => .any
+  | _ => .any
+
+/-- The class chosen fits the environment, where `any` would (its
+    destructor clause). -/
+theorem packClass_fits {P : Prog} {ms : List Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
+    (hd : te.holdsDtor = false) : Cross.Fits (packClass P ms te cs) te cs := by
+  unfold packClass
+  split
+  · split
+    · split
+      · split
+        · rename_i hq
+          simp only [Bool.and_eq_true] at hq
+          exact fitsB_sound hq.2
+        · exact fits_any hd
+      · exact fits_any hd
+    · exact fits_any hd
+  · exact fits_any hd
+
 /-- A2's `RhsT` for a closure literal, computed. -/
-def packRhs (D : List Var) (Γ : Ctx) (F : List Var) : Rhs → Option (Entry × Ctx)
+def packRhs (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) : Rhs → Option (Entry × Ctx)
   | .pack _ te ms y cs => match liveE2 Γ y with
     | some Ey =>
       if decide (Ey.ty = te) && !te.holdsDtor then
         match pushArg2 D Γ F y Ey te with
         | some (Ds, Γ1) =>
           if capsB Γ1 F Ds cs then
-            some (⟨.fn ms .any, .own, true, [], Ds ++ capDeps cs, false, false, false, false⟩, Γ1)
+            some (⟨.fn ms (packClass P ms te cs), .own, true, [], Ds ++ capDeps cs, false, false, false, false⟩, Γ1)
           else none
         | none => none
       else none
     | none => none
   | _ => none
 
-theorem packRhs_ok {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
-    (hs : Supported2 Γ D) (hD : ∀ v ∈ r.vars, v ∈ D) (h : packRhs D Γ F r = some (E, Γ1)) :
+theorem packRhs_ok {P : Prog} {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    (hs : Supported2 Γ D) (hD : ∀ v ∈ r.vars, v ∈ D) (h : packRhs P D Γ F r = some (E, Γ1)) :
     RhsT Γ F r E Γ1 ∧ Supported2 Γ1 D := by
   cases r with
   | pack _ te ms y cs =>
@@ -127,7 +188,7 @@ theorem packRhs_ok {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry
           split at h
           · rename_i hcap
             simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
-            exact ⟨.pack hy hyl hty pa (capsB_sound hcap) (fits_any hd), sa (hD y (by simp [Rhs.vars]))⟩
+            exact ⟨.pack hy hyl hty pa (capsB_sound hcap) (packClass_fits hd), sa (hD y (by simp [Rhs.vars]))⟩
           · cases h
         · cases h
       · cases h
@@ -135,13 +196,13 @@ theorem packRhs_ok {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | _ => simp [packRhs] at h
 
 /-- A2's `RhsT` for the core, data, lock, channel and closure forms, computed. -/
-def inferRhs2p (D : List Var) (Γ : Ctx) (F : List Var) (r : Rhs) : Option (Entry × Ctx) :=
-  match packRhs D Γ F r with
+def inferRhs2p (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) (r : Rhs) : Option (Entry × Ctx) :=
+  match packRhs P D Γ F r with
   | some p => some p
   | none => inferRhs2c D Γ F r
 
-theorem inferRhs2p_ok {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
-    (hs : Supported2 Γ D) (hD : ∀ v ∈ r.vars, v ∈ D) (h : inferRhs2p D Γ F r = some (E, Γ1)) :
+theorem inferRhs2p_ok {P : Prog} {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    (hs : Supported2 Γ D) (hD : ∀ v ∈ r.vars, v ∈ D) (h : inferRhs2p P D Γ F r = some (E, Γ1)) :
     RhsT Γ F r E Γ1 ∧ Supported2 Γ1 D := by
   unfold inferRhs2p at h
   split at h

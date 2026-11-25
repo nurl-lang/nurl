@@ -27,10 +27,16 @@
 // read as something else: a column a record needs that is not an integer
 // (as Python's `int()` reads one, within 64 bits; a variable's id within
 // core_id_max), a `ty` line with fewer fields than it counts, an `endfn`
-// with no function open. An informative column that is not an integer
-// (a source line, a depth, a sum's parameter count, a type's argument or
-// variant counts) is noted in `CoreIR.bad`, which core_read_strict
-// refuses. Variable ids are indexed sparsely: an id costs what its record
+// with no function open. So is, deliberately stricter than
+// tools/ncore/tolean.py (which reads these), what is malformed in shape
+// (`internal: line N of the core IR: malformed: …`): a count below 0 (a
+// parameter, field, type-argument, variant or payload count), a type
+// argument, variant or payload count past what the line holds, a variable
+// id below 0 or a kind outside 0–3, an `fn` line while a function is
+// open, and the input ending inside a function. An informative column that
+// is not an integer (a source line, a depth, a value block, a function's
+// flags, a sum's parameter count) is noted in `CoreIR.bad`, which
+// core_read_strict refuses. Variable ids are indexed sparsely: an id costs what its record
 // costs, whatever its size.
 
 $ `stdlib/core/string.nu`
@@ -232,6 +238,28 @@ $ `stdlib/std/hashmap.nu`
     ^ o
 }
 
+// A line that is malformed where tools/ncore/tolean.py would read it anyway
+// (a count below 0, a function left open, …): refused all the same, and
+// named `malformed` (deliberately stricter than the prototype).
+@ __cr_mal i line s what → String {
+    : String w ( string_from `malformed: ` )
+    ( string_push_str w what )
+    ^ ( __cr_bad line ( string_data w ) )
+}
+
+// A count tools/ncore/tolean.py never reads (a type's argument, variant
+// and payload counts), as an integer: one that is not is malformed.
+@ __cr_count ( Vec String ) f i k i line s what → !i String {
+    ?? ( core_parse_int ( __cr_col f k ) ) {
+        T v → { ^ @ !i String { T v } }
+        F → {}
+    }
+    : String w ( string_from what )
+    ( string_push_str w ` is not an integer: ` )
+    ( string_push_str w ( __cr_col f k ) )
+    ^ @ !i String { F ( __cr_mal line ( string_data w ) ) }
+}
+
 // Column k of `f` as an integer (core_parse_int_mode's `mode`).
 @ __cr_num ( Vec String ) f i k i mode i line s what → !i String {
     ?? ( core_parse_int_mode ( __cr_col f k ) mode ) {
@@ -276,6 +304,7 @@ $ `stdlib/std/hashmap.nu`
     ~ & < fi n ! ( __cr_is f fi `F` ) { = fi + fi 1 }
     ? >= fi n { ^ @ !CoreTy String { F ( __cr_bad line `a ty line without its fields (F)` ) } } {}
     : i nf \ ( __cr_num f + fi 1 0 line `a ty line's field count` )
+    ? < nf 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line's field count below 0` ) } } {}
     : ~ i k + fi 2
     ? > nf / - n k 2 { ^ @ !CoreTy String { F ( __cr_bad line `a ty line with fewer fields than it counts` ) } } {}
     : ~ i j 0
@@ -287,40 +316,33 @@ $ `stdlib/std/hashmap.nu`
     }
     : i after k
     ? & ( __cr_is f 5 `A` ) < 5 fi {
-        : i na ( __cr_info f 6 0 line `a ty line's type-argument count` bad )
-        ? > na - - fi 7 0 { ( vec_push [String] bad ( __cr_bad line `a ty line with fewer type arguments than it counts` ) ) } {
-            = j 0
-            ~ < j na {
-                ( vec_push [String] targs ( string_from ( __cr_col f + 7 j ) ) )
-                = j + j 1
-            }
+        : i na \ ( __cr_count f 6 line `a ty line's type-argument count` )
+        ? < na 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line's type-argument count below 0` ) } } {}
+        ? > na - - fi 7 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line with fewer type arguments than it counts` ) } } {}
+        = j 0
+        ~ < j na {
+            ( vec_push [String] targs ( string_from ( __cr_col f + 7 j ) ) )
+            = j + j 1
         }
     } {}
     ? ( __cr_is f after `V` ) {
-        : i nv ( __cr_info f + after 1 0 line `a ty line's variant count` bad )
+        : i nv \ ( __cr_count f + after 1 line `a ty line's variant count` )
+        ? < nv 0 { ^ @ !CoreTy String { F ( __cr_mal line `a ty line's variant count below 0` ) } } {}
         = k + after 2
-        : ~ b ok T
         = j 0
-        ~ & ok < j nv {
-            ? >= + k 1 n {
-                ( vec_push [String] bad ( __cr_bad line `a ty line with fewer variants than it counts` ) )
-                = ok F
-            } {
-                ( vec_push [String] vnames ( string_from ( __cr_col f k ) ) )
-                ( vec_push [i] vstart ( vec_len [String] vtys ) )
-                : i np ( __cr_info f + k 1 0 line `a variant's payload count` bad )
-                = k + k 2
-                ? > np - n k {
-                    ( vec_push [String] bad ( __cr_bad line `a variant with fewer payloads than it counts` ) )
-                    = ok F
-                } {
-                    : ~ i q 0
-                    ~ < q np {
-                        ( vec_push [String] vtys ( string_from ( __cr_col f k ) ) )
-                        = k + k 1
-                        = q + q 1
-                    }
-                }
+        ~ < j nv {
+            ? >= + k 1 n { ^ @ !CoreTy String { F ( __cr_mal line `a ty line with fewer variants than it counts` ) } } {}
+            ( vec_push [String] vnames ( string_from ( __cr_col f k ) ) )
+            ( vec_push [i] vstart ( vec_len [String] vtys ) )
+            : i np \ ( __cr_count f + k 1 line `a variant's payload count` )
+            = k + k 2
+            ? < np 0 { ^ @ !CoreTy String { F ( __cr_mal line `a variant's payload count below 0` ) } } {}
+            ? > np - n k { ^ @ !CoreTy String { F ( __cr_mal line `a variant with fewer payloads than it counts` ) } } {}
+            : ~ i q 0
+            ~ < q np {
+                ( vec_push [String] vtys ( string_from ( __cr_col f k ) ) )
+                = k + k 1
+                = q + q 1
             }
             = j + j 1
         }
@@ -361,6 +383,7 @@ $ `stdlib/std/hashmap.nu`
     : i n ( vec_len [String] f )
     ? < n 6 { ^ @ !CoreFn String { F ( __cr_bad line `an fn line without its columns` ) } } {}
     : i np \ ( __cr_num f 3 0 line `an fn line's parameter count` )
+    ? < np 0 { ^ @ !CoreFn String { F ( __cr_mal line `an fn line's parameter count below 0` ) } } {}
     : i ln ( __cr_info f 4 0 line `an fn line's source line` bad )
     : ~ i fl 0
     ? > n 6 { = fl ( __cr_info f 6 0 line `an fn line's flags` bad ) } {}
@@ -373,10 +396,12 @@ $ `stdlib/std/hashmap.nu`
     : i n ( vec_len [String] f )
     ? < n 5 { ^ @ !CoreVar String { F ( __cr_bad line `a v line without its columns` ) } } {}
     : i id \ ( __cr_num f 1 0 line `a variable's id` )
-    ? | > id ( core_id_max ) < id - 0 ( core_id_max ) { ^ @ !CoreVar String { F ( __cr_bad line `a variable's id past the bound (2^62)` ) } } {}
+    ? > id ( core_id_max ) { ^ @ !CoreVar String { F ( __cr_bad line `a variable's id past the bound (2^62)` ) } } {}
+    ? < id 0 { ^ @ !CoreVar String { F ( __cr_mal line `a variable's id below 0` ) } } {}
     // (a kind is compared, a flag word tested by its bits: past 64 bits,
     // the largest kind, the flags' low 64 bits)
     : i kind \ ( __cr_num f 2 2 line `a variable's kind` )
+    ? | < kind 0 > kind 3 { ^ @ !CoreVar String { F ( __cr_mal line `a variable's kind is not 0 to 3` ) } } {}
     : i flags \ ( __cr_num f 4 1 line `a variable's flags` )
     // (a whole record: its depth, line and value block too)
     : ~ i depth 0
@@ -492,6 +517,12 @@ $ `stdlib/std/hashmap.nu`
                 = in_fn F
             } {
                 ? != 0 ( nurl_str_eq f0 `fn` ) {
+                    ? in_fn {
+                        : String w ( string_from `an fn line while function ` )
+                        ( string_push_str w ( string_data . cur name ) )
+                        ( string_push_str w ` is open (no endfn)` )
+                        ^ @ !CoreIR String { F ( __cr_mal lno ( string_data w ) ) }
+                    } {}
                     = cur \ ( __cr_new_fn f lno bad )
                     = in_fn T
                 } {
@@ -531,6 +562,12 @@ $ `stdlib/std/hashmap.nu`
         } {}
         = a nxt
     }
+    ? in_fn {
+        : String w ( string_from `the input ends inside function ` )
+        ( string_push_str w ( string_data . cur name ) )
+        ( string_push_str w ` (no endfn)` )
+        ^ @ !CoreIR String { F ( __cr_mal lno ( string_data w ) ) }
+    } {}
     ^ @ !CoreIR String { T @ CoreIR { fns tys sums virts ty_of sum_of bad } }
 }
 

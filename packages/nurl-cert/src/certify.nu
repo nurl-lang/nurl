@@ -57,7 +57,9 @@ $ `stdlib/std/random.nu`
         ?? ( vec_get [String] ls k ) {
             T l → {
                 ? ( string_starts_with l `#eval ` ) {} {
-                    ? ( nc_is l `import C.A2Prog` ) {
+                    // (a threaded program's frame imports C.Cert3; its Claims.lean
+                    // imports that itself, so Program.lean stays the one grammar)
+                    ? | ( nc_is l `import C.A2Prog` ) ( nc_is l `import C.Cert3` ) {
                         ( string_push_str o `import C.Cert` )
                     } {
                         ( string_push_str o ( string_data l ) )
@@ -268,7 +270,7 @@ $ `stdlib/std/random.nu`
 
 // ── The ledger ───────────────────────────────────────────────────────
 
-@ cert_ledger s prof ( Vec String ) unsafe_rows → Json {
+@ cert_ledger s prof ( Vec String ) unsafe_rows b threads → Json {
     : Json L ( json_arr_new )
     ( json_arr_push L ( mj_row `lean-kernel` `the Lean 4 kernel and the toolchain formal/lean-toolchain pins`
     `it checks every proof in Program.lean and Claims.lean` `formal/lean-toolchain` `the Lean developers` `M.safe M.leak` ) )
@@ -292,6 +294,11 @@ $ `stdlib/std/random.nu`
     ( json_arr_push L ( mj_row `os` `the operating system` `memory, threads and files are the kernel's` `the host` `the OS vendor` `M.safe M.leak` ) )
     ( json_arr_push L ( mj_row `c-runtime` `the C runtime the program links against` `allocation, I/O and panics go through it`
     `stdlib/runtime*.c` `the NURL project` `M.safe M.leak` ) )
+    ? threads {
+        ( json_arr_push L ( mj_row `drf-sc` `the C11 / LLVM memory model's DRF-SC guarantee`
+        `M.race is A3's race freedom of the program's model; that a race-free program behaves sequentially consistently in the binary is the memory model's theorem, cited, not mechanized`
+        `formal/CLAIM.md (trusted base), A3/DESIGN.md` `the C11 and LLVM memory models (Batty et al.; LLVM LangRef)` `M.race` ) )
+    } {}
     ( json_arr_push L ( mj_row `unsafe-report` `nurlc --unsafe-report: the program's own hand-vouched code`
     `M.unsafe is what this report says, not a theorem` `compiler/nurlc.nu (--unsafe-report)` `nurlc` `M.unsafe` ) )
     : i n ( vec_len [String] unsafe_rows )
@@ -424,10 +431,12 @@ $ `stdlib/std/random.nu`
     : String prog_path ( nc_join out `Program.lean` )
     : String claims_path ( nc_join out `Claims.lean` )
     : ~ i nv 0
+    : ~ b threads F
     ? . tr ok {
         : ShapeRes sh ( cert_shape ( string_data . tr lean ) )
         ? . sh ok {
             = nv . sh nv
+            = threads . sh threads
         } {
             = verdict ( string_from `unsupported` )
             = reason ( string_from `the translator's output is outside the program grammar: ` )
@@ -447,9 +456,9 @@ $ `stdlib/std/random.nu`
     : String formal ( string_clone . o formal )
     : ( Vec ( Vec String ) ) axioms ( vec_new [( Vec String )] )
     : ( Vec String ) statuses ( vec_new [String] )
-    : i nclaims ( cert_claim_count )
+    : i nclaims ( cert_claim_count threads )
     ? ( nc_is verdict `accepted` ) {
-        : String claims ( cert_claims_lean prof nv )
+        : String claims ( cert_claims_lean prof nv threads )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
         : String work ( nc_join out `.build` )
         // A fresh directory: an .olean the bundle brought must not stand in
@@ -460,7 +469,7 @@ $ `stdlib/std/random.nu`
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
-            = reason ( string_from `the verified checker refuses the program (C.certOK2B is false)` )
+            = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)` `the verified checker refuses the program (C.certOK2B is false)` )
         } {
             ? | ! . lr ran ( cert_lean_has_error . lr log ) {
                 = verdict ( string_from `error` )
@@ -520,8 +529,7 @@ $ `stdlib/std/random.nu`
         : String st ?? ( vec_get [String] statuses k ) { T x → ( string_clone x ) F → ( string_from `open` ) }
         : ( Vec String ) ax ?? ( vec_get [( Vec String )] axioms k ) { T x → ( vec_clone [String] x ) F → ( vec_new [String] ) }
         : String why ? ( nc_is st `open` ) ( string_clone reason ) ( string_new )
-        : String prem ( string_from `lean-kernel claim-definitions translation library-summaries` )
-        ? != 0 ( nurl_str_eq prof `fast` ) { ( string_push_str prem ` lean-compiler` ) } {}
+        : String prem ( cert_claim_premises prof k )
         ( json_arr_push cl ( __ct_claim ( cert_claim_id k ) ( cert_claim_lean k ) ( string_data st )
         ( cert_claim_sentence k ) ( cert_claim_sentence_fi k ) ( string_data why ) ax ( string_data prem ) ) )
         = k + k 1
@@ -625,7 +633,7 @@ $ `stdlib/std/random.nu`
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )
