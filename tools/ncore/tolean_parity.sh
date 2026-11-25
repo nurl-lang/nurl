@@ -90,7 +90,7 @@ while read -r k; do
     cp_=$(class "$W/py" "$k"); cn=$(class "$W/nu" "$k")
     why=""
     if [ "$cp_" != "$cn" ]; then why="class: python $cp_, nurl $cn"
-    elif ! cmp -s "$W/py/$k.out" "$W/nu/$k.out"; then why="stdout differs"
+    elif ! cmp -s "$W/py/$k.out" <(python3 "$ROOT/tools/ncore/norm_any.py" "$W/nu/$k.out"); then why="stdout differs (modulo .any, AGORA-1030)"
     elif [ "$cp_" = unsupported ] && ! cmp -s "$W/py/$k.err" "$W/nu/$k.err"; then why="unsupported message differs"
     fi
     case "$cp_" in ok) n_ok=$((n_ok + 1)) ;; unsupported) n_uns=$((n_uns + 1)) ;; *) n_other=$((n_other + 1)) ;; esac

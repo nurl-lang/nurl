@@ -329,7 +329,9 @@ if command -v python3 > /dev/null; then
         "$NURLC" --emit-core "$f" > "$TMP/$k.core" 2> /dev/null || { bad "$k: nurlc --emit-core"; continue; }
         n=$((n + 1))
         python3 tools/ncore/tolean.py "$TMP/$k.core" > "$TMP/$k.py.out" 2> "$TMP/$k.py.err"; prc=$?
-        "$CERT" translate "$TMP/$k.core" > "$TMP/$k.nu.out" 2> "$TMP/$k.nu.err"; nrc=$?
+        "$CERT" translate "$TMP/$k.core" > "$TMP/$k.nu.raw" 2> "$TMP/$k.nu.err"; nrc=$?
+        # AGORA-1030: `.any` where tolean.py writes `(.lit 0)`; compared modulo that
+        python3 tools/ncore/norm_any.py "$TMP/$k.nu.raw" > "$TMP/$k.nu.out"
         if [ "$prc" = "$nrc" ] && cmp -s "$TMP/$k.py.out" "$TMP/$k.nu.out" && cmp -s "$TMP/$k.py.err" "$TMP/$k.nu.err"; then
             same=$((same + 1))
         else bad "$k: the translator differs from tolean.py (exit $nrc, tolean.py $prc)"; fi

@@ -3,8 +3,8 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,447 lines of Lean 4**, **941 theorems**, **1119 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **91 modules**, **87,292 lines of Lean 4**, **3869 theorems**, **4929 total declarations**
+* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,449 lines of Lean 4**, **941 theorems**, **1119 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **91 modules**, **87,303 lines of Lean 4**, **3869 theorems**, **4929 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -189,18 +189,18 @@ flowchart BT
   ParamViewWitness["ParamViewWitness<br/>(457L, 21 thms)"]
   PopWitness["PopWitness<br/>(262L, 13 thms)"]
   Preservation["Preservation<br/>(5419L, 123 thms)"]
-  Progress["Progress<br/>(947L, 14 thms)"]
+  Progress["Progress<br/>(948L, 14 thms)"]
   Region["Region<br/>(35L, 1 thms)"]
   RegionChangeWitness["RegionChangeWitness<br/>(86L, 5 thms)"]
   RegionMem["RegionMem<br/>(418L, 22 thms)"]
   RegionResWitness["RegionResWitness<br/>(442L, 30 thms)"]
   RegionThruWitness["RegionThruWitness<br/>(113L, 8 thms)"]
   RemoveLoopWitness["RemoveLoopWitness<br/>(252L, 10 thms)"]
-  Rename["Rename<br/>(9095L, 366 thms)"]
+  Rename["Rename<br/>(9096L, 366 thms)"]
   Repl["Repl<br/>(387L, 21 thms)"]
   Rhs["Rhs<br/>(3409L, 163 thms)"]
   SelfViewCall["SelfViewCall<br/>(60L, 2 thms)"]
-  Semantics["Semantics<br/>(1775L, 13 thms)"]
+  Semantics["Semantics<br/>(1778L, 13 thms)"]
   Settle["Settle<br/>(213L, 12 thms)"]
   SliceCopyViewWitness["SliceCopyViewWitness<br/>(192L, 11 thms)"]
   Soundness["Soundness<br/>(282L, 17 thms)"]
@@ -213,7 +213,7 @@ flowchart BT
   SubDcKill["SubDcKill<br/>(183L, 9 thms)"]
   Sweep["Sweep<br/>(622L, 67 thms)"]
   SweepD["SweepD<br/>(475L, 39 thms)"]
-  Syntax["Syntax<br/>(1471L, 69 thms)"]
+  Syntax["Syntax<br/>(1474L, 69 thms)"]
   TakeB["TakeB<br/>(350L, 17 thms)"]
   TakeBDWitness["TakeBDWitness<br/>(207L, 4 thms)"]
   TakeBVWitness["TakeBVWitness<br/>(437L, 15 thms)"]
@@ -224,7 +224,7 @@ flowchart BT
   ThruGlueWitness["ThruGlueWitness<br/>(446L, 26 thms)"]
   ThruLiftKinds["ThruLiftKinds<br/>(96L, 8 thms)"]
   ThruPre["ThruPre<br/>(247L, 25 thms)"]
-  Typing["Typing<br/>(2669L, 145 thms)"]
+  Typing["Typing<br/>(2672L, 145 thms)"]
   TypingFacts["TypingFacts<br/>(1143L, 65 thms)"]
   Unfresh["Unfresh<br/>(169L, 15 thms)"]
   UnheldFresh["UnheldFresh<br/>(198L, 16 thms)"]
@@ -367,11 +367,11 @@ flowchart BT
 <!-- BEGIN generated: A2 module index (webdocs/scripts/gen-formal-data.mjs) -->
 | Layer | Module | Lines | Theorems | Defs / Types | Summary |
 |---|---|---:|---:|---:|---|
-| 0. Syntax & Store | [`A2/Semantics.lean`](A2/Semantics.lean) | 1775 | 13 | 96 | Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck. |
-| 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1471 | 69 | 78 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
+| 0. Syntax & Store | [`A2/Semantics.lean`](A2/Semantics.lean) | 1778 | 13 | 96 | Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck. |
+| 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1474 | 69 | 78 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
 | 1. Flow-Sensitive Typing | [`A2/Basic.lean`](A2/Basic.lean) | 612 | 47 | 1 | Foundational lemmas for store updates (upd), value subtrees, and contexts. |
 | 1. Flow-Sensitive Typing | [`A2/Ctx.lean`](A2/Ctx.lean) | 351 | 31 | 0 | Algebraic properties and monotonicity of context operations (kill, exitScope, derive). |
-| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 2669 | 145 | 132 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
+| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 2672 | 145 | 132 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
 | 1. Flow-Sensitive Typing | [`A2/TypingFacts.lean`](A2/TypingFacts.lean) | 1143 | 65 | 1 | Inversion lemmas and structural properties of well-typed statements (StmtT). |
 | 2. Memory Invariant | [`A2/Heap.lean`](A2/Heap.lean) | 211 | 14 | 0 | Preservation of heap disjointness and allocation validity (HeapOK) across store operations. |
 | 2. Memory Invariant | [`A2/Invariant.lean`](A2/Invariant.lean) | 3119 | 204 | 100 | Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views. |
@@ -444,10 +444,10 @@ flowchart BT
 | 4. Calls & Closures | [`A2/CallMem.lean`](A2/CallMem.lean) | 1638 | 60 | 2 | Store state and owned trees immediately after binding parameters in a call. |
 | 4. Calls & Closures | [`A2/Closure.lean`](A2/Closure.lean) | 3596 | 116 | 7 | Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness. |
 | 4. Calls & Closures | [`A2/Codes.lean`](A2/Codes.lean) | 876 | 43 | 6 | Package code-pointer integrity (ProgCodes, MemCodes, codes_step) across execution steps. |
-| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 9095 | 366 | 27 | Alpha-renaming of function body variables to fresh variables at a call site. |
+| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 9096 | 366 | 27 | Alpha-renaming of function body variables to fresh variables at a call site. |
 | 4. Memory Invariant | [`A2/Layout.lean`](A2/Layout.lean) | 182 | 12 | 5 | Agora #879: a tree's addresses split into its nodes' control blocks and buffers (ctls_datas_perm); no control block of any owned tree, a slot's or a block payload, is a buffer of any owned tree (ctl_ne_data, from HeapOK and BlkOwn), the fact the lowering's Vec TBAA tags assert. |
 | 5. Soundness Theorems | [`A2/Preservation.lean`](A2/Preservation.lean) | 5419 | 123 | 15 | Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv. |
-| 5. Soundness Theorems | [`A2/Progress.lean`](A2/Progress.lean) | 947 | 14 | 0 | Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck). |
+| 5. Soundness Theorems | [`A2/Progress.lean`](A2/Progress.lean) | 948 | 14 | 0 | Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck). |
 | 5. Soundness Theorems | [`A2/Soundness.lean`](A2/Soundness.lean) | 282 | 17 | 2 | Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic. |
 | 5. Worked Examples | [`A2/DynCell.lean`](A2/DynCell.lean) | 483 | 33 | 21 | Per-call ownership through an owner cell: the pick example typed with A2's rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak). |
 | 5. Worked Examples | [`A2/ExitWitness.lean`](A2/ExitWitness.lean) | 380 | 47 | 18 | Agora #871: early exits. A break out of while T that drops a live owned Vec on the way (mainB_typed, breakB_steps), a continue-shaped exit of a loop body, and an early ^ across a scope in a callee checked against its summary (gR_ok) with its caller, each run safe and leak-free (mainB_safe, mainC_no_leak, mainR_safe, mainR_no_leak). |

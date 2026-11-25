@@ -1,6 +1,6 @@
 [package]
 name = "nurl-cert"
-version = "0.1.0"
+version = "0.1.1"
 description = "Memory-safety certificates for NURL programs. `nurl-cert certify prog.nu` writes a bundle whose Claims.lean proves, about the program's own term in formal/A2, that it never gets stuck and frees everything it allocates (a panic's unwinding included), with the verified checker's verdict decided by the Lean kernel; `nurl-cert verify` re-checks a bundle (hashes, the claims' template, the program grammar, the proofs and their axioms) without the compiler."
 # `nurlc --list-sources` (the files a certificate hashes) lands after v0.94.0.
 nurl-version = "0.95.0"

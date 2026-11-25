@@ -646,6 +646,8 @@ inductive ExprT (Γ : Ctx) : Expr → Prop
   | isl {x : Var} {E : Entry} {a b : Ty} :
       -- (Agora #632: through a destructor type too, as `getl` / `getr` lend)
       Γ x = some E → E.live = true → E.ty.undtor = .sum a b → ExprT Γ (.isl x)
+  /-- AGORA-1030: an untracked number is a number. -/
+  | any : ExprT Γ .any
 
 /-- An element read out of `y` (entry `E`), of type `t`: an integer is
     copied, a stored view is copied with what it depends on, an element
@@ -2574,6 +2576,7 @@ def Expr.vars : Expr → List Var
   | .len x => [x]
   | .slen x => [x]
   | .isl x => [x]
+  | .any => []
 
 def Rhs.vars : Rhs → List Var
   | .expr e => e.vars
