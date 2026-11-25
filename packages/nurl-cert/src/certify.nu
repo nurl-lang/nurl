@@ -91,9 +91,10 @@ $ `stdlib/std/random.nu`
 // The records of a `--list-sources=TAG` run (nurlc prints them on stderr):
 //   source:TAG <length> <path>\n<length bytes>\n
 // each path into `paths` and the sha256 of the bytes nurlc compiled into
-// `shas`. F when a record is cut short. A line a diagnostic quotes from a
-// source cannot pass for a record: TAG is fresh and random per run.
-@ cert_records String err s tag ( Vec String ) paths ( Vec String ) shas → b {
+// `shas`, and every other line of stderr into `rest`. F when a record is
+// cut short. A line a diagnostic quotes from a source cannot pass for a
+// record: TAG is fresh and random per run.
+@ cert_records String err s tag ( Vec String ) paths ( Vec String ) shas ( Vec String ) rest → b {
     : String head ( string_from `source:` )
     ( string_push_str head tag )
     ( string_push_str head ` ` )
@@ -128,7 +129,12 @@ $ `stdlib/std/random.nu`
             ( vec_push [String] paths path )
             ( vec_push [String] shas ( bytes_to_hex ( sha256_pure bytes ) ) )
             = a + + start len 1
-        } { = a + z 1 }
+        } {
+            : String l ( string_new )
+            ( string_push_window l t a - z a )
+            ( vec_push [String] rest l )
+            = a + z 1
+        }
     }
     ^ T
 }
@@ -150,9 +156,8 @@ $ `stdlib/std/random.nu`
     ^ F
 }
 
-@ __ct_unsafe_rows String err → ( Vec String ) {
+@ __ct_unsafe_rows ( Vec String ) ls → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
-    : ( Vec String ) ls ( nc_lines ( string_data err ) )
     : i n ( vec_len [String] ls )
     : ~ i k 0
     ~ < k n {
@@ -376,7 +381,8 @@ $ `stdlib/std/random.nu`
     // need not be: the recorded hash is still of the compiled bytes.
     : ( Vec String ) sources ( vec_new [String] )
     : ( Vec String ) shas ( vec_new [String] )
-    ? ! ( cert_records . r1 err ( string_data tag ) sources shas ) { ^ ( __ct_fail `nurlc's list of sources is cut short` ) } {}
+    : ( Vec String ) rest1 ( vec_new [String] )
+    ? ! ( cert_records . r1 err ( string_data tag ) sources shas rest1 ) { ^ ( __ct_fail `nurlc's list of sources is cut short` ) } {}
     ? == 0 ( vec_len [String] sources ) { ^ ( __ct_fail `nurlc listed no sources` ) } {}
     : ( Vec String ) disk ( __ct_hash_all sources )
     ? ! ( cert_same shas disk ) {
@@ -386,14 +392,27 @@ $ `stdlib/std/random.nu`
     // 2. nurlc: the LLVM IR and the unsafe report.
     : ( Vec String ) a2 ( vec_new [String] )
     ( vec_push [String] a2 ( string_from `--unsafe-report` ) )
+    : String tag2 ( rand_hex_str 16 )
+    : String tag2_arg ( string_from `--list-sources=` )
+    ( string_push_str tag2_arg ( string_data tag2 ) )
+    ( vec_push [String] a2 tag2_arg )
     ( vec_push [String] a2 ( string_from src ) )
     : Run r2 ( nc_run ( string_data . o nurlc ) a2 )
     ? ! . r2 started { ^ ( __ct_fail `nurlc did not start` ) } {}
+    // This compile read the sources again: its LLVM IR and its unsafe
+    // report count only when it read the very bytes the first run did.
+    : ( Vec String ) sources2 ( vec_new [String] )
+    : ( Vec String ) shas2 ( vec_new [String] )
+    : ( Vec String ) rest2 ( vec_new [String] )
+    : b rec2 ( cert_records . r2 err ( string_data tag2 ) sources2 shas2 rest2 )
+    ? | | ! rec2 ! ( cert_same sources sources2 ) ! ( cert_same shas shas2 ) {
+        ^ ( __ct_fail `the compile for the LLVM IR and the unsafe report read other source bytes than the first; nothing is certified` )
+    } {}
     // nurlc's own borrow walk may refuse a program the core IR still
     // describes: it has no LLVM IR then, and its unsafe report is cut short.
     : b compiled == . r2 code 0
     : String llvm_sha ? compiled ( nc_sha256_text ( string_data . r2 out ) ) ( string_new )
-    : ( Vec String ) unsafe_rows ( __ct_unsafe_rows . r2 err )
+    : ( Vec String ) unsafe_rows ( __ct_unsafe_rows rest2 )
 
     : ( Vec String ) a3 ( vec_new [String] )
     ( vec_push [String] a3 ( string_from `--version` ) )

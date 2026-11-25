@@ -269,7 +269,8 @@ $ `certify.nu`
         // of its own snapshots, in the same run, against the manifest's
         : ( Vec String ) rp ( vec_new [String] )
         : ( Vec String ) rs ( vec_new [String] )
-        : b rec_ok ( cert_records . r1 err ( string_data tag ) rp rs )
+        : ( Vec String ) rrest ( vec_new [String] )
+        : b rec_ok ( cert_records . r1 err ( string_data tag ) rp rs rrest )
         : ( Vec String ) mp ( vec_new [String] )
         : ( Vec String ) ms ( vec_new [String] )
         : ~ i q 0

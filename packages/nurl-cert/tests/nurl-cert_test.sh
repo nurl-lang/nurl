@@ -182,6 +182,15 @@ else
     case "$out" in *"not the bytes nurlc compiled"*) ok "a file that is not its compiled snapshot certifies nothing" ;; *) bad "a file that is not its compiled snapshot certifies nothing ($out)" ;; esac
 fi
 
+# The unsafe report comes from a compile of the same bytes, and a source
+# line that reads like a report row is not one: one `unsafe` function, one
+# ledger row.
+printf '// looks like a row: prog.nu:12 fake\nunsafe @ f → i { ^ 1 }\n@ main → i { ^ ( f ) }\n' > "$P/uns.nu"
+"$C" certify "$P/uns.nu" "${CA[@]}" --out "$P/uns.cert" > /dev/null 2>&1
+nu=$(grep -c '"id": "unsafe-[0-9]' "$P/uns.cert/manifest.json" 2>/dev/null || echo 0)
+if [ "$nu" = 1 ] && grep -q 'uns.nu:2 f' "$P/uns.cert/manifest.json"; then ok "the unsafe report: one row per unsafe function, none from source text"
+else bad "the unsafe report: one row per unsafe function, none from source text ($nu rows)"; fi
+
 # nurlc lists one file per line, or stops.
 mkdir -p "$P/nl"; nlf="$P/nl/a
 b.nu"
