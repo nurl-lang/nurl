@@ -53,7 +53,9 @@ deriving DecidableEq, Repr
 def readVar : List String → Option (Nat × Nat × Nat × String)
   | "v" :: id :: kind :: _depth :: flags :: rest =>
     match natOf id, natOf kind, natOf flags, rest.getLast? with
-    | some i, some k, some f, some ty => some (i, k, f, ty)
+    -- a kind is one of 0–3 (parameter, binding, temporary, capture), as the
+    -- translator's reader requires
+    | some i, some k, some f, some ty => if k ≤ 3 then some (i, k, f, ty) else none
     | _, _, _, _ => none
   | _ => none
 
@@ -71,6 +73,7 @@ def readFns : IR → Option CoreFn → List CoreFn → Option (List CoreFn)
       match natOf np with
       | some n => readFns ls (some ⟨name, ret, n, file, [], []⟩) acc
       | none => none
+    | "fn" :: _ => none        -- a header cut short
     | "endfn" :: _ => none
     | _ => readFns ls none acc
   | l :: ls, some f, acc =>
@@ -105,5 +108,9 @@ example : (fnsOf [["fn", "f", "i64", "1", "1", "a.nu", "0"],
 /-- A function left open, and an `endfn` with none open, are refused. -/
 example : fnsOf [["fn", "f", "i64", "0", "1", "a.nu", "0"], ["scope"]] = none := by decide +kernel
 example : fnsOf [["endfn"]] = none := by decide +kernel
+/-- A header cut short, and a kind outside 0–3, are refused too. -/
+example : fnsOf [["fn", "broken"]] = none := by decide +kernel
+example : fnsOf [["fn", "f", "i64", "0", "1", "a.nu", "0"],
+    ["v", "0", "4", "0", "0", "1", "-1", "", "i64"], ["endfn"]] = none := by decide +kernel
 
 end C.Elab
