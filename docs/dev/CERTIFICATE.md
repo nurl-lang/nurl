@@ -141,7 +141,12 @@ ledger      [ { id, what, why, where, vouches, claims [..] } ]
 
 - `hashes.sources`: every file the compile read. nurlc's
   `--list-sources` names them, one `source <real path>` line each, on
-  stderr.
+  stderr (a path holding a newline stops the compile). certify hashes them
+  between two compiles that must agree. That guards against a file changed
+  by accident while certify runs. It is not a proof that the hashes are of
+  the bytes compiled: a file switched back and forth between the reads
+  would pass. That binding belongs to the `translation` row, and
+  `verify --rebuild` checks it.
 - `hashes.llvm_ir` is the sha256 of nurlc's LLVM IR, with no flags, for
   the program. It is absent when nurlc refuses to compile the program.
 - `hashes.binary` is present when `--binary` was given.

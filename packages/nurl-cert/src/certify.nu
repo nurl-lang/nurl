@@ -347,7 +347,12 @@ $ `manifest.nu`
     // equal hash passes, so the recorded hashes are of bytes that make
     // exactly this core IR (byte for byte the one run 1 made, which is
     // Program.core); a change between any two reads that alters the core
-    // or the bytes certifies nothing.
+    // or the bytes certifies nothing. This is a guard against accidents, not
+    // a proof of the binding: a file that holds B during both compiles and
+    // A during both hash passes would pass it. That binding (source → core
+    // → term) is the `translation` ledger row, and `verify --rebuild`
+    // checks it: it compiles the recorded sources again and compares the
+    // core byte for byte.
     : ( Vec String ) shas ( __ct_hash_all sources )
     ? != ( vec_len [String] shas ) ( vec_len [String] sources ) { ^ ( __ct_fail `a source file nurlc read cannot be read back` ) } {}
     : Run r1b ( nc_run ( string_data . o nurlc ) a1 )

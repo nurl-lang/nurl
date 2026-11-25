@@ -141,6 +141,18 @@ m["claims"][0]["premises"] = [" ".join(m["claims"][0]["premises"])]
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
 expect_fail "the premises merged into one string" "the claims are the template's"
+fresh; python3 - "$P/w/manifest.json" <<'EOF2'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p)); del m["claims"][0]["reason"]
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF2
+expect_fail "a claim's required field dropped (claims[0].reason)" "every member is the schema's"
+fresh; python3 - "$P/w/manifest.json" <<'EOF2'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p)); m["tool"]["name"] = "some-other-tool"; m["hashes"]["extra"] = "x"
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF2
+expect_fail "a fixed value changed (tool.name) and a member added (hashes.extra)" "every member is the schema's"
 
 # Lean runs code while it elaborates: a Claims.lean that fails the template
 # must never reach it.

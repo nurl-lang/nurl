@@ -312,24 +312,90 @@ $ `certify.nu`
     ( nc_sort keys )
     ( nc_sort want )
     ( __vf_check t ( cert_same keys want ) `the manifest has the schema's members and no others` ( string_data ( string_join keys ` ` ) ) )
-    // required fields
-    : ( Vec String ) req ( string_split ( string_from `tool.name tool.version program.source program.verdict program.reason program.slots coverage.functions hashes.sources hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain ledger.0.id` ) ` ` )
-    : ~ String missing ( string_new )
-    : i nr ( vec_len [String] req )
-    : ~ i k 0
-    ~ < k nr {
-        ?? ( vec_get [String] req k ) {
-            T r → {
-                ? ! ( __vf_has m ( string_data r ) ) {
-                    ( string_push_str missing ( string_data r ) )
-                    ( string_push_str missing ` ` )
-                } {}
+    // every object: its required members, no others; the leaves' types and
+    // the values the schema fixes
+    : ~ String bad ( string_new )
+    ( __vf_obj m `tool` `name version` `` bad )
+    ( __vf_obj m `program` `source verdict reason slots` `` bad )
+    ( __vf_obj m `hashes` `sources core_ir` `llvm_ir program_lean claims_lean binary` bad )
+    ( __vf_obj m `versions` `nurlc formal_tree formal_commit lean_toolchain` `` bad )
+    ? ! ( nc_is ( mj_get_str m `tool.name` ) `nurl-cert` ) { ( string_push_str bad `tool.name ` ) } {}
+    ( __vf_strings m `tool.version program.source program.verdict program.reason hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain` bad )
+    ? ! ( __vf_enum ( mj_get_str m `program.verdict` ) `accepted refused unsupported error` ) { ( string_push_str bad `program.verdict ` ) } {}
+    ? ! ?? ( json_get m `program.slots` ) { T j → ( json_is_num j ) F → F } { ( string_push_str bad `program.slots ` ) } {}
+    ( __vf_sha m `hashes.core_ir` T bad )
+    ( __vf_sha m `hashes.llvm_ir` F bad )
+    ( __vf_sha m `hashes.program_lean` F bad )
+    ( __vf_sha m `hashes.claims_lean` F bad )
+    ( __vf_sha m `versions.formal_tree` T bad )
+    ? ( __vf_has m `hashes.binary` ) {
+        ( __vf_obj m `hashes.binary` `path sha256` `` bad )
+        ( __vf_strings m `hashes.binary.path` bad )
+        ( __vf_sha m `hashes.binary.sha256` T bad )
+    } {}
+    : ~ i q 0
+    ~ ( __vf_has m ( string_data ( __vf_path `hashes.sources.` q `` ) ) ) {
+        : String sp ( __vf_path `hashes.sources.` q `` )
+        ( __vf_obj m ( string_data sp ) `path sha256` `` bad )
+        : String spp ( __vf_path `hashes.sources.` q `.path` )
+        ( __vf_strings m ( string_data spp ) bad )
+        : String sps ( __vf_path `hashes.sources.` q `.sha256` )
+        ( __vf_sha m ( string_data sps ) T bad )
+        = q + q 1
+    }
+    ? == q 0 { ( string_push_str bad `hashes.sources ` ) } {}
+    : i ncl + ( cert_claim_count ) 1
+    : ~ i c 0
+    ~ < c ncl {
+        : String cp ( __vf_path `claims.` c `` )
+        ( __vf_obj m ( string_data cp ) `id lean status sentence reason axioms premises` `` bad )
+        : String csp ( __vf_path `claims.` c `.sentence` )
+        ( __vf_obj m ( string_data csp ) `en fi` `` bad )
+        : String cr ( __vf_path `claims.` c `.reason` )
+        ( __vf_strings m ( string_data cr ) bad )
+        : String cst ( __vf_path `claims.` c `.status` )
+        ? ! ( __vf_enum ( mj_get_str m ( string_data cst ) ) `proved validated assumed open refuted not-claimed` ) {
+            ( string_push_str bad ( string_data cst ) )
+            ( string_push_str bad ` ` )
+        } {}
+        : String cax ( __vf_path `claims.` c `.axioms` )
+        ( __vf_str_array m ( string_data cax ) bad )
+        = c + c 1
+    }
+    // coverage: the functions, and counts beside them
+    : ( Vec String ) ck ?? ( json_get m `coverage` ) { T j → ( json_obj_keys j ) F → ( vec_new [String] ) }
+    : i nck ( vec_len [String] ck )
+    : ~ b has_fns F
+    : ~ i z 0
+    ~ < z nck {
+        ?? ( vec_get [String] ck z ) {
+            T key → {
+                ? ( nc_is key `functions` ) { = has_fns T } {
+                    : String kp ( string_from `coverage.` )
+                    ( string_push_str kp ( string_data key ) )
+                    ? ! ?? ( json_get m ( string_data kp ) ) { T j → ( json_is_num j ) F → F } {
+                        ( string_push_str bad ( string_data kp ) )
+                        ( string_push_str bad ` ` )
+                    } {}
+                }
             }
             F _ → {}
         }
-        = k + k 1
+        = z + z 1
     }
-    ( __vf_check t == 0 ( string_len missing ) `the manifest has every required field` ( string_data missing ) )
+    ? ! has_fns { ( string_push_str bad `coverage.functions ` ) } {}
+    : ~ i f 0
+    ~ ( __vf_has m ( string_data ( __vf_path `coverage.functions.` f `` ) ) ) {
+        : String fp ( __vf_path `coverage.functions.` f `` )
+        ( __vf_obj m ( string_data fp ) `name file line status reason` `` bad )
+        : String fs ( __vf_path `coverage.functions.` f `.status` )
+        ? ! ( __vf_enum ( mj_get_str m ( string_data fs ) ) `proved validated open refused unsupported error` ) {
+            ( string_push_str bad ( string_data fs ) )
+            ( string_push_str bad ` ` )
+        } {}
+        = f + f 1
+    }
+    ( __vf_check t == 0 ( string_len bad ) `every member is the schema's, with its required fields and value types` ( string_data bad ) )
     // the claims: the template's, in its order
     : i nc ( cert_claim_count )
     : String prem_m ( string_from `lean-kernel claim-definitions translation library-summaries` )
@@ -396,4 +462,128 @@ $ `certify.nu`
 @ __vf_first String log → String {
     : ( Vec String ) ls ( nc_lines ( string_data log ) )
     ^ ?? ( vec_get [String] ls 0 ) { T l → ( string_clone l ) F → ( string_new ) }
+}
+
+// The object at `path`: every member of `req` present, none outside `req`
+// and `opt`. What is wrong is appended to `bad`.
+@ __vf_obj Json m s path s req s opt inout String bad → v {
+    : b is_obj ?? ( json_get m path ) { T j → ( json_is_obj j ) F → F }
+    ? ! is_obj {
+        ( string_push_str bad path )
+        ( string_push_str bad ` ` )
+        ^ v
+    } {}
+    : ( Vec String ) keys ?? ( json_get m path ) { T j → ( json_obj_keys j ) F → ( vec_new [String] ) }
+    : String all ( string_from req )
+    ( string_push_str all ` ` )
+    ( string_push_str all opt )
+    : ( Vec String ) rk ( string_split ( string_from req ) ` ` )
+    : i nr ( vec_len [String] rk )
+    : ~ i k 0
+    ~ < k nr {
+        ?? ( vec_get [String] rk k ) {
+            T r → {
+                ? & > ( string_len r ) 0 ! ( __vf_in r keys ) {
+                    ( string_push_str bad path )
+                    ( string_push_str bad `.` )
+                    ( string_push_str bad ( string_data r ) )
+                    ( string_push_str bad ` ` )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : ( Vec String ) ak ( string_split all ` ` )
+    : i nk ( vec_len [String] keys )
+    : ~ i j 0
+    ~ < j nk {
+        ?? ( vec_get [String] keys j ) {
+            T key → {
+                ? ! ( __vf_in key ak ) {
+                    ( string_push_str bad path )
+                    ( string_push_str bad `.` )
+                    ( string_push_str bad ( string_data key ) )
+                    ( string_push_str bad `(extra) ` )
+                } {}
+            }
+            F _ → {}
+        }
+        = j + j 1
+    }
+}
+
+@ __vf_in String x ( Vec String ) v → b {
+    : i n ( vec_len [String] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] v k ) { T y → { ? ( string_eq x y ) { ^ T } {} } F _ → {} }
+        = k + k 1
+    }
+    ^ F
+}
+
+@ __vf_enum String x s alts → b {
+    : ( Vec String ) v ( string_split ( string_from alts ) ` ` )
+    ^ ( __vf_in x v )
+}
+
+// Each path (space-separated) is a string.
+@ __vf_strings Json m s paths inout String bad → v {
+    : ( Vec String ) ps ( string_split ( string_from paths ) ` ` )
+    : i n ( vec_len [String] ps )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] ps k ) {
+            T p → {
+                : b ok ?? ( json_get m ( string_data p ) ) { T j → ( json_is_str j ) F → F }
+                ? ! ok {
+                    ( string_push_str bad ( string_data p ) )
+                    ( string_push_str bad ` ` )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+}
+
+// A sha256 in lowercase hex; `need`: it must be there.
+@ __vf_sha Json m s path b need inout String bad → v {
+    ? & ! need ! ( __vf_has m path ) { ^ v } {}
+    : String h ( mj_get_str m path )
+    : ~ b ok == ( string_len h ) 64
+    : ( Slice u ) hv ( slice_of_str ( string_data h ) )
+    : i n ( slice_len [u] hv )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte hv k )
+        ? ! | & >= c 48 <= c 57 & >= c 97 <= c 102 { = ok F } {}
+        = k + k 1
+    }
+    ? ! ok {
+        ( string_push_str bad path )
+        ( string_push_str bad ` ` )
+    } {}
+}
+
+// An array of strings.
+@ __vf_str_array Json m s path inout String bad → v {
+    : b ok ?? ( json_get m path ) {
+        T j → {
+            : ~ b all ( json_is_arr j )
+            : i n ( json_arr_len j )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( json_arr_get j k ) { T x → { ? ! ( json_is_str x ) { = all F } {} } F → {} }
+                = k + k 1
+            }
+            all
+        }
+        F → F
+    }
+    ? ! ok {
+        ( string_push_str bad path )
+        ( string_push_str bad ` ` )
+    } {}
 }
