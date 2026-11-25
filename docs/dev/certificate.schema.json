@@ -93,7 +93,7 @@
               "name": { "type": "string" },
               "file": { "type": "string" },
               "line": { "type": "string" },
-              "status": { "enum": ["proved", "refused", "unsupported", "error"] },
+              "status": { "enum": ["proved", "validated", "open", "refused", "unsupported", "error"] },
               "reason": { "type": "string" }
             }
           }

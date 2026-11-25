@@ -139,6 +139,42 @@ $ `manifest.nu`
     ^ out
 }
 
+// The sha256 of each file, in order; shorter than `paths` when one
+// cannot be read.
+@ __ct_hash_all ( Vec String ) paths → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( vec_len [String] paths )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] paths k ) {
+            T p → {
+                ?? ( nc_sha256_file ( string_data p ) ) {
+                    T h → ( vec_push [String] out h )
+                    F → { ^ out }
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
+@ cert_same ( Vec String ) a ( Vec String ) b → b {
+    : i n ( vec_len [String] a )
+    ? != n ( vec_len [String] b ) { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : b eq ?? ( vec_get [String] a k ) {
+            T x → ?? ( vec_get [String] b k ) { T y → ( string_eq x y ) F _ → F }
+            F _ → F
+        }
+        ? ! eq { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 // The program's own functions in the core IR (`fn` lines whose source is
 // not the standard library's): name, file, line.
 : FnRow {
@@ -181,9 +217,30 @@ $ `manifest.nu`
     ^ ?? ( vec_get [String] ls 0 ) { T l → ( string_trim l ) F → ( string_new ) }
 }
 
+@ __ct_cov_status String verdict ( Vec String ) statuses → String {
+    ? ! ( nc_is verdict `accepted` ) { ^ ( string_clone verdict ) } {}
+    : ~ i rank 2
+    : i n ( vec_len [String] statuses )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] statuses k ) {
+            T st → {
+                ? ( nc_is st `validated` ) { ? > rank 1 { = rank 1 } {} } {
+                    ? ! ( nc_is st `proved` ) { = rank 0 } {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ? == rank 2 { ^ ( string_from `proved` ) } {}
+    ? == rank 1 { ^ ( string_from `validated` ) } {}
+    ^ ( string_from `open` )
+}
+
 // ── The ledger ───────────────────────────────────────────────────────
 
-@ __ct_ledger s prof ( Vec String ) unsafe_rows → Json {
+@ cert_ledger s prof ( Vec String ) unsafe_rows → Json {
     : Json L ( json_arr_new )
     ( json_arr_push L ( mj_row `lean-kernel` `the Lean 4 kernel and the toolchain formal/lean-toolchain pins`
     `it checks every proof in Program.lean and Claims.lean` `formal/lean-toolchain` `the Lean developers` `M.safe M.leak` ) )
@@ -283,6 +340,19 @@ $ `manifest.nu`
     ? ! ( nc_write ( string_data core_path ) ( string_data . r1 out ) ) { ^ ( __ct_fail `cannot write Program.core` ) } {}
     : ( Vec String ) sources ( __ct_sources . r1 err )
     ( nc_sort sources )
+    // The hashes are of the bytes the core IR was made from: every source
+    // hashed, then the core IR made again and every source hashed again;
+    // any difference (a file changed under the run, or unreadable) and
+    // nothing is certified.
+    : ( Vec String ) shas ( __ct_hash_all sources )
+    ? != ( vec_len [String] shas ) ( vec_len [String] sources ) { ^ ( __ct_fail `a source file nurlc read cannot be read back` ) } {}
+    : Run r1b ( nc_run ( string_data . o nurlc ) a1 )
+    : ( Vec String ) sources_b ( __ct_sources . r1b err )
+    ( nc_sort sources_b )
+    : ( Vec String ) shas_b ( __ct_hash_all sources_b )
+    ? | | ! ( string_eq . r1 out . r1b out ) ! ( cert_same sources sources_b ) ! ( cert_same shas shas_b ) {
+        ^ ( __ct_fail `the sources changed while they were certified; nothing is certified` )
+    } {}
 
     // 2. nurlc: the LLVM IR and the unsafe report.
     : ( Vec String ) a2 ( vec_new [String] )
@@ -428,7 +498,10 @@ $ `manifest.nu`
     : Json cov ( json_obj_new )
     : Json fa ( json_arr_new )
     : i nf ( vec_len [FnRow] fns )
-    : String fst ? ( nc_is verdict `accepted` ) ( string_from `proved` ) ( string_clone verdict )
+    // A function's status is the program's: its claims' weakest status
+    // when accepted (`proved` only when every M claim is kernel-proved),
+    // else the verdict.
+    : String fst ( __ct_cov_status verdict statuses )
     : ~ i j 0
     ~ < j nf {
         ?? ( vec_get [FnRow] fns j ) {
@@ -459,9 +532,9 @@ $ `manifest.nu`
             T p → {
                 : Json so ( json_obj_new )
                 ( mj_str so `path` ( string_data p ) )
-                ?? ( nc_sha256_file ( string_data p ) ) {
+                ?? ( vec_get [String] shas q ) {
                     T h → ( mj_str so `sha256` ( string_data h ) )
-                    F → ( mj_str so `sha256` `unreadable` )
+                    F _ → {}
                 }
                 ( json_arr_push sa so )
             }
@@ -507,7 +580,7 @@ $ `manifest.nu`
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( __ct_ledger prof unsafe_rows ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )

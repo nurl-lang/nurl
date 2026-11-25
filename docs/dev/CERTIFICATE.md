@@ -180,13 +180,23 @@ the toolchain and the library.
 `ok` or `FAIL` for, each of the following:
 
 - the schema and the profile;
+- the manifest's shape:
+  - the schema's top-level members, and no others;
+  - every required field;
+  - the claims in the template's order, with its ids, theorems, sentences
+    and premises;
+  - the trust ledger exactly as certify writes it for this profile and
+    these unsafe rows. A dropped or reworded row does not verify;
 - the hash of every source file, of Program.core, Program.lean and
   Claims.lean;
 - that the `formal/` tree is the pinned one;
 - the binary, when given;
 - Program.lean's grammar and the slot count;
 - Claims.lean against the template, byte for byte;
-- that Lean checks Program.lean and Claims.lean again;
+- that Lean checks Program.lean and Claims.lean again. Lean is run only
+  when every check above passed: it runs code while it elaborates a file,
+  so a file the grammar, the template or a hash refused is never handed to
+  it. A run counts only when Lean exits 0;
 - for each claim, that the manifest's status and axioms are what Lean
   reports now;
 - that `M.unsafe` is `assumed` (or `open` with no LLVM IR);
@@ -240,5 +250,6 @@ Without `--certify`, nothing changes:
 - `--list-sources` is off by default;
 - 2120 programs compile byte-identical (compiler/tests, the certify
   programs, examples);
-- the self-compile is −0.03 % instructions (26.158 G → 26.149 G) with the
-  same peak RSS (186 MB).
+- the self-compile is +0.004 % instructions (25.6376 G → 25.6386 G: the
+  flag's test) with the same peak RSS (186 MB), both compilers built by
+  the same compiler and link.

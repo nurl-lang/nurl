@@ -137,7 +137,9 @@ $ `claims.nu`
     ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     ( string_push_str log ( string_data . r2 out ) )
     ( string_push_str log ( string_data . r2 err ) )
-    ^ @ LeanRun { . r2 started log }
+    // A run counts only when Lean finished: one killed before it printed
+    // the axioms reports nothing to read.
+    ^ @ LeanRun { & . r2 started == . r2 code 0 log }
 }
 
 // ── Reading the run ──────────────────────────────────────────────────

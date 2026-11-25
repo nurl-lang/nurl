@@ -118,6 +118,39 @@ expect_fail "an axiom added to Program.lean" "Program.lean only defines the prog
 fresh
 expect_fail "the wrong binary given" "the binary is the one certified" --binary "$P/other"
 
+# The manifest's shape: a member dropped, a ledger row dropped.
+fresh; python3 - "$P/w/manifest.json" <<'EOF2'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p)); del m["ledger"]
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF2
+expect_fail "the ledger dropped from the manifest" "the manifest has the schema's members"
+fresh; python3 - "$P/w/manifest.json" <<'EOF2'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p))
+m["ledger"] = [r for r in m["ledger"] if r["id"] != "translation"]
+for c in m["claims"]:
+    c["premises"] = [x for x in c["premises"] if x != "translation"]
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF2
+expect_fail "the translation's ledger row and premise dropped" "the trust ledger is the one certify writes"
+
+# Lean runs code while it elaborates: a Claims.lean that fails the template
+# must never reach it.
+fresh; rm -f "$TMP/pwned"
+printf '\n#eval IO.FS.writeFile "%s" "ran"\n' "$TMP/pwned" >> "$P/w/Claims.lean"
+expect_fail "code put in Claims.lean is refused" "Lean checks Program.lean and Claims.lean"
+if [ -e "$TMP/pwned" ]; then bad "the planted #eval never ran"; else ok "the planted #eval never ran"; fi
+
+# nurlc lists one file per line, or stops.
+mkdir -p "$P/nl"; nlf="$P/nl/a
+b.nu"
+cp "$P/prog.nu" "$nlf"
+if out=$("$NURLC" --emit-core --list-sources "$nlf" 2>&1 >/dev/null); then bad "a source path with a newline stops --list-sources"
+else
+    case "$out" in *"holds a newline"*) ok "a source path with a newline stops --list-sources" ;; *) bad "a source path with a newline stops --list-sources ($out)" ;; esac
+fi
+
 # The term swapped for another program's, every hash made to agree: a
 # plain verify cannot see it (the translation is a ledger row), --rebuild
 # must.
@@ -142,7 +175,8 @@ expect_fail "another program's term, every hash updated: --rebuild" "--rebuild: 
 echo "== 3. the fast profile"
 "$C" certify "$P/prog.nu" "${CA[@]}" --profile fast --out "$P/fast.cert" > "$TMP/f.out" 2>&1
 if grep -q "M.safe validated" "$TMP/f.out" && grep -q "native_decide" "$P/fast.cert/manifest.json" \
-    && "$C" verify "$P/fast.cert" --formal "$ROOT/formal" > /dev/null 2>&1; then ok "fast: validated, its axiom listed, verifies"
+    && grep -q '"validated": 1' "$P/fast.cert/manifest.json" && ! grep -q '"status": "proved"' "$P/fast.cert/manifest.json" \
+    && "$C" verify "$P/fast.cert" --formal "$ROOT/formal" > /dev/null 2>&1; then ok "fast: validated (claims and coverage), its axiom listed, verifies"
 else bad "fast: validated, its axiom listed, verifies"; cat "$TMP/f.out"; fi
 
 echo "== 4. every manifest against docs/dev/certificate.schema.json"

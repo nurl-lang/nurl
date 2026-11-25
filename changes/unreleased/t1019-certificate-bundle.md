@@ -17,4 +17,4 @@
   - All 34 accepted programs of `tools/ncore/certify/` are certified, and all 24 refused ones yield no proved claim.
   - The tool is the new package **`nurl-cert` 0.1.0**, written in NURL. The format is in `docs/dev/CERTIFICATE.md`, with `docs/dev/certificate.schema.json`. CI's `certify` workflow runs it end to end.
   - The flag and subcommand names are working names until 1.0.
-- **`nurlc --list-sources`** names each source file a compile reads, once, on stderr as `source <real path>`. A certificate hashes them. Without the flag, nurlc's output and cost are unchanged: 2120 programs compile byte-identical, and the self-compile is −0.03 % instructions with the same peak RSS.
+- **`nurlc --list-sources`** names each source file a compile reads, once, on stderr as `source <real path>`. A certificate hashes them. Without the flag, nurlc's output and cost are unchanged: 2120 programs compile byte-identical, and the self-compile is +0.004 % instructions (the flag's test) with the same peak RSS. A source path holding a newline stops the listing, rather than splitting into two records.

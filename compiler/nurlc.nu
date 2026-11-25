@@ -120754,6 +120754,17 @@ unsafe @ __dce_index i mlen → i {
 // complete; a --stdin overlay is listed by its logical path.
 : ~ i g_list_sources 0
 
+// One `source` line. A path holding a newline would read as two lines, the
+// real file listed by neither: such a compile stops instead (fail closed).
+@ __list_source s key → v {
+    ? >= ( nurl_str_find key `\n` ) 0 {
+        ( nurl_eprintln `nurlc: --list-sources: a source path holds a newline, so it cannot be listed one per line` )
+        ( nurl_exit 2 )
+    } {}
+    ( nurl_eprint `source ` )
+    ( nurl_eprintln key )
+}
+
 @ __source_snapshots → i {
     ? == g_source_snapshots 0 { = g_source_snapshots ( nurl_sym_new ) } {}
     ^ g_source_snapshots
@@ -120765,7 +120776,7 @@ unsafe @ __dce_index i mlen → i {
     : s key ( __canon_import_key path )
     ( nurl_sym_def t key text )
     ( nurl_sym_def t ( nurl_str_cat `seen:` key ) `1` )
-    ? != g_list_sources 0 { ( nurl_eprint `source ` ) ( nurl_eprintln key ) } {}
+    ? != g_list_sources 0 { ( __list_source key ) } {}
 }
 
 @ compiler_read_source s path → s {
@@ -120773,7 +120784,7 @@ unsafe @ __dce_index i mlen → i {
     : s key ( __canon_import_key path )
     : s seen_key ( nurl_str_cat `seen:` key )
     ? == 0 ( nurl_sym_len t seen_key ) {
-        ? != g_list_sources 0 { ( nurl_eprint `source ` ) ( nurl_eprintln key ) } {}
+        ? != g_list_sources 0 { ( __list_source key ) } {}
         : s source ( nurl_read_file path )
         ( nurl_sym_def t key source )
         ( nurl_sym_def t seen_key `1` )

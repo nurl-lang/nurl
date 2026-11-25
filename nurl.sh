@@ -118,6 +118,32 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# nurl_cert_bin: the certificate tool (packages/nurl-cert): $NURL_CERT,
+# else next to this script, else on PATH.
+nurl_cert_bin() {
+    if [ -n "${NURL_CERT:-}" ]; then echo "$NURL_CERT"; return 0; fi
+    for __c in "$SCRIPT_DIR/bin/nurl-cert" "$SCRIPT_DIR/build/nurl-cert"; do
+        [ -x "$__c" ] && { echo "$__c"; return 0; }
+    done
+    command -v nurl-cert 2>/dev/null && return 0
+    echo "ERROR: nurl-cert not found (\$NURL_CERT, next to nurl.sh, or on PATH)." >&2
+    echo "       Build it: cd packages/nurl-cert && ../../nurl.sh src/main.nu ../../build/nurl-cert" >&2
+    return 1
+}
+
+# `nurl verify` needs no compiler: it is dispatched before nurlc is looked
+# for.
+case "${1:-}" in
+    # `nurl verify prog.cert [--binary prog]`: check a certificate bundle
+    # again (docs/dev/CERTIFICATE.md). No compiler is involved.
+    verify)
+        shift
+        __cert="$(nurl_cert_bin)" || exit 1
+        if [ -z "${NURL_FORMAL:-}" ] && [ -d "$SCRIPT_DIR/formal" ]; then export NURL_FORMAL="$SCRIPT_DIR/formal"; fi
+        exec "$__cert" verify "$@"
+        ;;
+esac
+
 # ── Locate nurlc ─────────────────────────────────────────────
 NURLC="$SCRIPT_DIR/build/nurlc"
 if [ ! -x "$NURLC" ]; then
@@ -148,28 +174,7 @@ fi
 #   nurl upgrade  ·  nurl update  ·  nurlpkg self-update
 # (`nurlpkg update` is NOT one of them — that moves a project's dependency
 # requirements, and has since 0.4.)
-# nurl_cert_bin: the certificate tool (packages/nurl-cert): $NURL_CERT,
-# else next to this script, else on PATH.
-nurl_cert_bin() {
-    if [ -n "${NURL_CERT:-}" ]; then echo "$NURL_CERT"; return 0; fi
-    for __c in "$SCRIPT_DIR/bin/nurl-cert" "$SCRIPT_DIR/build/nurl-cert"; do
-        [ -x "$__c" ] && { echo "$__c"; return 0; }
-    done
-    command -v nurl-cert 2>/dev/null && return 0
-    echo "ERROR: nurl-cert not found (\$NURL_CERT, next to nurl.sh, or on PATH)." >&2
-    echo "       Build it: cd packages/nurl-cert && ../../nurl.sh src/main.nu ../../build/nurl-cert" >&2
-    return 1
-}
-
 case "${1:-}" in
-    # `nurl verify prog.cert [--binary prog]`: check a certificate bundle
-    # again (docs/dev/CERTIFICATE.md). No compiler is involved.
-    verify)
-        shift
-        __cert="$(nurl_cert_bin)" || exit 1
-        if [ -z "${NURL_FORMAL:-}" ] && [ -d "$SCRIPT_DIR/formal" ]; then export NURL_FORMAL="$SCRIPT_DIR/formal"; fi
-        exec "$__cert" verify "$@"
-        ;;
     upgrade|update|self-update|self-upgrade)
         shift
         for __pkg in "$SCRIPT_DIR/bin/nurlpkg" "$SCRIPT_DIR/build/nurlpkg"; do
@@ -1332,5 +1337,8 @@ if [ "$CERTIFY" -eq 1 ]; then
     __cert="$(nurl_cert_bin)" || exit 1
     if [ -z "${NURL_FORMAL:-}" ] && [ -d "$SCRIPT_DIR/formal" ]; then export NURL_FORMAL="$SCRIPT_DIR/formal"; fi
     echo "Certifying: $OUTBASE.cert"
-    exec "$__cert" certify "$SRCFILE" --binary "$OUTBASE" --out "$OUTBASE.cert" --nurlc "$NURLC"
+    # A child, not exec: the EXIT trap still cleans the link staging.
+    __rc=0
+    "$__cert" certify "$SRCFILE" --binary "$OUTBASE" --out "$OUTBASE.cert" --nurlc "$NURLC" || __rc=$?
+    exit "$__rc"
 fi

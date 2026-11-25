@@ -93,6 +93,7 @@ $ `certify.nu`
     ( __vf_check t ( nc_is schema CERT_SCHEMA ) `the manifest's schema is nurl-cert/1` ( string_data schema ) )
     : String prof ( mj_get_str m `profile` )
     ( __vf_check t ( cert_profile_ok ( string_data prof ) ) `the profile is kernel or fast` ( string_data prof ) )
+    ( __vf_structure t m ( string_data prof ) )
 
     // The sources.
     : ~ i k 0
@@ -160,8 +161,20 @@ $ `certify.nu`
         : String want ( cert_claims_lean ( string_data prof ) . sh nv )
         : String have ?? ( nc_read ( string_data claims_path ) ) { T x → x F → ( string_new ) }
         ( __vf_check t ( string_eq want have ) `Claims.lean is the claims' template, byte for byte` `its statements or proofs were edited` )
-        // Lean, again. Only a bundle whose files passed above is worth
-        // checking, but every claim is reported either way.
+        // Lean, again, and only on files every check above passed: Lean runs
+        // code while it elaborates a file (`#eval`, `run_cmd`), so a file
+        // the grammar, the template or a hash refused is never handed to it.
+        ? > . t bad 0 {
+            ( __vf_bad t `Lean checks Program.lean and Claims.lean` `not run: the bundle failed the checks above` )
+            : ~ i c 0
+            ~ < c nclaims {
+                : String what ( string_from ( cert_claim_id c ) )
+                ( string_push_str what `: the manifest's status is what Lean reports` )
+                ( __vf_bad t ( string_data what ) `not checked` )
+                = c + c 1
+            }
+            ^ ( __vf_end t )
+        } {}
         : String work ( nc_join bundle `.build` )
         // A fresh directory: an .olean the bundle brought must not stand in
         // for the one compiled from its Program.lean.
@@ -267,6 +280,10 @@ $ `certify.nu`
     : b extra ?? ( json_get m ( string_data xk ) ) { T _ → T F → F }
     ( __vf_check t ! extra `the manifest claims nothing beyond the template's claims` `` )
 
+    ^ ( __vf_end t )
+}
+
+@ __vf_end Tally t → i {
     ? == . t bad 0 {
         ( nurl_println `verified` )
         ^ 0
@@ -275,6 +292,105 @@ $ `certify.nu`
     ( nurl_print_int . t bad )
     ( nurl_println ` check(s) failed` )
     ^ 1
+}
+
+// ── The manifest's shape ─────────────────────────────────────────────
+//
+// What docs/dev/certificate.schema.json requires, checked here (verify
+// needs no Python): the top-level members and no others, every required
+// field, the claims in the template's order with the template's ids,
+// names, sentences and premises, and the trust ledger exactly as certify
+// writes it for this profile and these unsafe rows. A manifest that drops
+// or rewrites what the claims rest on does not verify.
+
+@ __vf_has Json m s path → b { ^ ?? ( json_get m path ) { T _ → T F → F } }
+
+@ __vf_structure inout Tally t Json m s prof → v {
+    // the top-level members, exactly
+    : ( Vec String ) keys ( json_obj_keys m )
+    : ( Vec String ) want ( string_split ( string_from `schema tool profile program claims coverage hashes versions ledger` ) ` ` )
+    ( nc_sort keys )
+    ( nc_sort want )
+    ( __vf_check t ( cert_same keys want ) `the manifest has the schema's members and no others` ( string_data ( string_join keys ` ` ) ) )
+    // required fields
+    : ( Vec String ) req ( string_split ( string_from `tool.name tool.version program.source program.verdict program.reason program.slots coverage.functions hashes.sources hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain ledger.0.id` ) ` ` )
+    : ~ String missing ( string_new )
+    : i nr ( vec_len [String] req )
+    : ~ i k 0
+    ~ < k nr {
+        ?? ( vec_get [String] req k ) {
+            T r → {
+                ? ! ( __vf_has m ( string_data r ) ) {
+                    ( string_push_str missing ( string_data r ) )
+                    ( string_push_str missing ` ` )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( __vf_check t == 0 ( string_len missing ) `the manifest has every required field` ( string_data missing ) )
+    // the claims: the template's, in its order
+    : i nc ( cert_claim_count )
+    : String prem_m ( string_from `lean-kernel claim-definitions translation library-summaries` )
+    ? != 0 ( nurl_str_eq prof `fast` ) { ( string_push_str prem_m ` lean-compiler` ) } {}
+    : ~ b claims_ok T
+    : ~ i c 0
+    ~ <= c nc {
+        : s id ? == c nc `M.unsafe` ( cert_claim_id c )
+        : s lean ? == c nc `` ( cert_claim_lean c )
+        : s prem ? == c nc `unsafe-report` ( string_data prem_m )
+        ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.id` ) ) ) id ) { = claims_ok F } {}
+        ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.lean` ) ) ) lean ) { = claims_ok F } {}
+        ? == c nc {} {
+            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.en` ) ) ) ( cert_claim_sentence c ) ) { = claims_ok F } {}
+            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.fi` ) ) ) ( cert_claim_sentence_fi c ) ) { = claims_ok F } {}
+        }
+        : String pk ( __vf_path `claims.` c `.premises` )
+        : String have ?? ( json_get m ( string_data pk ) ) { T j → ( __vf_strs j ) F → ( string_from `-` ) }
+        ? ! ( nc_is have prem ) { = claims_ok F } {}
+        = c + c 1
+    }
+    ( __vf_check t claims_ok `the claims are the template's: ids, theorems, sentences, premises` `` )
+    // the ledger, as certify writes it
+    : ( Vec String ) urows ( vec_new [String] )
+    : ~ i q 0
+    : ~ b more T
+    ~ more {
+        : String ik ( __vf_path `ledger.` q `.id` )
+        ?? ( json_get m ( string_data ik ) ) {
+            T ij → {
+                : String id ( string_from ( json_as_str ij ) )
+                ? & ( string_starts_with id `unsafe-` ) ! ( nc_is id `unsafe-report` ) {
+                    ( vec_push [String] urows ( mj_get_str m ( string_data ( __vf_path `ledger.` q `.what` ) ) ) )
+                } {}
+                = q + q 1
+            }
+            F → { = more F }
+        }
+    }
+    : Json lw ( cert_ledger prof urows )
+    : String lws ( json_stringify lw )
+    : String lhs ?? ( json_get m `ledger` ) { T j → ( json_stringify j ) F → ( string_new ) }
+    ( __vf_check t ( string_eq lws lhs ) `the trust ledger is the one certify writes (no row dropped or reworded)` `` )
+}
+
+// A JSON array of strings as one space-separated String.
+@ __vf_strs Json a → String {
+    : String o ( string_new )
+    : i n ( json_arr_len a )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( json_arr_get a k ) {
+            T x → {
+                ? > k 0 { ( string_push_char o 32 ) } {}
+                ( string_push_str o ( json_as_str x ) )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ o
 }
 
 @ __vf_first String log → String {
