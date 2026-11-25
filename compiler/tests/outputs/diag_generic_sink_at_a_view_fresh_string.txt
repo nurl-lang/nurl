@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_sink_at_a_view_fresh_string.nu:13:5: error: the string made here is handed to 'pair_new' (argument 1), which keeps it: a raw string kept in a container, a struct or a global is owned by none of them, so nothing ever releases it. Bind it first (': s x ( … )') — the binding releases it, and what keeps it holds a view of the binding — or keep a String (string_from; a ( Vec String )), or declare the parameter 'sink' if the callee takes the string over.
+    : ( Pair s i ) p ( pair_new [s i] ( nurl_str_cat `a` `b` ) 1 )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
