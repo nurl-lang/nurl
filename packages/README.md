@@ -381,6 +381,24 @@ build passes `--no-dce`, because dead-code elimination removes the
 functions nothing calls — exactly what the report exists to find. See
 [`nurl-cov/README.md`](nurl-cov/README.md).
 
+## `nurl-cert/` — a program's memory-safety certificate (installable program)
+
+Turns a program into Lean theorems about that program: `M.safe` (no run
+touches memory it does not own) and `M.leak` (everything it allocates is
+freed, a panic's unwinding included), proved from `formal/`'s theorems
+with the verified checker's verdict decided by the Lean kernel. The bundle
+says what each claim rests on (its trust ledger) and is checked again
+without the compiler.
+
+```
+nurl --certify prog.nu prog           # build prog, then write prog.cert/
+nurl verify prog.cert --binary prog   # check it again: hashes, template, proofs, axioms
+```
+
+A program the checker refuses, or the translation does not cover yet,
+gets no proved claim. See [`nurl-cert/README.md`](nurl-cert/README.md) and
+[`docs/dev/CERTIFICATE.md`](../docs/dev/CERTIFICATE.md).
+
 ## The full loop
 
 ```bash

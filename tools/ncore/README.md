@@ -21,7 +21,8 @@ decides the hole probes without any code per surface spelling.
 | `run.py` | runs probes and compares the verdict with each probe's `// map:` line |
 | `openprobes/` | probes written from open hole tickets |
 | `tolean.py` | nurlc's core IR as a program of formal/A2's calculus, for the verified checker of formal/C (AGORA-975); first subset: integer functions with calls, `if` and early returns |
-| `certify.sh` | one program through `--emit-core`, `tolean.py` and the verified checker (`C.progOK2B`, `C.checkA2`): `accepted`, `refused` or `unsupported: …` |
+| `certify.sh` | one program through `--emit-core`, `tolean.py` and the verified checker (`C.progOK2B`, `C.checkA2`), by `#eval`: `accepted`, `refused` or `unsupported: …`. The prototype of `packages/nurl-cert` (AGORA-1019), which states the verdict's consequences as kernel-checked theorems in a certificate bundle (docs/dev/CERTIFICATE.md) and is what CI runs (`certify.yml`); kept for the sweeps that read its one-word answer |
+| `certify/` | the certify programs: `*_refused.nu` must be refused, every other one certified (`packages/nurl-cert/tests/nurl-cert_test.sh`) |
 | `tolean_selftest.sh` | edits of a certify program's core IR that `tolean.py` must report `unsupported` (fail-closed) |
 
 `fromnurlc.py` reads the core IR nurlc itself builds

@@ -120748,6 +120748,12 @@ unsafe @ __dce_index i mlen → i {
 // peak compiling itself).
 : ~ i g_source_snapshots 0
 
+// `--list-sources`: each source file the compile reads, once, on stderr as
+// `source <real path>` (AGORA-1019: a certificate hashes every file it
+// rests on). Every read goes through compiler_read_source, so the list is
+// complete; a --stdin overlay is listed by its logical path.
+: ~ i g_list_sources 0
+
 @ __source_snapshots → i {
     ? == g_source_snapshots 0 { = g_source_snapshots ( nurl_sym_new ) } {}
     ^ g_source_snapshots
@@ -120759,6 +120765,7 @@ unsafe @ __dce_index i mlen → i {
     : s key ( __canon_import_key path )
     ( nurl_sym_def t key text )
     ( nurl_sym_def t ( nurl_str_cat `seen:` key ) `1` )
+    ? != g_list_sources 0 { ( nurl_eprint `source ` ) ( nurl_eprintln key ) } {}
 }
 
 @ compiler_read_source s path → s {
@@ -120766,6 +120773,7 @@ unsafe @ __dce_index i mlen → i {
     : s key ( __canon_import_key path )
     : s seen_key ( nurl_str_cat `seen:` key )
     ? == 0 ( nurl_sym_len t seen_key ) {
+        ? != g_list_sources 0 { ( nurl_eprint `source ` ) ( nurl_eprintln key ) } {}
         : s source ( nurl_read_file path )
         ( nurl_sym_def t key source )
         ( nurl_sym_def t seen_key `1` )
@@ -124316,6 +124324,8 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `  --max-nesting-fixed=N  the same, for good: later flags and the variable\n` )
     ( nurl_print `                      cannot change it (a service compiling others' code)\n` )
     ( nurl_print `  --unsafe-report     list what the program asks to be trusted (outside the stdlib) on stderr: unsafe functions, unsafe Send/Sync assertions, in/sync/nocapture FFI claims\n` )
+    ( nurl_print `  --list-sources      name each source file the compile reads, once, on stderr\n` )
+    ( nurl_print `                      as 'source <real path>' (a certificate hashes them)\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
     ( nurl_print `  --keep=a,b          keep these functions even if nothing in the module calls them\n` )
@@ -124648,6 +124658,7 @@ unsafe @ main → i {
             = ai + ai 1 continue
         } {}
         ? ( seq a `--unsafe-report` ) { = g_unsafe_report 1 = ai + ai 1 continue } {}
+        ? ( seq a `--list-sources` ) { = g_list_sources 1 = ai + ai 1 continue } {}
         // `--may-panic=a,b,…`: what journal elision takes each runtime entry
         // for — `name T` (may start a panic: temporaries around a call keep
         // their registrations) or `name F`. tools/check_may_panic.py holds
