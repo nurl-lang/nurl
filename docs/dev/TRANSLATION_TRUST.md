@@ -100,7 +100,7 @@ encoding is a ledger row with a design note. The decisions:
 
 | encoding (tolean.py / tolean.nu) | what it says | argued by |
 |---|---|---|
-| scalars → `.int` | a number's value is no part of the memory model | design note, A2's `Ty.int`; nothing to prove beyond "the IR's `scalar` reads only numbers" |
+| scalars → `.int`; an untracked number (`c`) → `Expr.any`; a computation over tracked operands `e` → `(.add .any (.lt e (.lit 0)))`, any number with `e` still read | a number's value is no part of the memory model, and the model's runs must include the program's whatever its numbers (AGORA-1030: `.lit 0` made the model take every if's else arm) | design note, A2's `Ty.int` and `Eval.any`; `C.ite_any_both` shows both arms are runs |
 | a raw string bound from a literal or a fresh string → `(.vec .int)`; held in a value → `(.slice .int)` | owned text vs a view (MEMORY.md §1, §2.13) | ledger row; needs the IR's own provenance flag to be proved |
 | options → `sum int t`; structs → nested `prod`, one field = the field | layout-free shapes | design note (shapes only, no ownership choice) |
 | destructor types → `.dtor f u`, a one-field struct padded with an int | `% Drop` runs `f` at the end of every value | design note + A2-drop's theorems |

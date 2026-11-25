@@ -80,6 +80,7 @@ theorem Eval.restrict {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) {a2 : Nat 
   | slen hx => exact .slen hx
   | isl hx => exact .isl hx
   | isr hx => exact .isr hx
+  | any => exact .any
 
 theorem TakeVal.restrict {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (a2 : Nat → Bool) :
     TakeVal { m with alloc := minus m.alloc a2 } y v { m1 with alloc := minus m1.alloc a2 } := by

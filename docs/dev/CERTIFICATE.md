@@ -52,6 +52,17 @@ theorem Cert.m_leak :        -- M.leak
 The statements use A2's semantics only (`Steps`, `Stuck`, `emptyMem`,
 `Mem.alloc`). `formal/CLAIM.md` is their review document.
 
+**What "any run" means.** The core IR records what a program does with
+memory, not the numbers it computes. The translation writes every number
+the IR does not track (a condition, a loop condition, an index, a
+computed value) as `Expr.any`, which evaluates to any number (AGORA-1030).
+A model step on such a condition can take either arm (`C.ite_any_both`),
+so the runs a claim quantifies over include every run the program can make,
+whatever its numbers. Certificates made before this (nurl-cert 0.1.0, the
+v0.95.0 release) wrote `.lit 0` there. Their model took only the else arm
+of every `if`, so their claims covered that single run; the checker's
+verdict, which types every arm, was the same. Certify such a bundle again.
+
 The proofs are one line each. `formal/C/Cert.lean` (C13) gives
 `cert_safe`, `cert_leak_end` and `cert_leak_panic`: A2's `memory_safe`,
 `no_leak_end` and `no_leak_panic`, for any program whose checker verdict

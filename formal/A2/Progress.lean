@@ -74,6 +74,7 @@ theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT
     obtain ⟨v, hv | hv⟩ := sum_slot_undtor hi hx hl ht
     · exact ⟨_, Eval.isl hv⟩
     · exact ⟨_, Eval.isr hv⟩
+  | any => exact ⟨0, Eval.any⟩
 
 theorem frees_owned {m : Mem} (hh : HeapOK m) {x : Var} {τ : Ty} {t : Val}
     (hx : m.st x = some ⟨true, some t⟩) (hw : WFv τ t) : ∃ a', Frees m.alloc t a' :=

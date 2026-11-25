@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.1] — unreleased
+
+### Fixed
+
+- A certificate's claims cover every run, whatever the program's numbers (AGORA-1030): an untracked number is A2's `Expr.any`, not `.lit 0`, which made the model take every if's else arm. Certify 0.1.0 bundles again.
+
+## [0.1.0] — 2026-11-25
 
 ### Changed
 
@@ -22,8 +28,6 @@
 - `tests/translate_test.sh`: core IR edits the translator must refuse,
   and the translator against `tools/ncore/tolean.py` on every certify
   program.
-
-## [0.1.0] — 2026-11-25
 
 ### Added
 

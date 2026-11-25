@@ -72,6 +72,7 @@ theorem Eval.lift {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) (a2 : Nat → 
   | slen hx => exact Eval.slen hx
   | isl hx => exact Eval.isl hx
   | isr hx => exact Eval.isr hx
+  | any => exact Eval.any
 
 theorem TakeVal.lift {m m1 : Mem} {y : Var} {v : Val} (h : TakeVal m y v m1) (a2 : Nat → Bool) :
     TakeVal (liftMem a2 m) y v (liftMem a2 m1) := by

@@ -580,6 +580,8 @@ inductive Eval (m : Mem) : Expr → Nat → Prop
       m.st x = some ⟨false, some (.view d o l)⟩ → Eval m (.slen x) l
   | isl {x : Var} {o : Bool} {v : Val} : m.st x = some ⟨o, some (.inl v)⟩ → Eval m (.isl x) 1
   | isr {x : Var} {o : Bool} {v : Val} : m.st x = some ⟨o, some (.inr v)⟩ → Eval m (.isl x) 0
+  /-- AGORA-1030: a number the model does not track is any number. -/
+  | any {n : Nat} : Eval m .any n
 
 /-- An element read out of a buffer: an element `Vec` is lent, as `href`;
     a struct is copied with what it holds lent.  A share is lent as itself,
@@ -981,6 +983,7 @@ def Expr.rename (ρ : Var → Var) : Expr → Expr
   | .len x => .len (ρ x)
   | .slen x => .slen (ρ x)
   | .isl x => .isl (ρ x)
+  | .any => .any
 
 def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .expr e => .expr (e.rename ρ)

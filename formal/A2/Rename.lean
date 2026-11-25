@@ -1971,6 +1971,7 @@ theorem exprT_ren (h : S.OK) (hab : S.AbsOK Γa) {e : Expr} (he : ExprT Γa e)
   | isl hx hl ht =>
     exact ExprT.isl (canon_some h hx (hvs _ (by simp [Expr.vars]))) (by rw [subE_live, liftE_live]; exact hl)
       (by rw [subE_ty, liftE_ty' h hab hx]; exact ht)
+  | any => exact ExprT.any
 
 theorem liftE_indep {E : Entry} (hrb : E.mode ≠ .rootb) (x v : Var) : S.liftE x E = S.liftE v E := by
   simp [liftE, hrb]

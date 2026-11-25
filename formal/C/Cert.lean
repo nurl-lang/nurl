@@ -74,9 +74,9 @@ the kernel: what a bundle's Claims.lean states, here inside the proof. -/
 /-- `vec_push_len.nu`'s `main`. -/
 def certWitnessMain : Fn :=
   { params := [], resTy := .int, resOwn := false, lends := [], rholds := [],
-    outHolds := [], body := (.block (.letv 4 (.expr (.lit 0)) (.letv 5 (.expr (.lit 0))
+    outHolds := [], body := (.block (.letv 4 (.expr .any) (.letv 5 (.expr .any)
       (.seq (.letv 1 (.new .int) (.letv 2 (.var 1) (.seq (.push 2 5) (.seq (.push 2 4)
-        (.letv 3 (.expr (.len 2)) (.assign 0 (.expr (.lit 0)))))))) (.exit 0))))), nvars := 7 }
+        (.letv 3 (.expr (.len 2)) (.assign 0 (.expr .any))))))) (.exit 0))))), nvars := 7 }
 
 def certWitness : Prog := [certWitnessMain]
 
@@ -90,5 +90,24 @@ theorem cert_witness_leak :
     (∀ m', Steps certWitness (emptyMem 1) (.letcall 0 0 [] .skip) (.ok m' .skip) → ∀ i, m'.alloc i = false) ∧
     (∀ m', Steps certWitness (emptyMem 1) (.letcall 0 0 [] .skip) (.panic m') → ∀ i, m'.alloc i = false) :=
   ⟨cert_leak_end cert_witness_ok, cert_leak_panic cert_witness_ok⟩
+
+/-! ### What the claims cover (AGORA-1030)
+
+The core IR does not track a program's numbers, and the translation writes
+each untracked one as `Expr.any`. A model step on a condition of that kind
+goes either way, so the runs a claim quantifies over take every arm the
+program can take, whatever its numbers. (With `.lit 0` in its place, as
+before, the model took only the else arm of every `if`.) -/
+
+/-- Both arms of a condition on an untracked number are steps of the model. -/
+theorem ite_any_both (P : Prog) (m : Mem) (a b : Stmt) :
+    Step P m (.ite .any a b) (.ok m a) ∧ Step P m (.ite .any a b) (.ok m b) :=
+  ⟨.iteT (n := 1) .any (by decide), .iteF .any⟩
+
+/-- ... and a loop on one unfolds to such a condition: each round may stop
+    or go round (`ite_any_both` on what this steps to). -/
+theorem while_any_unfolds (P : Prog) (m : Mem) (s : Stmt) :
+    Step P m (.while .any s) (.ok m (.ite .any (.seq s (.while .any s)) .skip)) :=
+  .while
 
 end C

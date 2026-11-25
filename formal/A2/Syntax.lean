@@ -882,6 +882,9 @@ inductive Expr where
   | len (x : Var)    -- `vec_len`
   | slen (x : Var)   -- `slice_len`
   | isl (x : Var)    -- an enum's tag: 1 for the first variant
+  | any              -- AGORA-1030: a number the program computes and the model does
+                     -- not track (the core IR's `c`): any value, so the model's runs
+                     -- include every run of the program whatever its numbers
 deriving DecidableEq, Repr
 
 /-- Parameter conventions (§1).  An `inout` parameter carries the most the

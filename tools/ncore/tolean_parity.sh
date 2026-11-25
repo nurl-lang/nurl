@@ -77,7 +77,7 @@ class() {   # class DIR K: ok | unsupported | other
     elif [ "$rc" = 2 ] && head -c 13 "$1/$2.err" | grep -q '^unsupported: '; then echo unsupported
     else echo "other(rc $rc)"; fi
 }
-n_ok=0; n_uns=0; n_other=0; n_diff=0; n_thr=0
+n_ok=0; n_uns=0; n_other=0; n_diff=0; n_thr=0; n_temps=0
 : > "$W/diffs.txt"; : > "$W/threaded.txt"
 while read -r k; do
     p=$(cat "$W/core/$k.path")
@@ -90,7 +90,19 @@ while read -r k; do
     cp_=$(class "$W/py" "$k"); cn=$(class "$W/nu" "$k")
     why=""
     if [ "$cp_" != "$cn" ]; then why="class: python $cp_, nurl $cn"
-    elif ! cmp -s "$W/py/$k.out" "$W/nu/$k.out"; then why="stdout differs"
+    elif ! python3 "$ROOT/tools/ncore/norm_any.py" "$W/nu/$k.out" > "$W/nu/$k.norm"; then
+        why="tools/ncore/norm_any.py failed"
+    elif ! cmp -s "$W/py/$k.out" "$W/nu/$k.norm"; then
+        # (AGORA-1030: a literal temporary is bound at its statement, where
+        # tolean.py binds it at the top: compared with those bindings
+        # dropped on both sides, the same temporaries required per function;
+        # a normalizer that fails is a difference, never two empty files equal)
+        if ! python3 "$ROOT/tools/ncore/norm_any.py" --drop-temps "$W/py/$k.out" > "$W/py/$k.dt" \
+            || ! python3 "$ROOT/tools/ncore/norm_any.py" --drop-temps "$W/nu/$k.out" > "$W/nu/$k.dt"; then
+            why="tools/ncore/norm_any.py --drop-temps failed"
+        elif cmp -s "$W/py/$k.dt" "$W/nu/$k.dt"; then
+            n_temps=$((n_temps + 1))
+        else why="stdout differs (modulo .any and literal-temp placement, AGORA-1030)"; fi
     elif [ "$cp_" = unsupported ] && ! cmp -s "$W/py/$k.err" "$W/nu/$k.err"; then why="unsupported message differs"
     fi
     case "$cp_" in ok) n_ok=$((n_ok + 1)) ;; unsupported) n_uns=$((n_uns + 1)) ;; *) n_other=$((n_other + 1)) ;; esac
@@ -112,6 +124,7 @@ echo "  translated (ok): $n_ok"
 echo "  unsupported:     $n_uns"
 echo "  other (python):  $n_other"
 echo "threaded (A3):     $n_thr (not compared)"
+echo "  same but where literal temporaries are bound: $n_temps"
 echo "differences:       $n_diff"
 LC_ALL=C printf 'time, %s jobs: tolean.py %.2f s, nurl-cert translate %.2f s\n' "$JOBS" \
     "$(echo "$t1 - $t0" | bc)" "$(echo "$t2 - $t1" | bc)"

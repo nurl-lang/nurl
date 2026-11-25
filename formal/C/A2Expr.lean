@@ -30,6 +30,7 @@ def checkExpr2 (Γ : Ctx) : Expr → Bool
   | .isl x => match Γ x with
     | some E => E.live && (match E.ty.undtor with | .sum _ _ => true | _ => false)
     | none => false
+  | .any => true
 
 theorem checkExpr2_sound {Γ : Ctx} : ∀ {e : Expr}, checkExpr2 Γ e = true → ExprT Γ e := by
   intro e
@@ -63,5 +64,6 @@ theorem checkExpr2_sound {Γ : Ctx} : ∀ {e : Expr}, checkExpr2 Γ e = true →
       · rename_i a b hty; exact .isl hE hl hty
       · cases ht
     · cases h
+  | any => intro _; exact .any
 
 end C

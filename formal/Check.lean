@@ -1059,6 +1059,9 @@ import D
 #print axioms C.cert_leak_panic
 #print axioms C.cert_witness_safe
 #print axioms C.cert_witness_leak
+-- AGORA-1030: an untracked number is any number; the model takes either arm
+#print axioms C.ite_any_both
+#print axioms C.while_any_unfolds
 -- Phase C14: a threaded program's certificate claims (AGORA-1020)
 #print axioms C.cert3_safe
 #print axioms C.cert3_race
