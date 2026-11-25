@@ -368,10 +368,12 @@ $ `stdlib/std/random.nu`
     : String core_path ( nc_join out `Program.core` )
     ? ! ( nc_write ( string_data core_path ) ( string_data . r1 out ) ) { ^ ( __ct_fail `cannot write Program.core` ) } {}
     // The hashes are of the bytes the core IR was made from: nurlc prints
-    // each snapshot it compiled, and certify hashes those bytes. The files
-    // on disk must still hold them (a file changed during the run, or one
-    // whose bytes nurlc does not read whole, certifies nothing), so that
-    // verify, which re-hashes the files, checks the same bytes.
+    // each snapshot it compiled, and certify hashes those bytes. Each file
+    // on disk must hold those bytes when certify checks it, so that
+    // verify, which re-hashes the files, checks the bytes that were
+    // compiled. A file that differs then (or one nurlc did not read whole)
+    // certifies nothing; an edit undone before that check is not seen, and
+    // need not be: the recorded hash is still of the compiled bytes.
     : ( Vec String ) sources ( vec_new [String] )
     : ( Vec String ) shas ( vec_new [String] )
     ? ! ( __ct_records . r1 err ( string_data tag ) sources shas ) { ^ ( __ct_fail `nurlc's list of sources is cut short` ) } {}
