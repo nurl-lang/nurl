@@ -361,7 +361,11 @@ a borrowed parameter, a field, a result a callee lent, or a result owned
 on only some paths (decided per call, at run time). So no callee ever
 adopts or frees memory it was only shown, and nothing is released by
 hand. (`unsafe` code and the standard library manage a raw `sink s` by
-hand, and their consuming parameters are still inferred.)
+hand, and their consuming parameters are still inferred.) A generic's
+`sink A` made at `A = s` is not a declared `sink s`: the template takes
+over an `A`, and an `s` is a view, as a `( Vec s )` holds views. So
+`( pair_new [s i] `key` 1 )` gives a `( Pair s i )` that borrows its
+string, and the caller hands it no copy (AGORA-1028).
 
 One implementation limit remains: an owned slice, or a struct whose
 literal gave it one, cannot be passed to an explicit `sink` parameter —
