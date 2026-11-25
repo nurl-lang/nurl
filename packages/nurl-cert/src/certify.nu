@@ -17,6 +17,7 @@ $ `claims.nu`
 $ `shape.nu`
 $ `lean.nu`
 $ `manifest.nu`
+$ `tolean.nu`
 $ `stdlib/std/random.nu`
 
 : s NURLCERT_VERSION ( pkg_version )
@@ -27,7 +28,6 @@ $ `stdlib/std/random.nu`
     String prof
     String nurlc
     String formal
-    String tolean
     String lake
     String binary
     String stdlib
@@ -35,11 +35,12 @@ $ `stdlib/std/random.nu`
 
 // ── The translation (one interface) ──────────────────────────────────
 //
-// `.core` text in, Program.lean out. Until the translator written in NURL
-// lands (AGORA-1020), this calls the Python prototype tools/ncore/tolean.py
-// unchanged and only rewrites its frame: the import (C.Cert, which has the
-// claims' lemmas) and the `#eval` line (the claims replace it). The shape
-// check in shape.nu then holds the result to the program grammar.
+// `.core` text in, Program.lean out. The translator is tolean.nu (the
+// NURL port of the Python prototype tools/ncore/tolean.py, which it
+// matches byte for byte: tools/ncore/tolean_parity.sh); only its frame is
+// rewritten here: the import (C.Cert, which has the claims' lemmas) and
+// the `#eval` line (the claims replace it). The shape check in shape.nu
+// then holds the result to the program grammar.
 
 : Translated {
     b ok
@@ -56,7 +57,9 @@ $ `stdlib/std/random.nu`
         ?? ( vec_get [String] ls k ) {
             T l → {
                 ? ( string_starts_with l `#eval ` ) {} {
-                    ? ( nc_is l `import C.A2Prog` ) {
+                    // (a threaded program's frame imports C.Cert3; its Claims.lean
+                    // imports that itself, so Program.lean stays the one grammar)
+                    ? | ( nc_is l `import C.A2Prog` ) ( nc_is l `import C.Cert3` ) {
                         ( string_push_str o `import C.Cert` )
                     } {
                         ( string_push_str o ( string_data l ) )
@@ -71,19 +74,15 @@ $ `stdlib/std/random.nu`
     ^ o
 }
 
-@ cert_translate s tolean s core_path → Translated {
-    : ( Vec String ) a ( vec_new [String] )
-    ( vec_push [String] a ( string_from tolean ) )
-    ( vec_push [String] a ( string_from core_path ) )
-    : Run r ( nc_run `python3` a )
-    ? ! . r started { ^ @ Translated { F ( string_new ) ( string_clone . r err ) } } {}
-    ? != . r code 0 {
-        : ~ String why ( string_trim . r err )
-        ? ( string_starts_with why `unsupported: ` ) { = why ( string_substr why 13 - ( string_len why ) 13 ) } {}
-        ? == 0 ( string_len why ) { ^ @ Translated { F ( string_new ) ( string_from `the translator failed` ) } } {}
-        ^ @ Translated { F ( string_new ) why }
-    } {}
-    ^ @ Translated { T ( __ct_reframe ( string_data . r out ) ) ( string_new ) }
+@ cert_translate s core_path → Translated {
+    : String text ?? ( nc_read core_path ) {
+        T x → x
+        F → { ^ @ Translated { F ( string_new ) ( string_from `cannot read the core IR` ) } }
+    }
+    ^ ?? ( tolean_translate ( string_data text ) ) {
+        T lean → @ Translated { T ( __ct_reframe ( string_data lean ) ) ( string_new ) }
+        F why → @ Translated { F ( string_new ) why }
+    }
 }
 
 // ── What nurlc says ──────────────────────────────────────────────────
@@ -271,30 +270,39 @@ $ `stdlib/std/random.nu`
 
 // ── The ledger ───────────────────────────────────────────────────────
 
-@ cert_ledger s prof ( Vec String ) unsafe_rows → Json {
+@ cert_ledger s prof ( Vec String ) unsafe_rows b threads → Json {
+    // the claims a shared row backs: M.race too, for a threaded program
+    : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
+    : s muc ? threads `M.unsafe M.safe M.leak M.race` `M.unsafe M.safe M.leak`
     : Json L ( json_arr_new )
     ( json_arr_push L ( mj_row `lean-kernel` `the Lean 4 kernel and the toolchain formal/lean-toolchain pins`
-    `it checks every proof in Program.lean and Claims.lean` `formal/lean-toolchain` `the Lean developers` `M.safe M.leak` ) )
+    `it checks every proof in Program.lean and Claims.lean` `formal/lean-toolchain` `the Lean developers` mc ) )
     ? != 0 ( nurl_str_eq prof `fast` ) {
         ( json_arr_push L ( mj_row `lean-compiler` `the Lean compiler and its runtime (native_decide)`
         `under the fast profile the checker's verdict is computed by compiled code, not by the kernel`
-        `Claims.lean, theorem Cert.verdict` `the Lean developers` `M.safe M.leak` ) )
+        `Claims.lean, theorem Cert.verdict` `the Lean developers` mc ) )
     } {}
-    ( json_arr_push L ( mj_row `claim-definitions` `the claims' definitions: A2's semantics (A2.Steps, A2.Stuck, A2.emptyMem, Mem.alloc)`
+    : s defs ? threads `the claims' definitions: A3's semantics over A2's (A3.Reach, A3.Race, A3.Cfg.init, A2.Stuck, Cfg.alloc)` `the claims' definitions: A2's semantics (A2.Steps, A2.Stuck, A2.emptyMem, Mem.alloc)`
+    ( json_arr_push L ( mj_row `claim-definitions` defs
     `a claim means what these definitions say; formal/CLAIM.md is their review document`
-    `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` `M.safe M.leak` ) )
-    ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then tools/ncore/tolean.py`
+    `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` mc ) )
+    ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
     `nothing yet proves that P is the program the source describes (AGORA-1020 moves it inside the kernel's sight)`
-    `compiler/nurlc.nu (--emit-core), tools/ncore/tolean.py` `nurl-cert's translator (untrusted, tested by tolean_selftest.sh)` `M.safe M.leak` ) )
+    `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted, tested by tests/translate_test.sh and tools/ncore/tolean_parity.sh)` mc ) )
     ( json_arr_push L ( mj_row `library-summaries` `the standard library as the term has it: its calls are A2 primitives and declared summaries`
     `the library's unsafe base follows formal/B's models by inspection, not by proof (AGORA-1014 ties each to its theorem)`
-    `tools/ncore/tolean.py, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` `M.safe M.leak` ) )
+    `packages/nurl-cert/src/tolean.nu, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` mc ) )
     ( json_arr_push L ( mj_row `llvm` `LLVM: the IR to machine code` `the claims are about the program's model; phase D validates the drops, nothing proves codegen`
-    `the LLVM IR hash in this manifest` `the LLVM project` `M.safe M.leak` ) )
-    ( json_arr_push L ( mj_row `linker` `the linker` `it joins the program with the C runtime` `the build` `the toolchain's linker` `M.safe M.leak` ) )
-    ( json_arr_push L ( mj_row `os` `the operating system` `memory, threads and files are the kernel's` `the host` `the OS vendor` `M.safe M.leak` ) )
+    `the LLVM IR hash in this manifest` `the LLVM project` mc ) )
+    ( json_arr_push L ( mj_row `linker` `the linker` `it joins the program with the C runtime` `the build` `the toolchain's linker` mc ) )
+    ( json_arr_push L ( mj_row `os` `the operating system` `memory, threads and files are the kernel's` `the host` `the OS vendor` mc ) )
     ( json_arr_push L ( mj_row `c-runtime` `the C runtime the program links against` `allocation, I/O and panics go through it`
-    `stdlib/runtime*.c` `the NURL project` `M.safe M.leak` ) )
+    `stdlib/runtime*.c` `the NURL project` mc ) )
+    ? threads {
+        ( json_arr_push L ( mj_row `drf-sc` `the C11 / LLVM memory model's DRF-SC guarantee`
+        `M.race is A3's race freedom of the program's model; that a race-free program behaves sequentially consistently in the binary is the memory model's theorem, cited, not mechanized`
+        `formal/CLAIM.md (trusted base), A3/DESIGN.md` `the C11 and LLVM memory models (Batty et al.; LLVM LangRef)` `M.race` ) )
+    } {}
     ( json_arr_push L ( mj_row `unsafe-report` `nurlc --unsafe-report: the program's own hand-vouched code`
     `M.unsafe is what this report says, not a theorem` `compiler/nurlc.nu (--unsafe-report)` `nurlc` `M.unsafe` ) )
     : i n ( vec_len [String] unsafe_rows )
@@ -305,7 +313,7 @@ $ `stdlib/std/random.nu`
                 : String id ( string_from `unsafe-` )
                 ( string_push_int id + k 1 )
                 ( json_arr_push L ( mj_row ( string_data id ) ( string_data r ) `the program vouches for this by hand (unsafe), no rule checks it`
-                ( string_data r ) `the program's author` `M.unsafe M.safe M.leak` ) )
+                ( string_data r ) `the program's author` muc ) )
             }
             F _ → {}
         }
@@ -423,14 +431,16 @@ $ `stdlib/std/random.nu`
     // 3. The translation, held to the program grammar.
     : ~ String verdict ( string_from `accepted` )
     : ~ String reason ( string_new )
-    : Translated tr ( cert_translate ( string_data . o tolean ) ( string_data core_path ) )
+    : Translated tr ( cert_translate ( string_data core_path ) )
     : String prog_path ( nc_join out `Program.lean` )
     : String claims_path ( nc_join out `Claims.lean` )
     : ~ i nv 0
+    : ~ b threads F
     ? . tr ok {
         : ShapeRes sh ( cert_shape ( string_data . tr lean ) )
         ? . sh ok {
             = nv . sh nv
+            = threads . sh threads
         } {
             = verdict ( string_from `unsupported` )
             = reason ( string_from `the translator's output is outside the program grammar: ` )
@@ -450,9 +460,9 @@ $ `stdlib/std/random.nu`
     : String formal ( string_clone . o formal )
     : ( Vec ( Vec String ) ) axioms ( vec_new [( Vec String )] )
     : ( Vec String ) statuses ( vec_new [String] )
-    : i nclaims ( cert_claim_count )
+    : i nclaims ( cert_claim_count threads )
     ? ( nc_is verdict `accepted` ) {
-        : String claims ( cert_claims_lean prof nv )
+        : String claims ( cert_claims_lean prof nv threads )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
         : String work ( nc_join out `.build` )
         // A fresh directory: an .olean the bundle brought must not stand in
@@ -463,7 +473,7 @@ $ `stdlib/std/random.nu`
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
-            = reason ( string_from `the verified checker refuses the program (C.certOK2B is false)` )
+            = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)` `the verified checker refuses the program (C.certOK2B is false)` )
         } {
             ? | ! . lr ran ( cert_lean_has_error . lr log ) {
                 = verdict ( string_from `error` )
@@ -523,10 +533,9 @@ $ `stdlib/std/random.nu`
         : String st ?? ( vec_get [String] statuses k ) { T x → ( string_clone x ) F → ( string_from `open` ) }
         : ( Vec String ) ax ?? ( vec_get [( Vec String )] axioms k ) { T x → ( vec_clone [String] x ) F → ( vec_new [String] ) }
         : String why ? ( nc_is st `open` ) ( string_clone reason ) ( string_new )
-        : String prem ( string_from `lean-kernel claim-definitions translation library-summaries` )
-        ? != 0 ( nurl_str_eq prof `fast` ) { ( string_push_str prem ` lean-compiler` ) } {}
+        : String prem ( cert_claim_premises prof k )
         ( json_arr_push cl ( __ct_claim ( cert_claim_id k ) ( cert_claim_lean k ) ( string_data st )
-        ( cert_claim_sentence k ) ( cert_claim_sentence_fi k ) ( string_data why ) ax ( string_data prem ) ) )
+        ( cert_claim_sentence threads k ) ( cert_claim_sentence_fi threads k ) ( string_data why ) ax ( string_data prem ) ) )
         = k + k 1
     }
     // M.unsafe: what nurlc's report says.
@@ -628,7 +637,7 @@ $ `stdlib/std/random.nu`
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )

@@ -20,7 +20,7 @@ unchanged. The exit code is the certificate's: 0 when every claim is
 proved, 2 when the translation does not cover the program, 3 when the
 checker refuses it. `nurl verify` runs `nurl-cert verify`. Both find
 `formal/` through `$NURL_FORMAL`, then next to `nurl.sh`. They need Lean's
-`lake` on `PATH`, and `formal/` built (`lake build C.Cert`).
+`lake` on `PATH`, and `formal/` built (`lake build C.Cert C.Cert3`).
 
 The flag's and the subcommand's names are working names. The owner
 confirms them before 1.0.
@@ -67,10 +67,47 @@ The proofs are one line each. `formal/C/Cert.lean` (C13) gives
 The kernel profile adds no axiom: `#print axioms` lists only `propext`,
 `Classical.choice` and `Quot.sound`.
 
-`M.race` (A3's data-race freedom) is not claimed yet. A program that
-spawns a thread or has globals is not translated at all. A3's claim
-(`C.checked_claim_made_full`) needs the spawn list and the declarations in
-the term, and those come with the NURL translator (AGORA-1020).
+**A threaded program** (one that calls `thread_spawn_owned`) is certified
+against A3, since A2 has no threads (AGORA-1020). Program.lean then ends
+with `def spawns : List Nat := [...]`, the spawned functions, and
+Claims.lean imports `C.Cert3` and proves three claims over every
+interleaving of its threads, from `C.certOK3B P spawns entry 1`
+(`formal/C/Cert3.lean`, C14):
+
+```lean
+theorem Cert.m_safe : ∀ C, A3.Reach P (fun f => decide (f ∈ spawns)) (A3.Cfg.init entry 1) C →
+    ∀ (i : Nat) (t : A3.Thread), C.ths[i]? = some t → ¬ A2.Stuck P (C.view t) t.s
+theorem Cert.m_leak : ∀ C, A3.Reach … C → (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false
+theorem Cert.m_race : ∀ C, A3.Reach … C → ¬ A3.Race P C
+```
+
+- `M.race` rests on one more ledger row, `drf-sc`: the C11 / LLVM memory
+  model's guarantee that a race-free program behaves sequentially
+  consistently. It is cited, not mechanized.
+- A spawn is A3's spawn-only call of a wrapper function. The wrapper takes
+  the closure over (class `send`: its environment holds no view and no
+  binding by name) and calls it.
+- The join is a read. Modelling no join only adds interleavings, so the
+  claims hold all the more with it.
+- `thread_spawn_owned` gives the thread its own copy of the environment.
+  The translation moves it instead, which is stricter: a program that uses
+  the closure again after spawning it is refused. That is a precision gap,
+  never a hole.
+- Module globals are not translated yet: such a program is `unsupported`.
+- **What the threaded claims cover.** The translation takes every
+  `thread_spawn_owned` to succeed. A run in which `pthread_create` fails,
+  and the code that handles `ThreadCreate`, is outside the claims: that
+  code is type-checked with the rest, but no theorem speaks of its runs.
+  Modelling a failing spawn would need a nondeterministic outcome in A3.
+  The sentences say so ("on any run in which every thread it spawns
+  starts").
+- `M.leak` for a threaded program is A3's leak clause: once every thread
+  has finished, nothing is allocated. Unlike the single-threaded claim, it
+  says nothing of a run that a panic ends.
+- A spawned closure that is used again after its spawn, or passed to a
+  function that takes the ordinary closure type, is `unsupported`. Not
+  refused: `thread_spawn_owned` copies the environment, and the copy is not
+  translated yet.
 
 ## 2. The bundle
 
@@ -82,6 +119,16 @@ prog.cert/
   Claims.lean     the claims above, stated and proved; only when the checker accepts
 ```
 
+- **Program.lean** is made from Program.core by nurl-cert's translator
+  (`packages/nurl-cert/src/tolean.nu`, on the one reader of the core IR,
+  `coreir.nu`), with no other program in between: `nurl-cert translate
+  prog.core` prints the same term with the checker's `#eval` frame. It
+  is the NURL port of the Python prototype `tools/ncore/tolean.py`, which
+  stays its reference: `tools/ncore/tolean_parity.sh` runs both over
+  every certify program and every hole probe and finds no byte of
+  difference, and `packages/nurl-cert/tests/translate_test.sh` holds the
+  fail-closed cases (a core IR the translation cannot render is
+  `unsupported`, never a term).
 - **Program.lean** is held to the translator's grammar:
   - the lines `import C.Cert` and `open A2 C`;
   - `def fn<k> : Fn := …`;
@@ -131,7 +178,7 @@ tool        { name, version }
 profile     "kernel" | "fast"
 program     { source, verdict: accepted | refused | unsupported | error, reason, slots }
 claims      [ { id, lean, status, sentence { en, fi }, reason, axioms [..], premises [ledger ids] } ]
-            M.safe, M.leak, then M.unsafe, in this order
+            M.safe, M.leak, (a threaded program) M.race, then M.unsafe, in this order
 coverage    { functions: [ { name, file, line, status, reason } ], <status>: count }
 hashes      { sources: [ { path, sha256 } ], core_ir, llvm_ir?, program_lean?, claims_lean?,
               binary?: { path, sha256 } }
@@ -170,9 +217,10 @@ One row per thing the claims rest on and do not prove:
 | `lean-kernel` | the Lean 4 kernel and the pinned toolchain |
 | `lean-compiler` | (profile `fast` only) the Lean compiler, which computes the verdict |
 | `claim-definitions` | the claims' definitions, A2's semantics (`formal/CLAIM.md`) |
-| `translation` | the step from source to term: `nurlc --emit-core`, then `tools/ncore/tolean.py` (AGORA-1020 removes it) |
+| `translation` | the step from source to term: `nurlc --emit-core`, then nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`; AGORA-1020 takes it out of the trusted path) |
 | `library-summaries` | the standard library as the term has it, A2 primitives and declared summaries; the models follow the library by inspection (AGORA-1014) |
 | `llvm`, `linker`, `os`, `c-runtime` | the path from the IR to a running binary |
+| `drf-sc` | (a threaded program) the C11 / LLVM memory model's DRF-SC guarantee, for `M.race` |
 | `unsafe-report` | `M.unsafe` is what nurlc's `--unsafe-report` says |
 | `unsafe-<n>` | one row per line of that report: each `unsafe` function, `unsafe % Send` / `% Sync` assertion and foreign-declaration claim of the program |
 

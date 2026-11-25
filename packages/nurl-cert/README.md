@@ -55,7 +55,6 @@ closures and channels in part. Threads and globals are not covered yet.
 Needs:
 - `nurlc`;
 - Lean's `lake` on `PATH`;
-- `formal/` built (`cd formal && lake build C.Cert`);
-- `python3` for the translator, until it is written in NURL (AGORA-1020).
+- `formal/` built (`cd formal && lake build C.Cert C.Cert3`).
 
 `verify` needs only Lean.

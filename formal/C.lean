@@ -19,6 +19,7 @@ import C.A2Exit
 import C.A2Glue
 import C.DedupWitness
 import C.Cert
+import C.Cert3
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
@@ -40,4 +41,7 @@ lists geometrically (`C/DedupWitness.lean`). C13, a program's certificate
 (`C/Cert.lean`, AGORA-1019): the checker's verdict on one program as one
 boolean (`certOK2B`), and A2's memory safety and leak freedom for it
 (`cert_safe`, `cert_leak_end`, `cert_leak_panic`), the theorems a bundle of
-`packages/nurl-cert` instantiates with its program's term. -/
+`packages/nurl-cert` instantiates with its program's term. C14, a threaded
+program's (`C/Cert3.lean`, AGORA-1020): `certOK3B` adds A3's conditions
+(the spawned functions, no module global), and `cert3_safe`, `cert3_race`
+and `cert3_leak` give A3's claim on every interleaving from the entry. -/

@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- The translation from the core IR to the Lean term is written in NURL
+  (`src/tolean.nu`, on the core IR reader `src/coreir.nu`), and no Python
+  runs between `Program.core` and the theorem: `python3` is no longer
+  needed, and the `--tolean` option is gone. The translator prints exactly
+  what the Python prototype `tools/ncore/tolean.py` prints, which stays its
+  reference: `tools/ncore/tolean_parity.sh` compares the two over every
+  certify program and every hole probe (AGORA-1020).
+- The `translation` and `library-summaries` ledger rows name
+  `packages/nurl-cert/src/tolean.nu`.
+
+### Added
+
+- `nurl-cert translate prog.core`: the Lean term of a core IR on stdout,
+  or `unsupported: <why>` on stderr and exit 2 (exit 1 for a core IR it
+  cannot read).
+- `tests/translate_test.sh`: core IR edits the translator must refuse,
+  and the translator against `tools/ncore/tolean.py` on every certify
+  program.
+
 ## [0.1.0] — 2026-11-25
 
 ### Added
