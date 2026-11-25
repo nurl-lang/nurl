@@ -194,6 +194,31 @@ expect_internal "a call with an operand word past its count" "$TMP/x2.core" "mal
 sed 's/^ret c$/ret/' "$TMP/s.core" > "$TMP/n7.core"
 expect_internal "a ret with no operand word" "$TMP/n7.core" "a word the core IR's statement does not have"
 
+# AGORA-1030: an untracked number a statement consumes (a call's `c`
+# argument) is bound at that statement, `(.letv q (.expr .any) …)`: inside a
+# loop, each round's is any number again, not one value for every round.
+cat > "$TMP/lp.nu" <<'NU'
+$ `stdlib/core/vec.nu`
+@ main → i {
+    : ( Vec i ) v ( vec_new [i] )
+    : ~ i k 0
+    ~ < k 3 {
+        ( vec_push [i] v 7 )
+        = k + k 1
+    }
+    ^ ( vec_len [i] v )
+}
+NU
+"$NURLC" --emit-core "$TMP/lp.nu" > "$TMP/lp.core" 2> /dev/null || bad "lp: nurlc --emit-core"
+rc=$(tl "$TMP/lp.core")
+q=$(grep -o '(.push [0-9]* [0-9]*)' "$TMP/out" | head -1 | sed 's/(.push [0-9]* \([0-9]*\))/\1/')
+body=$(grep 'body := ' "$TMP/out" | grep '(.push ')
+inloop=${body#*(.loop }
+if [ "$rc" = 0 ] && [ -n "$q" ] && case "$inloop" in *"(.letv $q (.expr .any) (.seq (.push "*) true ;; *) false ;; esac \
+    && case "${body%%(.loop *}" in *"(.letv $q "*) false ;; *) true ;; esac; then
+    ok "a call's untracked argument in a loop is bound in the loop's body (fresh each round)"
+else bad "a call's untracked argument in a loop is bound in the loop's body (exit $rc, temporary ${q:-none})"; fi
+
 echo "== 1b. threads (A3; beyond tolean.py)"
 # A program that spawns (`thread_spawn_owned`) is translated for A3: the
 # closure of class `send`, a spawn wrapper, `def spawns`, the claim
@@ -331,7 +356,10 @@ if command -v python3 > /dev/null; then
         python3 tools/ncore/tolean.py "$TMP/$k.core" > "$TMP/$k.py.out" 2> "$TMP/$k.py.err"; prc=$?
         "$CERT" translate "$TMP/$k.core" > "$TMP/$k.nu.raw" 2> "$TMP/$k.nu.err"; nrc=$?
         # AGORA-1030: `.any` where tolean.py writes `(.lit 0)`; compared modulo that
-        python3 tools/ncore/norm_any.py "$TMP/$k.nu.raw" > "$TMP/$k.nu.out"
+        # (and where a literal temporary is bound: at its statement, not at
+        # the top of the function, compared with those bindings dropped)
+        python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.nu.raw" > "$TMP/$k.nu.out"
+        python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.py.out" > "$TMP/$k.py.n"; mv "$TMP/$k.py.n" "$TMP/$k.py.out"
         if [ "$prc" = "$nrc" ] && cmp -s "$TMP/$k.py.out" "$TMP/$k.nu.out" && cmp -s "$TMP/$k.py.err" "$TMP/$k.nu.err"; then
             same=$((same + 1))
         else bad "$k: the translator differs from tolean.py (exit $nrc, tolean.py $prc)"; fi

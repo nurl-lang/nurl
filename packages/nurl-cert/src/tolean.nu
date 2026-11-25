@@ -1052,6 +1052,8 @@ $ `coreir.nu`
     ^ - . t next 1
 }
 
+// lit_temp: an integer temporary holding a number the IR does not track,
+// bound (`.expr .any`) around the statement that consumes it (__stmts).
 @ __lit_temp inout TlSt t → i {
     : i x ( __fresh t )
     ( vec_push [i] . t lits x )
@@ -2028,8 +2030,27 @@ $ `coreir.nu`
 }
 
 // stmts: the statements ls[a, b) as one A2 statement, ending in `tail`:
-// each binding scoped over what follows it.
+// each binding scoped over what follows it. AGORA-1030: the temporaries
+// that hold the untracked numbers the statement at `a` consumes
+// (`__lit_temp`: a call's `c` argument, a literal's `c` field, …) are
+// bound around that statement's term, `(.letv q (.expr .any) …)`, so each
+// time the statement runs (each round of a loop around it) they are any
+// number again. (The term of `a` holds the rest of the list, whose own
+// temporaries its own call binds, inside: the temporaries left at the end
+// of t.lits past where it stood on entry are exactly those of `a`.)
 @ __stmts TlMod m inout TlSt t ( Vec i ) ls i a i b s tail → !String String {
+    : i n0 ( vec_len [i] . t lits )
+    : ~ String st \ ( __stmts_ m t ls a b tail )
+    : ~ i q - ( vec_len [i] . t lits ) 1
+    ~ >= q n0 {
+        = st ( __f2 `(.letv % (.expr .any) %)` ( string_data ( __ns ( vec_at [i] . t lits q ) ) ) ( string_data st ) )
+        : ?i _o ( vec_pop [i] . t lits )
+        = q - q 1
+    }
+    ^ @ !String String { T st }
+}
+
+@ __stmts_ TlMod m inout TlSt t ( Vec i ) ls i a i b s tail → !String String {
     ? >= a b { ^ @ !String String { T ( string_from tail ) } } {}
     : i p . t p
     // the last statement that is not a `line` or a `drop`
@@ -2720,11 +2741,9 @@ $ `coreir.nu`
     // (a `void` function may fall off its end: its result is the unit)
     : String tail ? ( __eq ( __ret m p ) `void` ) ( __f1 `(.assign % (.expr (.lit 0)))` ( string_data ( __ns . t rslot ) ) ) ( string_from `.skip` )
     : ~ String inner \ ( __stmts m t all 0 nl ( string_data tail ) )
-    : ~ i q - ( vec_len [i] . t lits ) 1
-    ~ >= q 0 {
-        = inner ( __f2 `(.letv % (.expr .any) %)` ( string_data ( __ns ( vec_at [i] . t lits q ) ) ) ( string_data inner ) )
-        = q - q 1
-    }
+    // (every literal temporary is bound at the statement that consumes it:
+    // __stmts leaves none)
+    ? > ( vec_len [i] . t lits ) 0 { ^ @ !String String { F ( string_from `internal: a literal temporary bound by no statement` ) } } {}
     ? . t closure { = inner \ ( __read_caps m t ( string_data inner ) ) } {}
     : String body ( __f1 `(.block %)` ( string_data inner ) )
     : String params ( string_new )
