@@ -26,6 +26,23 @@
 // type's interface; the standard library's calls are A2's constructs
 // (`intrinsic`). Anything else is unsupported, and the program is not
 // emitted.
+//
+// Intentional deviations from tolean.py (fail closed on malformed IR):
+// where tolean.py reads a core IR nurlc never prints as if it were well
+// formed, this translator refuses it (`internal: malformed …`, exit 1 of
+// `nurl-cert translate`), before translating the function:
+// - a statement whose operand count exceeds the operand words it has
+//   (`call`, `closure`, `callind`, `scalar`, `agg`), or whose count is not
+//   a number: tolean.py takes the words there are (`eval call f 1` became
+//   a call of no argument), or stops where it first reads the count;
+// - a block opener (`scope`, `if`, `loop`, `match`, `foreach`, `defer`)
+//   with no `end` before the function's end, and a closer out of place
+//   (an `end` with no block open, an `else` not in an `if`, an `arm` not
+//   in a `match`, a `loopcond` not in a `loop`): tolean.py ran an unclosed
+//   block to the function's end. An empty `scope` … `end` stays valid.
+// (A limit, not a choice: a variable id past core_id_max, or a count or
+// parameter number past 64 bits, which tolean.py reads as an unbounded
+// integer, is refused here too.)
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -97,26 +114,67 @@ $ `coreir.nu`
 // `op.startswith("v") and op[1:].isdigit()`: a whole variable.
 @ __vref s op → b { ^ & ( __sw op `v` ) ( __isdig_from op 1 ) }
 
-// `int(a[k:])`, where tolean.py's `int` would stop the run on anything
-// but a number.
+// `int(a[k:])` of an id, where tolean.py's `int` would stop the run on
+// anything but a number. (Python's integers have no bound: an id past
+// core_id_max, which nurlc never prints, stops this run too: A2's
+// numbering of it is printed, and would not fit.)
 @ __pint_from s a i k → i {
-    : ( Slice u ) t ( slice_of_str a )
-    : i n ( slice_len [u] t )
-    : ~ i j k
-    : ~ b neg F
-    ? & < j n | == ( slice_byte t j ) 45 == ( slice_byte t j ) 43 {
-        = neg == ( slice_byte t j ) 45
-        = j + j 1
-    } {}
-    ? >= j n { ( panic `internal: a number expected in the core IR` ) } {}
-    : ~ i v 0
-    ~ < j n {
-        : i c ( slice_byte t j )
-        ? | < c 48 > c 57 { ( panic `internal: a number expected in the core IR` ) } {}
-        = v + * v 10 - c 48
-        = j + j 1
+    : String x ( __from a k )
+    ?? ( core_parse_int ( string_data x ) ) {
+        T v → {
+            ? | > v ( core_id_max ) < v - 0 ( core_id_max ) { ( panic `internal: a variable id past the bound the core IR keeps to (2^62)` ) } {}
+            ^ v
+        }
+        F → {}
     }
-    ^ ? neg - 0 v v
+    ( panic `internal: a number expected in the core IR` )
+    ^ 0
+}
+
+// Python's `int()` syntax (core_parse_int's), whatever the size.
+@ __int_syntax s a → b {
+    : ( Slice u ) t ( slice_of_str a )
+    : ~ i n ( slice_len [u] t )
+    : ~ i k 0
+    ~ & < k n ( core_is_ws ( slice_byte t k ) ) { = k + k 1 }
+    ~ & > n k ( core_is_ws ( slice_byte t - n 1 ) ) { = n - n 1 }
+    ? & < k n | == ( slice_byte t k ) 45 == ( slice_byte t k ) 43 { = k + k 1 } {}
+    ? >= k n { ^ F } {}
+    : ~ b prev F
+    ~ < k n {
+        : i c ( slice_byte t k )
+        ? == c 95 {
+            ? | ! prev >= + k 1 n { ^ F } {}
+            = prev F
+        } {
+            ? | < c 48 > c 57 { ^ F } {}
+            = prev T
+        }
+        = k + k 1
+    }
+    ^ prev
+}
+
+// A count (`call f n`, `agg - n`, …): `int()`, where one past 64 bits is
+// read as the largest (or smallest) count, which compares as Python's
+// unbounded one does with every count the IR can hold.
+@ __pcount s a → i {
+    ?? ( core_parse_int a ) {
+        T v → { ^ v }
+        F → {}
+    }
+    ? ! ( __int_syntax a ) { ( panic `internal: a number expected in the core IR` ) } {}
+    ? ( __has a `-` ) { ^ - -9223372036854775807 1 } {}
+    ^ 9223372036854775807
+}
+
+// A number of digits (`isdigit` checked) as an index, or -1 past 64 bits:
+// then it is no parameter's (tolean.py compares it with the count).
+@ __pidx s a → i {
+    ^ ?? ( core_parse_int a ) {
+        T v → v
+        F → -1
+    }
 }
 
 @ __pint s a → i { ^ ( __pint_from a 0 ) }
@@ -236,9 +294,11 @@ $ `coreir.nu`
     ( HashMap String i ) names
     // the types with a destructor A2 runs: DTOR_TYS
     ( HashMap String i ) dtor
-    // per program function: a variable's id → its flags, a parameter the
-    // walk inferred consumed or kept marked `sink` (4)
+    // per program function: each variable's flags (in the order of its
+    // CoreFn's `vids`), and the parameters the walk inferred consumed or
+    // kept, which are marked `sink` (4) unless `inout`
     ( Vec ( Vec i ) ) flg
+    ( Vec ( Vec i ) ) sinkp
     // per program function (closure code): MOVED_CAPS, the captures every
     // literal of it moves into the environment
     ( Vec ( Vec i ) ) moved
@@ -255,6 +315,8 @@ $ `coreir.nu`
     i np
     i next
     b has_vmap
+    // a closure's numbering: vmap[k] for the variable vmap_ids[k]
+    ( Vec i ) vmap_ids
     ( Vec i ) vmap
     i rslot
     ( Vec i ) caps
@@ -323,33 +385,32 @@ $ `coreir.nu`
 
 // fn["flags"].get(id, 0)
 @ __vflags TlMod m i p i id → i {
-    : ( Vec i ) f ( vec_at [( Vec i )] . m flg p )
-    ? | < id 0 >= id ( vec_len [i] f ) { ^ 0 } {}
-    ^ ( vec_at [i] f id )
+    : i k ( core_var_pos ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) id )
+    : i base ? < k 0 0 ( vec_at [i] ( vec_at [( Vec i )] . m flg p ) k )
+    ? & ( __in ( vec_at [( Vec i )] . m sinkp p ) id ) == 0 & base 2 { ^ | base 4 } {}
+    ^ base
 }
 
 // The ids of fn["vars"], in increasing order.
-@ __ids_sorted TlMod m i p → ( Vec i ) {
-    : ( Vec i ) out ( vec_new [i] )
-    : CoreFn fn ( vec_at [CoreFn] . . m ir fns ( __cf m p ) )
-    : i n ( vec_len [i] . fn vidx )
-    : ~ i k 0
-    ~ < k n {
-        ? >= ( vec_at [i] . fn vidx k ) 0 { ( vec_push [i] out k ) } {}
-        = k + k 1
-    }
-    ^ out
-}
+@ __ids_sorted TlMod m i p → ( Vec i ) { ^ ( vec_clone [i] . ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) vids ) }
 
 // The ids of fn["vars"], in the order of their first `v` line.
 @ __ids_order TlMod m i p → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : CoreFn fn ( vec_at [CoreFn] . . m ir fns ( __cf m p ) )
     : i n ( vec_len [CoreVar] . fn vars )
+    // (seen, by the id's place in `vids`)
+    : ( Vec b ) seen ( vec_new [b] )
     : ~ i k 0
+    ~ < k ( vec_len [i] . fn vids ) { ( vec_push [b] seen F ) = k + k 1 }
+    = k 0
     ~ < k n {
         : i id . ( vec_at [CoreVar] . fn vars k ) id
-        ? & >= id 0 ! ( __in out id ) { ( vec_push [i] out id ) } {}
+        : i q ( core_var_pos fn id )
+        ? ! ( vec_at [b] seen q ) {
+            ( vec_put [b] seen q T )
+            ( vec_push [i] out id )
+        } {}
         = k + k 1
     }
     ^ out
@@ -434,14 +495,20 @@ $ `coreir.nu`
                 ^ @ !v String { F ( __f2 `%: a result holding a copy of argument %'s views` f ( string_data ( __from tk 1 ) ) ) }
             } {}
             ? & ( __sw tk `^` ) ( __isdig_from tk 1 ) {
-                ( vec_push [i] ks ( __pint_from tk 1 ) )
-                ( vec_push [String] kinds ( string_from `.inner` ) )
+                : i k ( __pidx ( string_data ( __from tk 1 ) ) )
+                ? >= k 0 {
+                    ( vec_push [i] ks k )
+                    ( vec_push [String] kinds ( string_from `.inner` ) )
+                } {}
             } {
                 ? ( __isdig tk ) {
-                    ( vec_push [i] ks ( __pint tk ) )
-                    ( vec_push [String] kinds ( string_from `.view` ) )
-                    ( vec_push [i] ks ( __pint tk ) )
-                    ( vec_push [String] kinds ( string_from `.self` ) )
+                    : i k ( __pidx tk )
+                    ? >= k 0 {
+                        ( vec_push [i] ks k )
+                        ( vec_push [String] kinds ( string_from `.view` ) )
+                        ( vec_push [i] ks k )
+                        ( vec_push [String] kinds ( string_from `.self` ) )
+                    } {}
                 } {
                     ^ @ !v String { F ( __f2 `%: rviews %` f tk ) }
                 }
@@ -853,8 +920,9 @@ $ `coreir.nu`
 
 @ __var TlSt t i k → i {
     ? . t has_vmap {
-        ? | < k 0 >= k ( vec_len [i] . t vmap ) { ( panic `internal: a closure's variable the function does not declare` ) } {}
-        : i v ( vec_at [i] . t vmap k )
+        : i q ( core_bsearch . t vmap_ids k )
+        ? < q 0 { ( panic `internal: a closure's variable the function does not declare` ) } {}
+        : i v ( vec_at [i] . t vmap q )
         ? < v 0 { ( panic `internal: a closure's variable the function does not declare` ) } {}
         ^ v
     } {}
@@ -889,19 +957,26 @@ $ `coreir.nu`
         : ~ i l 0
         ~ < l nl {
             : i nw ( __nw m p l )
-            : ~ i v -1
+            : ~ i v 0
+            : ~ b hit F
             ? & >= nw 4 & ( __eq ( __wd m p l 0 ) `let` ) ( __eq ( __wd m p l 2 ) `call` ) {
                 : s f ( __wd m p l 3 )
-                ? | | ( __eq f `string_data` ) ( __eq f `vec_at__str` ) ( __borrowed m f ) { = v ( __pint ( __wd m p l 1 ) ) } {}
+                ? | | ( __eq f `string_data` ) ( __eq f `vec_at__str` ) ( __borrowed m f ) {
+                    = v ( __pint ( __wd m p l 1 ) )
+                    = hit T
+                } {}
             } {
                 ? & >= nw 4 & ( __eq ( __wd m p l 0 ) `let` ) ( __eq ( __wd m p l 2 ) `use` ) {
                     : s op ( __wd m p l 3 )
                     ? ( __vref op ) {
-                        ? ( __in . t views ( __pint_from op 1 ) ) { = v ( __pint ( __wd m p l 1 ) ) } {}
+                        ? ( __in . t views ( __pint_from op 1 ) ) {
+                            = v ( __pint ( __wd m p l 1 ) )
+                            = hit T
+                        } {}
                     } {}
                 } {}
             }
-            ? & != v -1 ! ( __in . t views v ) {
+            ? & hit ! ( __in . t views v ) {
                 ( vec_push [i] . t views v )
                 = changed T
             } {}
@@ -1123,12 +1198,12 @@ $ `coreir.nu`
 @ __isc s op → b { ^ ( __eq op `c` ) }
 
 // rhs: an rvalue (the words of statement `r` from `off`) as an A2
-// right-hand side, bound to core variable `dest` (-1: none).
+// right-hand side, bound to core variable `dest` (`__nil`: none).
 @ __rhs TlMod m inout TlSt t i r i off i dest b has_pre Pre pre b assign → !String String {
     : i p . t p
     : s k ( __rw m t r off 0 )
     : s w1 ? | | | ( __eq k `agg` ) ( __eq k `use` ) ( __eq k `payload` ) ( __eq k `scalar` ) ( __rw m t r off 1 ) ``
-    ? & & ( __eq k `agg` ) | ( __eq w1 `T` ) ( __eq w1 `F` ) >= dest 0 {
+    ? & & ( __eq k `agg` ) | ( __eq w1 `T` ) ( __eq w1 `F` ) != dest ( __nil ) {
         : String ty \ ( __lean_ty m t ( __vty m p dest ) )
         ? ! ( __sw ( string_data ty ) `(.sum .int ` ) { ^ @ !String String { F ( __u m p ( string_data ( __f1 `aggregate of type %` ( string_data ty ) ) ) ) } } {}
         : String pay ( __sl ( string_data ty ) 11 -1 )
@@ -1150,13 +1225,13 @@ $ `coreir.nu`
     } {}
     ? ( __eq k `none` ) {
         // a slot not yet given a value: only a scalar's is translated
-        ? >= dest 0 {
+        ? != dest ( __nil ) {
             : String lt \ ( __lean_ty m t ( __vtyd m p dest `i64` ) )
             ? ! ( __eq ( string_data lt ) `.int` ) { ^ @ !String String { F ( __u m p `an owner bound before its value` ) } } {}
         } {}
         ^ @ !String String { T ( string_from `.expr (.lit 0)` ) }
     } {}
-    ? & & ( __eq k `use` ) ( __eq w1 `c` ) & >= dest 0 & ( __vhas m p dest ) ( __eq ( __vtyd m p dest `` ) `i8*` ) {
+    ? & & ( __eq k `use` ) ( __eq w1 `c` ) & != dest ( __nil ) & ( __vhas m p dest ) ( __eq ( __vtyd m p dest `` ) `i8*` ) {
         // a literal: its own copy of the text
         ^ @ !String String { T ( string_from `.new .int` ) }
     } {}
@@ -1191,7 +1266,7 @@ $ `coreir.nu`
             // (A `: ~` binding of another binding or of a parameter is a
             // cursor, a borrow of it, MEMORY.md §2.3; a temporary's value
             // moves into its holder.)
-            ? & & ! assign >= dest 0 & & == kd 1 != 0 & fd 1 | == ky 0 == ky 1 {
+            ? & & ! assign != dest ( __nil ) & & == kd 1 != 0 & fd 1 | == ky 0 == ky 1 {
                 ^ @ !String String { T ( __f1 `.borrow %` ( string_data ( __ns ( __var t y ) ) ) ) }
             } {}
             ? & & assign == ky 0 & & == 0 & fy 6 ! & y_has y_s != kd 0 {
@@ -1220,9 +1295,9 @@ $ `coreir.nu`
         : String o \ ( __operand0 m t op )
         ^ @ !String String { T ( __f1 `.expr %` ( string_data o ) ) }
     } {}
-    : b agg_ & & ( __eq k `agg` ) ( __eq w1 `-` ) >= dest 0
+    : b agg_ & & ( __eq k `agg` ) ( __eq w1 `-` ) != dest ( __nil )
     ? agg_ {
-        : i n ( __pint ( __rw m t r off 2 ) )
+        : i n ( __pcount ( __rw m t r off 2 ) )
         ? & == n 1 ( __is_dtor m ( __vty m p dest ) ) {
             // a destructor struct of one field: its field and the padding
             : s op ( __rw m t r off 3 )
@@ -1268,7 +1343,7 @@ $ `coreir.nu`
         ^ @ !String String { T ( __f2 `.pair % %` ( string_data ( __ns ( vec_at [i] vs 0 ) ) ) ( string_data ( __ns acc ) ) ) }
     } {}
     ? ( __eq k `scalar` ) {
-        : i n ( __pint w1 )
+        : i n ( __pcount w1 )
         : i nw ( __lnw m p r )
         : ( Vec String ) ops ( vec_new [String] )
         : ~ i j 0
@@ -1317,12 +1392,16 @@ $ `coreir.nu`
     ^ @ !String String { F ( __u m . t p ( string_data ( __f2 `% of a %` f ( string_data ty ) ) ) ) }
 }
 
-@ __xf inout TlSt t i x → i { ^ ? < x 0 ( __fresh t ) x }
+// (no variable: `x`, `dest` given none; no id can be it, the reader
+// bounds them)
+@ __nil → i { ^ - -9223372036854775807 1 }
+
+@ __xf inout TlSt t i x → i { ^ ? == x ( __nil ) ( __fresh t ) x }
 
 @ __ok String x → !String String { ^ @ !String String { T x } }
 
 // intrinsic: a standard-library call A2 has a construct for (the call's
-// words: statement `r` from `off`), into `x` (-1: none), then `rest`; ""
+// words: statement `r` from `off`), into `x` (`__nil`: none), then `rest`; ""
 // when it is none.
 @ __intrinsic TlMod m inout TlSt t i r i off s rest i x → !String String {
     : Pre fpre ( __pre_new )
@@ -1334,16 +1413,16 @@ $ `coreir.nu`
 @ __intrinsic_ TlMod m inout TlSt t i r i off s rest i x0 Pre fpre → !String String {
     : i p . t p
     : s f ( __rw m t r off 1 )
-    : i n ( __pint ( __rw m t r off 2 ) )
+    : i n ( __pcount ( __rw m t r off 2 ) )
     : ~ i x x0
-    ? & & ( __eq f `nurl_println_int` ) == n 1 < x 0 {
+    ? & & ( __eq f `nurl_println_int` ) == n 1 == x ( __nil ) {
         // it reads a scalar: nothing of memory to check past the read
         ? ( __isc ( __opw m t r off 3 n 0 ) ) { ^ @ !String String { T ( string_from rest ) } } {}
         : i y ( __fresh t )
         : String o \ ( __operand0 m t ( __opw m t r off 3 n 0 ) )
         ^ ( __ok ( __f3 `(.letv % (.expr %) %)` ( string_data ( __ns y ) ) ( string_data o ) rest ) )
     } {}
-    ? & & ( __eq f `nurl_println` ) == n 1 < x 0 {
+    ? & & ( __eq f `nurl_println` ) == n 1 == x ( __nil ) {
         // it reads its argument: the read checked live
         ? ( __isc ( __opw m t r off 3 n 0 ) ) { ^ @ !String String { T ( string_from rest ) } } {}
         : i y \ ( __rd m t ( __opw m t r off 3 n 0 ) fpre )
@@ -1403,7 +1482,7 @@ $ `coreir.nu`
         : String el \ ( __vec_elem m t f `vec_new__` )
         ^ ( __ok ( __f3 `(.letv % (.new %) %)` ( string_data ( __ns x ) ) ( string_data el ) rest ) )
     } {}
-    ? & & ( __sw f `vec_push__` ) == n 2 < x 0 {
+    ? & & ( __sw f `vec_push__` ) == n 2 == x ( __nil ) {
         : i v \ ( __argvar m t ( __opw m t r off 3 n 0 ) )
         : i y \ ( __argvar m t ( __opw m t r off 3 n 1 ) )
         : String vs ( __ns v )
@@ -1484,10 +1563,10 @@ $ `coreir.nu`
         : i y \ ( __rd m t ( __opw m t r off 3 n 0 ) fpre )
         : String st ( __edit_through t y ( string_data ( __f1 `(.trunc %)` ( string_data i ) ) ) )
         : ~ String rs ( string_from rest )
-        ? >= x 0 { = rs ( __f2 `(.letv % (.expr (.lit 0)) %)` ( string_data ( __ns x ) ) rest ) } {}
+        ? != x ( __nil ) { = rs ( __f2 `(.letv % (.expr (.lit 0)) %)` ( string_data ( __ns x ) ) rest ) } {}
         ^ ( __ok ( __wrap pre ( string_data ( __seq ( string_data st ) ( string_data rs ) ) ) ) )
     } {}
-    ? & & | & ( __sw f `vec_reserve__` ) == n 2 & ( __sw f `vec_shrink_to_fit__` ) == n 1 < x 0 ! ( __isc ( __opw m t r off 3 n 0 ) ) {
+    ? & & | & ( __sw f `vec_reserve__` ) == n 2 & ( __sw f `vec_shrink_to_fit__` ) == n 1 == x ( __nil ) ! ( __isc ( __opw m t r off 3 n 0 ) ) {
         // the buffer may move, its length unchanged: a push (which may
         // move it) and a cut back to the length it had, through the borrow
         : s pfx ? ( __sw f `vec_reserve__` ) `vec_reserve__` `vec_shrink_to_fit__`
@@ -1507,7 +1586,7 @@ $ `coreir.nu`
         : String st ( __f4 `%(.push %)) (.edit true % (.trunc (.var %))))))` ( string_data a ) ( string_data ( __ns c ) ) ( string_data bs ) ( string_data ks ) )
         ^ ( __ok ( __wrap pre ( string_data ( __seq ( string_data st ) rest ) ) ) )
     } {}
-    ? & & & ( __eq f `string_push_str` ) == n 2 < x 0 ! ( __isc ( __opw m t r off 3 n 0 ) ) {
+    ? & & & ( __eq f `string_push_str` ) == n 2 == x ( __nil ) ! ( __isc ( __opw m t r off 3 n 0 ) ) {
         // the String it is handed grows through the borrow, and only then
         // are the bytes of the text copied in
         : i c ( __lit_temp t )
@@ -1527,7 +1606,7 @@ $ `coreir.nu`
         } {}
         ^ ( __ok ( __seq ( string_data st ) rest ) )
     } {}
-    ? & & & | ( __sw f `vec_free__` ) ( __eq f `string_free` ) == n 1 < x 0 ! ( __isc ( __opw m t r off 3 n 0 ) ) {
+    ? & & & | ( __sw f `vec_free__` ) ( __eq f `string_free` ) == n 1 == x ( __nil ) ! ( __isc ( __opw m t r off 3 n 0 ) ) {
         // a sink that releases what it is handed (A2's `free`)
         : i y \ ( __pvar m t ( __opw m t r off 3 n 0 ) )
         ^ ( __ok ( __seq ( string_data ( __f1 `(.free %)` ( string_data ( __ns y ) ) ) ) rest ) )
@@ -1540,7 +1619,7 @@ $ `coreir.nu`
         } {}
         : Pre pre ( __pre_new )
         : String i \ ( __operand m t ( __opw m t r off 3 n 1 ) T pre )
-        ? < x 0 {
+        ? == x ( __nil ) {
             : i tt ( __fresh t )
             : i y \ ( __rd m t ( __opw m t r off 3 n 0 ) fpre )
             : String a ( __f3 `(.letv % (.at % %) .skip)` ( string_data ( __ns tt ) ) ( string_data ( __ns y ) ) ( string_data i ) )
@@ -1557,12 +1636,12 @@ $ `coreir.nu`
     ^ @ !String String { T ( string_new ) }
 }
 
-// call: `call f n op…` into `x` (a fresh temporary if -1), then `rest`.
+// call: `call f n op…` into `x` (a fresh temporary if `__nil`), then `rest`.
 @ __call TlMod m inout TlSt t i r i off s rest i x0 → !String String {
     : i p . t p
     : s f ( __rw m t r off 1 )
-    : i n ( __pint ( __rw m t r off 2 ) )
-    : String got \ ( __intrinsic m t r off rest -1 )
+    : i n ( __pcount ( __rw m t r off 2 ) )
+    : String got \ ( __intrinsic m t r off rest ( __nil ) )
     ? > ( string_len got ) 0 { ^ @ !String String { T got } } {}
     : i fi ( __mget . m names f )
     ? < fi 0 { ^ @ !String String { F ( __u m p ( string_data ( __f1 `call of %, not in the program` f ) ) ) } } {}
@@ -1610,7 +1689,7 @@ $ `coreir.nu`
 // type's interface (A2's `callc`).
 @ __callind TlMod m inout TlSt t i r i off s rest i x0 → !String String {
     : i p . t p
-    : i n ( __pint ( __rw m t r off 1 ) )
+    : i n ( __pcount ( __rw m t r off 1 ) )
     : s c0 ( __opw m t r off 2 n 0 )
     ? | ( __eq c0 `c` ) ( __has c0 `/` ) { ^ @ !String String { F ( __u m p ( string_data ( __f1 `a call through %` c0 ) ) ) } } {}
     : i c \ ( __pvar m t c0 )
@@ -1641,7 +1720,7 @@ $ `coreir.nu`
 @ __closure_lit TlMod m inout TlSt t i r i off i xv Pre pre → !String String {
     : i p . t p
     : s f ( __rw m t r off 1 )
-    : i n ( __pint ( __rw m t r off 2 ) )
+    : i n ( __pcount ( __rw m t r off 2 ) )
     : i q ( __mget . m names f )
     ? < q 0 { ^ @ !String String { F ( __u m p ( string_data ( __f1 `closure %, not in the program` f ) ) ) } } {}
     : ( Vec String ) caps0 ( vec_new [String] )
@@ -2085,11 +2164,11 @@ $ `coreir.nu`
     ? ( __eq w `eval` ) {
         : String rest \ ( __stmts m t ls + a 1 b tail )
         ( __need m p r0 2 )
-        ? ( __eq h1 `call` ) { ^ ( __call m t r0 1 ( string_data rest ) -1 ) } {}
-        ? ( __eq h1 `callind` ) { ^ ( __callind m t r0 1 ( string_data rest ) -1 ) } {}
+        ? ( __eq h1 `call` ) { ^ ( __call m t r0 1 ( string_data rest ) ( __nil ) ) } {}
+        ? ( __eq h1 `callind` ) { ^ ( __callind m t r0 1 ( string_data rest ) ( __nil ) ) } {}
         : i x ( __fresh t )
         : Pre pre ( __pre_new )
-        : String rv \ ( __rhs m t r0 1 -1 T pre F )
+        : String rv \ ( __rhs m t r0 1 ( __nil ) T pre F )
         ^ ( __ok ( __wrap pre ( string_data ( __f3 `(.letv % (%) %)` ( string_data ( __ns x ) ) ( string_data rv ) ( string_data rest ) ) ) ) )
     } {}
     ? ( __eq w `assign` ) {
@@ -2150,14 +2229,99 @@ $ `coreir.nu`
     ^ ( __ok ( __wrap binds inner ) )
 }
 
+// Where statement l's rvalue starts (`let v r`, `assign p r`: 2; `eval
+// r`: 1), or -1 for a statement with none.
+@ __wf_rv TlMod m i p i l → i {
+    : s w ( __wd m p l 0 )
+    ? | ( __eq w `let` ) ( __eq w `assign` ) { ^ 2 } {}
+    ? ( __eq w `eval` ) { ^ 1 } {}
+    ^ -1
+}
+
+@ __wf_bad TlMod m i p s kind i l s what → !v String {
+    : String o ( string_from `internal: malformed ` )
+    ( string_push_str o kind )
+    ( string_push_str o `: ` )
+    ( string_push_str o ( __name m p ) )
+    ( string_push_str o `, statement ` )
+    ( string_push_int o + l 1 )
+    ( string_push_str o `: ` )
+    ( string_push_str o what )
+    ^ @ !v String { F o }
+}
+
+// The function's body is well formed where tolean.py does not check it
+// (the deviations above): every block closed by its `end`, each closer in
+// its block, and no operand count past the operand words there are.
+@ __wellformed TlMod m i p → !v String {
+    : i nl ( __nl m p )
+    : ( Vec String ) open ( vec_new [String] )
+    : ~ i l 0
+    ~ < l nl {
+        : s w ( __wd m p l 0 )
+        : i depth ( vec_len [String] open )
+        : String top ? > depth 0 ( string_clone ( vec_at [String] open - depth 1 ) ) ( string_new )
+        : s tp ( string_data top )
+        ? ( __opener w ) { ( vec_push [String] open ( string_from w ) ) } {
+            ? ( __eq w `end` ) {
+                ? == depth 0 { ^ ( __wf_bad m p `block` l `an end with no block open` ) } {}
+                : ?String _o ( vec_pop [String] open )
+            } {
+                ? ( __eq w `else` ) {
+                    ? ! ( __eq tp `if` ) { ^ ( __wf_bad m p `block` l `an else not in an if` ) } {}
+                    ( vec_put [String] open - depth 1 ( string_from `else` ) )
+                } {}
+                ? ( __eq w `arm` ) {
+                    ? ! | ( __eq tp `match` ) ( __eq tp `arm` ) { ^ ( __wf_bad m p `block` l `an arm not in a match` ) } {}
+                    ( vec_put [String] open - depth 1 ( string_from `arm` ) )
+                } {}
+                ? ( __eq w `loopcond` ) {
+                    ? ! ( __eq tp `loop` ) { ^ ( __wf_bad m p `block` l `a loopcond not in a loop` ) } {}
+                    ( vec_put [String] open - depth 1 ( string_from `loopcond` ) )
+                } {}
+            }
+        }
+        : i off ( __wf_rv m p l )
+        : i nw ( __nw m p l )
+        ? & >= off 0 < off nw {
+            : s h ( __wd m p l off )
+            : ~ i cp -1
+            ? | ( __eq h `call` ) ( __eq h `closure` ) { = cp + off 2 } {}
+            ? | ( __eq h `callind` ) ( __eq h `scalar` ) { = cp + off 1 } {}
+            ? ( __eq h `agg` ) { = cp + off 2 } {}
+            ? >= cp 0 {
+                ? >= cp nw { ^ ( __wf_bad m p `operands` l ( string_data ( __f1 `a % without its operand count` h ) ) ) } {}
+                ? ! ( __int_syntax ( __wd m p l cp ) ) {
+                    ^ ( __wf_bad m p `operands` l ( string_data ( __f2 `a % whose operand count is not a number: %` h ( __wd m p l cp ) ) ) )
+                } {}
+                : i n ( __pcount ( __wd m p l cp ) )
+                ? > n - nw + cp 1 {
+                    ^ ( __wf_bad m p `operands` l ( string_data ( __f3 `a % that counts % operands and has %` h ( __wd m p l cp ) ( string_data ( __ns - nw + cp 1 ) ) ) ) )
+                } {}
+            } {}
+        } {}
+        = l + l 1
+    }
+    : i depth ( vec_len [String] open )
+    ? > depth 0 {
+        : String o ( string_from `a block (` )
+        ( string_push_str o ( string_data ( vec_at [String] open - depth 1 ) ) )
+        ( string_push_str o `) with no end before the function's end` )
+        ^ ( __wf_bad m p `block` - nl 1 ( string_data o ) )
+    } {}
+    ^ @ !v String { T }
+}
+
 // Fn.__init__: the function's variables, A2's numbering of them, its
 // result and what it lends.
 @ __fn_init TlMod m inout TlSt t i p → !v String {
+    \ ( __wellformed m p )
     : s name ( __name m p )
     : i np ( __np m p )
     = . t p p
     = . t np np
     = . t has_vmap F
+    = . t vmap_ids ( __ids_sorted m p )
     = . t vmap ( vec_new [i] )
     = . t caps ( vec_new [i] )
     = . t named ( vec_new [i] )
@@ -2203,11 +2367,10 @@ $ `coreir.nu`
             = j + j 1
         }
         ? ( __borrowed m name ) { ^ @ !v String { F ( __u m p `a closure whose result is lent` ) } } {}
-        : i top1 ? > nids 0 ( vec_at [i] ids - nids 1 ) -1
         = j 0
-        ~ <= j top1 { ( vec_push [i] . t vmap -1 ) = j + j 1 }
+        ~ < j nids { ( vec_push [i] . t vmap -1 ) = j + j 1 }
         = j 0
-        ~ < j np { ( vec_put [i] . t vmap ( vec_at [i] prms j ) + 1 j ) = j + j 1 }
+        ~ < j np { ( vec_put [i] . t vmap ( core_bsearch ids ( vec_at [i] prms j ) ) + 1 j ) = j + j 1 }
         // (captures by name: the code's parameters after the interface's)
         : ( Vec i ) named ( vec_new [i] )
         = j 0
@@ -2220,7 +2383,7 @@ $ `coreir.nu`
         }
         : i nn ( vec_len [i] named )
         = j 0
-        ~ < j nn { ( vec_put [i] . t vmap ( vec_at [i] named j ) + + 1 np j ) = j + j 1 }
+        ~ < j nn { ( vec_put [i] . t vmap ( core_bsearch ids ( vec_at [i] named j ) ) + + 1 np j ) = j + j 1 }
         : ( Vec i ) caps2 ( vec_new [i] )
         = j 0
         ~ < j nc {
@@ -2231,9 +2394,8 @@ $ `coreir.nu`
         : ~ i nxt + . t rslot 1
         = j 0
         ~ < j nids {
-            : i k ( vec_at [i] ids j )
-            ? < ( vec_at [i] . t vmap k ) 0 {
-                ( vec_put [i] . t vmap k nxt )
+            ? < ( vec_at [i] . t vmap j ) 0 {
+                ( vec_put [i] . t vmap j nxt )
                 = nxt + nxt 1
             } {}
             = j + j 1
@@ -2251,9 +2413,23 @@ $ `coreir.nu`
         : String _l \ ( __lean_ty m t ( __vty m p ( vec_at [i] order j ) ) )
         = j + j 1
     }
+    // (a parameter with no `v` line has type "": only when "" names a
+    // destructor type must every index below np be asked; else the ones
+    // with a type)
+    : b dt0 ( __is_dtor m `` )
+    : ( Vec i ) pl ( vec_new [i] )
+    ? dt0 { = j 0 ~ < j np { ( vec_push [i] pl j ) = j + j 1 } } {
+        = j 0
+        ~ < j nids {
+            : i k ( vec_at [i] ids j )
+            ? & >= k 0 < k np { ( vec_push [i] pl k ) } {}
+            = j + j 1
+        }
+    }
+    : i npl ( vec_len [i] pl )
     = j 0
-    ~ < j np {
-        ? & ( __is_dtor m ( __vtyd m p j `` ) ) != 0 & ( __vflags m p j ) 6 {
+    ~ < j npl {
+        ? & ( __is_dtor m ( __vtyd m p ( vec_at [i] pl j ) `` ) ) != 0 & ( __vflags m p ( vec_at [i] pl j ) ) 6 {
             // a `sink` / `inout` destructor parameter: moved to a `letd`
             // first thing, or never assigned (dtorParamsB), not yet
             ^ @ !v String { F ( __u m p `a destructor value as a sink or inout parameter` ) }
@@ -2420,7 +2596,7 @@ $ `coreir.nu`
         ~ < li nl {
             ? & & >= ( __nw m p li ) 5 ( __eq ( __wd m p li 0 ) `let` ) ( __eq ( __wd m p li 2 ) `closure` ) {
                 : s code ( __wd m p li 3 )
-                : i n ( __pint ( __wd m p li 4 ) )
+                : i n ( __pcount ( __wd m p li 4 ) )
                 : ( Vec i ) moved ( vec_new [i] )
                 : ~ i j 0
                 ~ & < j n < + 5 j ( __nw m p li ) {
@@ -2495,23 +2671,20 @@ $ `coreir.nu`
 // The variables' flags of each program function: a parameter the walk
 // inferred consumed (`sink=`) or kept (`keeps=`) is one the callee takes
 // over, as a declared `sink` is (AGORA-994).
-@ __flags CoreIR ir ( Vec i ) prog → ( Vec ( Vec i ) ) {
+@ __flags CoreIR ir ( Vec i ) prog ( Vec ( Vec i ) ) sinkp → ( Vec ( Vec i ) ) {
     : ( Vec ( Vec i ) ) out ( vec_new [( Vec i )] )
     : i nf ( vec_len [i] prog )
     : ~ i p 0
     ~ < p nf {
         : CoreFn fn ( vec_at [CoreFn] . ir fns ( vec_at [i] prog p ) )
         : ( Vec i ) fl ( vec_new [i] )
-        : ~ i sz ( vec_len [i] . fn vidx )
-        ? < sz . fn np { = sz . fn np } {}
+        : i nv ( vec_len [i] . fn vids )
         : ~ i k 0
-        ~ < k sz { ( vec_push [i] fl 0 ) = k + k 1 }
-        = k 0
-        ~ < k ( vec_len [i] . fn vidx ) {
-            : i ix ( vec_at [i] . fn vidx k )
-            ? >= ix 0 { ( vec_put [i] fl k . ( vec_at [CoreVar] . fn vars ix ) flags ) } {}
+        ~ < k nv {
+            ( vec_push [i] fl . ( vec_at [CoreVar] . fn vars ( vec_at [i] . fn vrec k ) ) flags )
             = k + k 1
         }
+        : ( Vec i ) sk ( vec_new [i] )
         : i si ( core_sum_index ir ( string_data . fn name ) )
         ? >= si 0 {
             : CoreSum sm ( vec_at [CoreSum] . ir sums si )
@@ -2531,13 +2704,15 @@ $ `coreir.nu`
             ~ < k nw {
                 : s w ( string_data ( vec_at [String] ws k ) )
                 ? ( __isdig w ) {
-                    : i v ( __pint w )
-                    ? & < v . fn np == 0 & ( vec_at [i] fl v ) 2 { ( vec_put [i] fl v | ( vec_at [i] fl v ) 4 ) } {}
+                    // (past 64 bits: past every parameter count)
+                    : i v ( __pidx w )
+                    ? & >= v 0 & < v . fn np ! ( __in sk v ) { ( vec_push [i] sk v ) } {}
                 } {}
                 = k + k 1
             }
         } {}
         ( vec_push [( Vec i )] out fl )
+        ( vec_push [( Vec i )] sinkp sk )
         = p + p 1
     }
     ^ out
@@ -2546,7 +2721,7 @@ $ `coreir.nu`
 // The Lean file of the program in core IR `text` (tolean.py's `emit`), or
 // why it is not translated.
 @ __emit s text → !String String {
-    : CoreIR ir ( core_read text )
+    : CoreIR ir \ ( core_read text )
     // The standard library's functions are A2's constructs (`intrinsic`),
     // not bodies to check: their code is phase B's.
     : ( Vec i ) prog ( vec_new [i] )
@@ -2575,14 +2750,15 @@ $ `coreir.nu`
         ? ( __has ( string_data . ct drops ) `d` ) { ( __mset dtor ( string_data . ct name ) 1 ) } {}
         = k + k 1
     }
-    : ( Vec ( Vec i ) ) flg ( __flags ir prog )
+    : ( Vec ( Vec i ) ) sinkp ( vec_new [( Vec i )] )
+    : ( Vec ( Vec i ) ) flg ( __flags ir prog sinkp )
     : i nfn ( vec_len [i] prog )
     : i main_ix ( __mget names `main` )
     ? < main_ix 0 { ^ @ !String String { F ( string_from `no main` ) } } {}
-    : TlMod m @ TlMod { ir prog names dtor flg ( vec_new [( Vec i )] ) }
+    : TlMod m @ TlMod { ir prog names dtor flg sinkp ( vec_new [( Vec i )] ) }
     : ( Vec ( Vec i ) ) moved ( __moved_caps m )
-    : TlMod mm @ TlMod { . m ir . m prog . m names . m dtor . m flg moved }
-    : ~ TlSt t @ TlSt { ( vec_new [String] ) nfn ( vec_new [String] ) 0 0 0 F ( vec_new [i] ) 0 ( vec_new [i] ) F ( vec_new [i] )
+    : TlMod mm @ TlMod { . m ir . m prog . m names . m dtor . m flg . m sinkp moved }
+    : ~ TlSt t @ TlSt { ( vec_new [String] ) nfn ( vec_new [String] ) 0 0 0 F ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F ( vec_new [i] )
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( string_new ) F ( vec_new [i] ) ( vec_new [String] ) }
     : String out ( string_from `import C.A2Prog\nopen A2 C\n\n` )
     : ~ i p 0

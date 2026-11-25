@@ -13,6 +13,12 @@
 # for byte, the exit's class (ok, unsupported, other) and the unsupported
 # message. Every difference is printed; the exit status is 1 if any.
 #
+# Intentional deviations from tolean.py (fail closed on malformed IR): the
+# NURL translator refuses (`internal: malformed …`) a statement whose
+# operand count exceeds its operand words, and a block with no `end` (or a
+# closer out of place), which tolean.py reads; nurlc prints neither, so the
+# corpus sees no difference from them.
+#
 # Env: NURLC (default build/nurlc), NURL_CERT (default build/nurl-cert),
 #      JOBS (default nproc), PARITY_DIR (keep the work there; default a
 #      temporary directory, removed), CORES_KEEP=1 (reuse PARITY_DIR's core

@@ -10,8 +10,13 @@
 #
 #  1. Fail closed: edits of a certify program's core IR that the translator
 #     cannot render faithfully are reported `unsupported` (exit 2, the
-#     reason on stderr), and a core IR it cannot read is exit 1, never a
-#     term (tools/ncore/tolean_selftest.sh's cases, and more).
+#     reason on stderr), and a core IR it cannot read (a column that is not
+#     an integer, fewer fields than a line counts, an `endfn` with no
+#     function open, a missing word; and, deliberately stricter than
+#     tools/ncore/tolean.py, an operand count past the words there are or
+#     a block with no `end`) is exit 1, never a term
+#     (tools/ncore/tolean_selftest.sh's cases, and more); a sparse variable
+#     id or many variables cost no more than their number.
 #  2. The reference: on every certify program the translator prints what
 #     tools/ncore/tolean.py prints, byte for byte, with its exit code and
 #     its message (skipped without python3; tools/ncore/tolean_parity.sh
@@ -92,6 +97,64 @@ rc=$(tl "$TMP/i.core")
 if [ "$rc" = 1 ] && [ ! -s "$TMP/out" ] && grep -q '^nurl-cert: internal: ' "$TMP/err"; then ok "an unreadable core IR stops the translation (exit 1)"
 else bad "an unreadable core IR stops the translation (exit $rc)"; sed 's/^/        /' "$TMP/err" | head -3; fi
 
+# expect_internal NAME CORE REASON: exit 1, nothing on stdout, `nurl-cert: internal: …REASON…`
+# (where tolean.py stops with an exception).
+expect_internal() {
+    rc=$(tl "$2")
+    if [ "$rc" = 1 ] && [ ! -s "$TMP/out" ] && grep -q "^nurl-cert: internal: .*$3" "$TMP/err"; then ok "$1"
+    else bad "$1 (exit $rc; expected internal: …$3)"; sed 's/^/        /' "$TMP/err" | head -3; fi
+}
+
+# A small program of two functions, edited below.
+printf 'fn\thelper\ti64\t1\t1\tp.nu\t0\t\nv\t0\t0\t0\t0\t1\t-1\tx\ti64\nscope\nret c\nend\nendfn\nfn\tmain\ti64\t0\t2\tp.nu\t0\t\nscope\neval call helper 1 c\nret c\nend\nendfn\n' > "$TMP/s.core"
+rc=$(tl "$TMP/s.core"); [ "$rc" = 0 ] && ok "the small program translates" || bad "the small program translates (exit $rc)"
+sed 's/^fn\thelper\ti64\t1/fn\thelper\ti64\toops/' "$TMP/s.core" > "$TMP/n1.core"
+expect_internal "a parameter count that is not an integer" "$TMP/n1.core" "parameter count is not an integer: oops"
+sed 's/^fn\thelper\ti64\t1/fn\thelper\ti64\t99999999999999999999/' "$TMP/s.core" > "$TMP/n1b.core"
+expect_internal "a parameter count past 64 bits" "$TMP/n1b.core" "parameter count is not an integer"
+sed 's/^v\t0\t0\t0\t0/v\t0\t0\t0\tx1/' "$TMP/s.core" > "$TMP/n1c.core"
+expect_internal "a variable's flags that are not an integer" "$TMP/n1c.core" "flags is not an integer: x1"
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t2\ta\ti64\n'; } > "$TMP/n2.core"
+expect_internal "a ty line with fewer field pairs than it counts" "$TMP/n2.core" "fewer fields than it counts"
+{ cat "$TMP/s.core"; printf 'endfn\n'; } > "$TMP/n4.core"
+expect_internal "an endfn with no function open" "$TMP/n4.core" "an endfn with no function open"
+# A sparse variable id: indexed sparsely (no billion-entry table), read as
+# tolean.py reads it (the numbering past it).
+awk '/^fn\tmain\t/{print; print "v\t1000000000\t2\t1\t0\t2\t-1\t\ti64"; next} {print}' "$TMP/s.core" > "$TMP/n3.core"
+rc=$(timeout 20 "$CERT" translate "$TMP/n3.core" > "$TMP/out" 2> "$TMP/err"; echo $?)
+if [ "$rc" = 0 ] && grep -q 'nvars := 1000000005 }' "$TMP/out"; then ok "a sparse variable id (10^9) costs nothing"
+else bad "a sparse variable id (10^9) costs nothing (exit $rc)"; fi
+sed 's/^v\t0\t0/v\t1000000000\t0/' "$TMP/s.core" > "$TMP/n3b.core"
+expect_internal "a parameter with no v line (its only variable's id 10^9)" "$TMP/n3b.core" "a variable the function does not declare"
+# A summary's parameter past 64 bits is no parameter (it does not wrap to 0).
+{ cat "$TMP/s.core"; printf 'sum\thelper\t1\tsink=18446744073709551616\n'; } > "$TMP/n5.core"
+rc=$(tl "$TMP/n5.core")
+if [ "$rc" = 0 ] && grep -q 'params := \[(.inp, .int)\]' "$TMP/out" && ! grep -q '\.sink' "$TMP/out"; then ok "sink=2^64 marks no parameter"
+else bad "sink=2^64 marks no parameter (exit $rc)"; fi
+# Many variables: their first-seen order is found in n log n.
+{ printf 'fn\tmain\ti64\t0\t1\tp.nu\t0\t\n'; seq 200000 -1 1 | awk '{print "v\t" $1 "\t2\t1\t0\t1\t-1\t\ti64"}'; printf 'scope\nret c\nend\nendfn\n'; } > "$TMP/n6.core"
+rc=$(timeout 20 "$CERT" translate "$TMP/n6.core" > "$TMP/out" 2> "$TMP/err"; echo $?)
+[ "$rc" = 0 ] && ok "200000 variables in reverse order translate in time" || bad "200000 variables in reverse order translate in time (exit $rc)"
+# Intentional deviations from tolean.py (fail closed on malformed IR):
+# an operand count past the operand words there are, and a block with no
+# `end` (tolean.py reads both). An empty scope stays valid.
+sed 's/^eval call helper 1 c$/eval call helper 1/' "$TMP/s.core" > "$TMP/r1.core"
+expect_internal "a call that counts more operands than it has" "$TMP/r1.core" "malformed operands: main, statement 2: a call that counts 1 operands and has 0"
+sed 's/^eval call helper 1 c$/eval call helper 0/' "$TMP/s.core" > "$TMP/r1b.core"
+rc=$(tl "$TMP/r1b.core"); [ "$rc" = 0 ] && ok "a call that counts 0 operands and has 0 translates" || bad "a call that counts 0 operands and has 0 translates (exit $rc)"
+sed 's/^eval call helper 1 c$/eval scalar 3 c c/' "$TMP/s.core" > "$TMP/r1c.core"
+expect_internal "a scalar that counts more operands than it has" "$TMP/r1c.core" "malformed operands: main, statement 2: a scalar that counts 3 operands and has 2"
+awk '/^fn\tmain\t/{m=1} m && /^end$/ && !d {d=1; next} {print}' "$TMP/s.core" > "$TMP/r2.core"
+expect_internal "a scope with no end before the function's end" "$TMP/r2.core" "malformed block: main, statement 3: a block (scope) with no end"
+awk '/^fn\tmain\t/{m=1} m && /^ret c$/ {print "end"} {print}' "$TMP/s.core" > "$TMP/r2b.core"
+expect_internal "an end with no block open" "$TMP/r2b.core" "malformed block: main, statement 5: an end with no block open"
+awk '/^fn\tmain\t/{m=1} m && /^scope$/ && !d {print; print "scope"; print "end"; d=1; next} {print}' "$TMP/s.core" > "$TMP/r2c.core"
+rc=$(tl "$TMP/r2c.core"); [ "$rc" = 0 ] && ok "an empty scope translates" || bad "an empty scope translates (exit $rc)"
+
+# A word a statement does not have.
+sed 's/^ret c$/ret/' "$TMP/s.core" > "$TMP/n7.core"
+expect_internal "a ret with no operand word" "$TMP/n7.core" "a word the core IR's statement does not have"
+
 echo "== 2. the reference (tools/ncore/tolean.py)"
 if command -v python3 > /dev/null; then
     n=0; same=0
@@ -106,6 +169,7 @@ if command -v python3 > /dev/null; then
         else bad "$k: the translator differs from tolean.py (exit $nrc, tolean.py $prc)"; fi
     done
     [ "$same" = "$n" ] && ok "every certify program ($n) translates as tolean.py translates it"
+
 else
     echo "  SKIP  python3 is not on PATH"
 fi

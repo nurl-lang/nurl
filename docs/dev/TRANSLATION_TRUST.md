@@ -27,8 +27,8 @@ evaluates. They differ in what the untrusted side hands to Lean.
 **(a) `parseCore : String → Option Prog`.** The certificate holds the `.core`
 text as a Lean string literal, and the kernel parses it.
 
-- Measured on `vec_push_len.nu`'s core IR (9498 bytes, 17 functions; the
-  scratch files are reproduced by the commands below).
+- Measured on `vec_push_len.nu`'s core IR (9523 bytes, 17 functions;
+  `tools/ncore/trust/measure.sh` reproduces it).
 - `String.splitOn` and the rest of `String`'s library do not reduce in the
   kernel: `decide +kernel` gets stuck at the first split.
 - A parser by structural recursion over `String.toList` reduces, but the
@@ -118,9 +118,26 @@ engine computing those summaries itself (AGORA-877) is what removes them.
 ## Reproducing the measurements
 
 ```sh
-nurlc --emit-core tools/ncore/certify/vec_push_len.nu > v.core
-# (a): def irText : String := "<v.core>"   then   decide +kernel  on a split  → stuck / deep recursion
-# (b): def irData : List (List String) := [<v.core, words per line>]   then   decide +kernel  on a filter → 1.1 s
+tools/ncore/trust/measure.sh [prog.nu]   # default: tools/ncore/certify/vec_push_len.nu
+```
+
+The script writes the scratch files of both routes from the program's core
+IR into a temporary directory and times each with `lake env lean` in
+`formal/`:
+- `E`, an empty file: the baseline;
+- `A`, the text with `String.splitOn`;
+- `A2`, the text with a structural scan;
+- `B`, the IR as words.
+
+It needs `build/nurlc`, `python3` (to write the scratch files only) and
+`lake`, with `formal/` built. Measured here:
+
+```
+core IR: 9523 bytes, 17 functions
+E:  0.28 s, 466 MB
+A:  stuck: "(countFn irText).beq 17"                 0.32 s
+A2: (kernel) deep recursion detected                2.43 s, 798 MB
+B:  checks                                          1.10 s, 527 MB
 ```
 
 ## Next
