@@ -404,6 +404,23 @@ $ `certify.nu`
         = z + z 1
     }
     ? ! has_fns { ( string_push_str bad `coverage.functions ` ) } {}
+    // the arrays are arrays: a null one would skip its rows' checks
+    : ( Vec String ) arrs ( string_split ( string_from `coverage.functions claims ledger hashes.sources` ) ` ` )
+    : i na ( vec_len [String] arrs )
+    : ~ i y 0
+    ~ < y na {
+        ?? ( vec_get [String] arrs y ) {
+            T ap → {
+                : b is_arr ?? ( json_get m ( string_data ap ) ) { T j → ( json_is_arr j ) F → F }
+                ? ! is_arr {
+                    ( string_push_str bad ( string_data ap ) )
+                    ( string_push_str bad `(not an array) ` )
+                } {}
+            }
+            F _ → {}
+        }
+        = y + y 1
+    }
     : ~ i f 0
     ~ ( __vf_has m ( string_data ( __vf_path `coverage.functions.` f `` ) ) ) {
         : String fp ( __vf_path `coverage.functions.` f `` )
