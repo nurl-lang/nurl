@@ -37624,8 +37624,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             ( nurl_sym_def g_fn_reallocs fname ( __word_union ( nurl_sym_get g_fn_reallocs fname ) callee_inout ) )
         } {}
     } {}
+    // (…the generic's set, less a bare `sink A` made at a raw string `s`:
+    // it takes over nothing, as in the instance, gen_fn_param. AGORA-1028.)
     ? & & ! __callee_shadowed == 0 ( nurl_str_len callee_sink ) ! ( seq call_name fname )
-    { = callee_sink ( nurl_sym_get g_fn_sink fname ) }
+    { = callee_sink ( __words_minus ( nurl_sym_get g_fn_sink fname ) ( __generic_view_sinks fname call_targs ) ) }
     {}
     ? & & ! __callee_shadowed == 0 ( nurl_str_len callee_escapes ) ! ( seq call_name fname )
     { = callee_escapes ( nurl_sym_get g_fn_escapes fname ) }
@@ -97070,6 +97072,75 @@ unsafe @ __tb_pad i lex i nl → v {
     } {}
 }
 
+// A generic's `sink` parameters whose type is a bare type parameter
+// (`sink A x`), as `index:k` (the k-th type parameter), under
+// `<fname>__sink_tvk` in g_generic_syms. Made at a raw string `s`, such a
+// parameter takes over nothing (AGORA-1028): the template takes over an `A`,
+// and an `s` is a view, as a `( Vec s )` holds views. The signature is read
+// again with the k-th type parameter spelled `__ntv<k>`, an identifier
+// parse_type takes as a named type, so a bare one is the whole type.
+@ __generic_bare_sinks s fname s sig → v {
+    : ~ s probe ( nurl_str_cat sig `` )
+    : ~ s tpr ( nurl_sym_get2 g_generic_syms fname `__tparams` )
+    : ~ i tk 0
+    ~ != 0 ( nurl_str_len tpr ) {
+        : s tp ( str_first_word tpr )
+        = tpr ( str_skip_word tpr )
+        = probe ( subst_source probe tp ( nurl_str_cat `__ntv` ( nurl_str_int tk ) ) )
+        = tk + tk 1
+    }
+    : i lexp ( nurl_lex_new probe `<gsig>` )
+    : ~ s out ``
+    : ~ i pc 0
+    ~ & & != ( nurl_lex_type lexp ) TT_ARROW != ( nurl_lex_type lexp ) TT_EOF
+    != ( nurl_lex_type lexp ) TT_LBRACE
+    { : i mk ( parse_param_marker lexp )
+        : s v0 ( nurl_str_cat ( nurl_lex_val lexp ) `` )
+        : s ty ( parse_type lexp )
+        ? & & == mk 2 != 0 ( nurl_str_len ty ) != 0 ( nurl_str_starts v0 `__ntv` ) {
+            : s ent ( nurl_str_cat3 ( nurl_str_int pc ) `:` ( nurl_str_slice v0 5 - ( nurl_str_len v0 ) 5 ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
+        } {}
+        ? ( is_ident_tok ( nurl_lex_type lexp ) ) { ( nurl_lex_advance lexp ) } {}
+        = pc + pc 1
+    }
+    ( nurl_lex_free lexp )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__sink_tvk` ) out )
+}
+
+// The parameter indices of `fname`'s bare-type-parameter sinks whose type
+// argument in `targs` (the call's or the instance's, space-separated, in
+// the template's order) is a raw string `s`: they take over nothing.
+@ __generic_view_sinks s fname s targs → s {
+    : ~ s rest ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__sink_tvk` ) )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ent ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : i c ( nurl_str_find ent `:` )
+        : s ix ( nurl_str_slice ent 0 c )
+        : i k ( nurl_str_to_int ( nurl_str_slice ent + c 1 - - ( nurl_str_len ent ) c 1 ) )
+        : ~ s ta ( nurl_str_cat targs `` )
+        : ~ i j 0
+        ~ < j k { = ta ( str_skip_word ta ) = j + j 1 }
+        ? ( seq ( str_first_word ta ) `s` ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ix `` ) ( nurl_str_cat3 out ` ` ix ) } {}
+    }
+    ^ out
+}
+
+// `ws` without the words of `drop`.
+@ __words_minus s ws s drop → s {
+    ? == 0 ( nurl_str_len drop ) { ^ ( nurl_str_cat ws `` ) } {}
+    : ~ s rest ( nurl_str_cat ws `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ! ( str_contains_word drop w ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
+    }
+    ^ out
+}
+
 // compute_generic_inout_sink: derive a generic function's `inout` and
 // `sink` parameter index sets from its stored template and publish
 // them under the GENERIC name in g_fn_inout / g_fn_sink.
@@ -97159,6 +97230,7 @@ unsafe @ __tb_pad i lex i nl → v {
         ( nurl_sym_def g_fn_inout fname ia )
         ( nurl_sym_def g_fn_sink fname sa )
         ( nurl_lex_free lexp )
+        ? != 0 ( nurl_str_len sa ) { ( __generic_bare_sinks fname sig ) } {}
     }
     {}
 }
@@ -99691,6 +99763,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // never produces TT_ARROW (e.g. ASCII `->` instead of `→`) hangs
     // the compiler in an infinite loop, because gen_fn_param on EOF
     // cannot advance past the end.
+    // (An instance's `sink` parameters of a bare type parameter: one made at
+    // a raw string takes over nothing, gen_fn_param. Its own header only:
+    // cleared before the body, whose closures have their own parameters.)
+    ( nurl_sym_def syms `__inst_sink_tv__` ? == 0 ( nurl_str_len g_inst_tmpl ) `` ( __generic_view_sinks g_inst_tmpl g_mono_tparam_tys ) )
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ( gen_fn_param lex syms params_str pct )
         ? ( seq ( nurl_sym_get syms `__last_param_inout__` ) `1` )
@@ -99706,6 +99782,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
         = params_str ( nurl_get_last_type )
         = pct + pct 1
     }
+    ( nurl_sym_def syms `__inst_sink_tv__` `` )
     // Publish this function's inout / sink
     // parameter sets (empty for an ordinary function — harmless,
     // gen_call treats an empty / absent entry the same).
@@ -100693,7 +100770,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // parameter (the convention is enforced at the call site —
     // gen_call move-marks the argument), so it needs no special
     // handling here beyond the side-channel below.
-    : i pconv ( parse_param_marker lex )
+    : ~ i pconv ( parse_param_marker lex )
     // Reset the result/option side-channels so a `! T E` / `? T` parameter
     // type leaves fresh metadata here (and a non-result param doesn't
     // inherit a previous param's stale values). Mirrors the resets
@@ -100706,6 +100783,15 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : i __pt_col ( nurl_lex_col lex )
     : s lt ( parse_type lex )
     ( check_type_known lex syms lt `a parameter type` __pt_line __pt_col )
+    // A generic's `sink A x` made at `A = s` takes over nothing (AGORA-1028):
+    // the template takes over an `A`, and a raw string `s` is a view, as a
+    // `( Vec s )` holds views and a `( Pair s i )` borrows its string. Only a
+    // `sink s` written as such is the callee's own string (MEMORY.md §1,
+    // "Raw strings"). Taken over, the caller handed a copy of a literal or a
+    // view (mem_sink_str_arg) into a value that never released it.
+    ? & & == pconv 2 ( seq lt `i8*` ) ( str_contains_word ( nurl_sym_get syms `__inst_sink_tv__` ) ( nurl_str_int pct ) )
+    { = pconv 0 }
+    {}
     // Capture the `! T E` / `? T` payload metadata for this parameter so a
     // `?? <param> { T x → … }` match can reconstruct a struct / pointer
     // payload from its i64 slot — exactly as gen_let_or_struct does for a
