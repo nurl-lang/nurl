@@ -1,0 +1,3 @@
+### Added
+
+- **The core IR as Lean data, read in the kernel** (AGORA-1029, step 1 of taking the translation out of the certificate's trusted path). `nurl-cert words prog.core` prints a core IR as `def ir : C.Elab.IR := [...]`: one list of words per line, header lines split at tabs, statements at spaces and tabs. `formal/C/Elab.lean` reads it in the kernel: numbers and `v<id>` operands by structural recursion (Lean's `String.toNat?` does not reduce there), then the functions with their variables and statements (`fnsOf`), failing closed on a function left open. A real program's whole IR is read by `decide +kernel` in about a second. The translator's rules move into Lean on top of this in the next steps.

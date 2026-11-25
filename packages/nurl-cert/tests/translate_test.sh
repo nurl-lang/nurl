@@ -319,6 +319,29 @@ if grep -q '^let 3 call thread_spawn_owned 1 v2$' "$TMP/th7.core" && grep -q '^e
     else bad "th7: a callee and a field named like the spawned closure are no use of it (exit $rc)"; sed 's/^/        /' "$TMP/err" | head -3; fi
 else bad "th7: the core IR names the spawned closure v2, a callee v2 and a field v2 (nurlc's numbering changed: update the test)"; fi
 
+echo "== 1c. words: the core IR as Lean data (AGORA-1029)"
+if command -v python3 > /dev/null; then
+    nw=0; wbad=0
+    for f in tools/ncore/certify/*.nu; do
+        k=$(basename "$f" .nu)
+        "$NURLC" --emit-core "$f" > "$TMP/$k.wcore" 2> /dev/null || continue
+        "$CERT" words "$TMP/$k.wcore" > "$TMP/$k.words"
+        nw=$((nw + 1))
+        # the words must be the line's split, header lines at tabs, statements at whitespace
+        python3 - "$TMP/$k.wcore" "$TMP/$k.words" <<'EOF2' || wbad=$((wbad + 1))
+import json, sys
+t = open(sys.argv[1]).read()
+rows = [l.split("\t") if l.startswith(("fn\t", "v\t", "ty\t", "sum\t")) else l.split()
+        for l in t.splitlines() if l.strip()]
+src = open(sys.argv[2]).read()
+sys.exit(0 if json.loads(src[src.index(":= [") + 3:]) == rows else 1)
+EOF2
+    done
+    [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split" || bad "words: $wbad of $nw differ from the split"
+else
+    echo "  SKIP  words parity: no python3"
+fi
+
 echo "== 2. the reference (tools/ncore/tolean.py)"
 if command -v python3 > /dev/null; then
     n=0; same=0

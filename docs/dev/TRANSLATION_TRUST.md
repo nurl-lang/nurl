@@ -156,6 +156,22 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   a refused certify program (`thread_channel_read_after_an_alias_took_it_refused`).
   This is the class of error the per-encoding rows above exist for.
 
+## Route (b), step 1 (AGORA-1029)
+
+- `nurl-cert words prog.core` prints the core IR as `def ir : C.Elab.IR`:
+  one list of words per line, header lines (`fn`, `v`, `ty`, `sum`) split
+  at tabs, statements at spaces and tabs.
+  `packages/nurl-cert/tests/translate_test.sh` checks that its output is
+  exactly the lines' split for every certify program.
+- `formal/C/Elab.lean` reads those words in the kernel. `natOf` and
+  `varOf` work by structural recursion over the characters; `fnsOf` gives
+  the functions, their variables and their statements, and fails closed on
+  a function left open or an `endfn` with none open.
+- Measured: `vec_push_len`'s whole IR (17 functions with the library's,
+  588 lines of data) is read and checked by `decide +kernel` in 1.2 s.
+- Next: the translator's rules as Lean definitions over `CoreFn` (step 2,
+  the scalar subset first), then the claims stated about `elab ir`.
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's

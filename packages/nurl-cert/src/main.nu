@@ -27,13 +27,15 @@ $ `stdlib/ext/env.nu`
 $ `util.nu`
 $ `certify.nu`
 $ `verify.nu`
+$ `words.nu`
 
 @ __usage → v {
     ( nurl_print `nurl-cert — memory-safety certificates for NURL programs\n\n` )
     ( nurl_print `Usage:\n` )
     ( nurl_print `  nurl-cert certify <prog.nu> [options]   write the certificate bundle\n` )
     ( nurl_print `  nurl-cert verify <prog.cert> [options]  check a bundle again (no nurlc needed)\n` )
-    ( nurl_print `  nurl-cert translate <prog.core>         print the Lean term of a core IR (nurlc --emit-core)\n\n` )
+    ( nurl_print `  nurl-cert translate <prog.core>         print the Lean term of a core IR (nurlc --emit-core)\n` )
+    ( nurl_print `  nurl-cert words <prog.core>             print the core IR as Lean data (C.Elab.IR)\n\n` )
     ( nurl_print `Options:\n` )
     ( nurl_print `  --out DIR        the bundle (default <prog>.cert)\n` )
     ( nurl_print `  --profile P      kernel (default: the Lean kernel decides, standard axioms only)\n` )
@@ -134,6 +136,20 @@ $ `verify.nu`
     ^ ( cert_verify o )
 }
 
+// `words`: the core IR as Lean data (`def ir : C.Elab.IR`, AGORA-1029).
+@ __cmd_words String target → i {
+    : String text ?? ( nc_read ( string_data target ) ) {
+        T x → x
+        F → {
+            ( nc_eprint2 `nurl-cert: cannot read ` ( string_data target ) )
+            ^ 1
+        }
+    }
+    : String w ( cert_words ( string_data text ) )
+    ( nurl_print ( string_data w ) )
+    ^ 0
+}
+
 // `translate`: the term on stdout, or `unsupported: <why>` on stderr and
 // exit 2 (tolean.py's output and exit code); a core IR it cannot read is
 // exit 1.
@@ -182,10 +198,12 @@ $ `verify.nu`
                 : String arg ?? ( vec_get [String] pos 1 ) { T s → ( string_clone s ) F _ → ( string_new ) }
                 ? ( nc_is cmd `certify` ) { = rc ( __cmd_certify p arg ) } {
                     ? ( nc_is cmd `verify` ) { = rc ( __cmd_verify p arg ) } {
-                        ? ( nc_is cmd `translate` ) { = rc ( __cmd_translate arg ) } {
-                            ( nurl_eprint `nurl-cert: unknown command: ` )
-                            ( nurl_eprintln ( string_data cmd ) )
-                            = rc 2
+                        ? ( nc_is cmd `words` ) { = rc ( __cmd_words arg ) } {
+                            ? ( nc_is cmd `translate` ) { = rc ( __cmd_translate arg ) } {
+                                ( nurl_eprint `nurl-cert: unknown command: ` )
+                                ( nurl_eprintln ( string_data cmd ) )
+                                = rc 2
+                            }
                         }
                     }
                 }
