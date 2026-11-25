@@ -350,6 +350,18 @@ theorem EntryWeaker.dedup2 (E : Entry) : EntryWeaker E E.dedup2 := by
       fun _ _ _ hfr => ⟨hfr, dedupL_sub⟩, fun _ _ h => h⟩
   · simp only [ite_true]; exact EntryWeaker.refl E
 
+/-- ... and the other way: the original is weaker than its deduplicated
+    entry, so the two say the same (AGORA-988's `Weaker.dedup`, both ways). -/
+theorem EntryWeaker.of_dedup2 (E : Entry) : EntryWeaker E.dedup2 E := by
+  unfold Entry.dedup2
+  cases hf : fixedB E
+  · have hnf := fixedB_sound hf
+    simp only [Bool.false_eq_true, ite_false]
+    exact ⟨rfl, rfl, fun h => absurd h hnf, fun hl => ⟨hl, fun _ => dedupL_sub, dedupL_sub⟩,
+      fun hd => ⟨hd, dedupL_sub⟩, rfl, fun hd => Or.inl hd, fun _ _ _ _ _ => mem_dedupL.symm,
+      fun _ _ _ hfr => ⟨hfr, sub_dedupL⟩, fun _ _ h => h⟩
+  · simp only [ite_true]; exact EntryWeaker.refl E
+
 /-- Does dropping duplicates change one of the entries of `vs`? -/
 def dupsAt2 (vs : List Var) (Γ : Ctx) : Bool :=
   vs.any fun v => match Γ v with
@@ -372,6 +384,19 @@ theorem weaker_dedup2 {Γ : Ctx} {D : List Var} (hs : Supported2 Γ D) (vs : Lis
   · exact ⟨Iff.rfl, fun E E' h1 h2 => by rw [h1] at h2; cases h2; exact EntryWeaker.refl E⟩
   · refine ⟨by cases Γ v <;> simp, fun E E' h1 h2 => ?_⟩
     rw [h1] at h2; cases h2; exact EntryWeaker.dedup2 E
+
+/-- ... and the other way, once the context it came from is well formed:
+    the context and its deduplicated table are `Weaker` of each other. -/
+theorem weaker_of_dedup2 {Γ : Ctx} {D : List Var} (hs : Supported2 Γ D) (vs : List Var)
+    (hw : CtxWF Γ) (hn : NameWF Γ) : Weaker (ctxOfTbl (dedupTbl2 D vs Γ)) Γ := by
+  refine ⟨fun v => ?_, hw, hn⟩
+  unfold dedupTbl2
+  rcases ctxOfTbl_mapAt hs Entry.dedup2 vs v with e | e <;> rw [e]
+  · exact ⟨Iff.rfl, fun E E' h1 h2 => by rw [h1] at h2; cases h2; exact EntryWeaker.refl E⟩
+  · refine ⟨by cases Γ v <;> simp, fun E E' h1 h2 => ?_⟩
+    cases hv : Γ v with
+    | none => rw [hv] at h1; cases h1
+    | some E0 => rw [hv] at h1 h2; cases h1; cases h2; exact EntryWeaker.of_dedup2 _
 
 /-- The context a statement starts from, read into a table over `D`, with
     its duplicates dropped if that changes it and keeps it well formed. The
