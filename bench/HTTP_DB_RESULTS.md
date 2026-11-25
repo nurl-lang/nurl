@@ -1,6 +1,6 @@
 # NURL HTTP + database peer-comparison
 
-Generated `2026-11-19T10:06:18Z` by `bench/run_http.sh --suite db`. **Do not edit by hand** — the next run overwrites it.
+Generated `2026-11-25T10:07:35Z` by `bench/run_http.sh --suite db`. **Do not edit by hand** — the next run overwrites it.
 
 The endpoints a service puts in front of a database — TechEmpower's five tests and HttpArena's `async-db` profile — served by `bench/http_server.nu` (the `packages/http` HttpApp facade in `http_app_async` mode, the database through `packages/psql`: one connection that every fiber's queries are pipelined on, statements prepared once, and the N queries of one `/queries` or `/updates` request sent together with `pg_query_many`) and by the Rust peer `bench/rust_http_server` (hyper on tokio's multi-thread runtime, the database through `tokio-postgres`: one client every task's queries are pipelined on, statements prepared once, and the N queries of one `/queries` or `/updates` request sent together with `try_join_all`). Both serve the same bytes (`bench/http_db_schema.sql`: 10 000 `world` rows, TechEmpower's 12 fortunes, 100 000 `items`, deterministic), and every endpoint is checked on both before a request is timed. Node has no database peer here.
 
@@ -11,15 +11,15 @@ The endpoints a service puts in front of a database — TechEmpower's five tests
 | Item | Value |
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
-| Kernel | `Linux 7.0.0-1019-azure x86_64` |
-| CPU | AMD EPYC 9V74 80-Core Processor (4 logical cores) |
-| Memory | 16366640 KiB |
-| Commit | `e15ed57f998cbc8deb360fef791281fe77b5e588` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/44499612820 |
-| NURL | `v0.92.1-82-ge15ed57f` |
+| Kernel | `Linux 7.0.0-1016-aws x86_64` |
+| CPU | Intel(R) Xeon(R) 6975P-C (4 logical cores) |
+| Memory | 16077548 KiB |
+| Commit | `c46fd726f851b3938d5fbdea2c3dc3edabd20edf` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/45588846151 |
+| NURL | `v0.94.0-88-gc46fd726f` |
 | Rust | rustc 1.100.0 (0ef1bc386 2026-11-09) |
 | Load generator | oha 1.8.0 |
-| Database | throwaway PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg26.04+2) on cores `2-2` (`taskset`), durability off |
+| Database | throwaway PostgreSQL 18.7 (Ubuntu 18.7-1.pgdg26.04+2) on cores `2-2` (`taskset`), durability off |
 
 | Setting | Value |
 |---|---|
@@ -28,7 +28,7 @@ The endpoints a service puts in front of a database — TechEmpower's five tests
 | Core isolation | server on cores `0-1`, generator on cores `3-3` (`taskset`); the database as above |
 | Worker threads | 2 per server (`NURL_WORKERS` / `TOKIO_WORKER_THREADS`) |
 | CPU steal | 0.00 % of the machine's time over the measured cells (a VM's host taking its cores back) |
-| Machine load | 1.85 at start (quiet) |
+| Machine load | 1.74 at start (quiet) |
 
 ## Endpoint check
 
@@ -43,12 +43,12 @@ Before any timing: `/json`; `/db`; `/queries` with 20, 0, `foo` and 501 (→ 20,
 
 | Endpoint | NURL C=64 | Rust C=64 | NURL/Rust | NURL C=256 | Rust C=256 | NURL/Rust |
 |---|---:|---:|---:|---:|---:|---:|
-| `/json` | 11.72 | 11.97 | 0.98 | 12.08 | 12.46 | 0.97 |
-| `/db` | 26.03 | 24.56 | 1.06 | 27.86 | 23.41 | 1.19 |
-| `/queries?queries=20` | 186.10 | 183.11 | 1.02 | 230.72 | 188.90 | 1.22 |
-| `/fortunes` | 29.28 | 27.97 | 1.05 | 28.60 | 27.23 | 1.05 |
-| `/updates?queries=20` | 237.80 | 182.11 | 1.31 | 279.14 | 191.74 | 1.46 |
-| `/async-db?limit=50` | 84.15 | 57.45 | 1.46 | 89.97 | 59.75 | 1.51 |
+| `/json` | 7.79 | 7.64 | 1.02 | 8.05 | 8.23 | 0.98 |
+| `/db` | 16.56 | 16.07 | 1.03 | 15.92 | 14.83 | 1.07 |
+| `/queries?queries=20` | 132.23 | 138.62 | 0.95 | 205.55 | 143.32 | 1.43 |
+| `/fortunes` | 18.71 | 18.38 | 1.02 | 18.66 | 18.07 | 1.03 |
+| `/updates?queries=20` | 181.03 | 141.79 | 1.28 | 221.33 | 152.57 | 1.45 |
+| `/async-db?limit=50` | 70.37 | 51.90 | 1.36 | 73.36 | 52.00 | 1.41 |
 
 (µs of server CPU per request; NURL/Rust below 1 means NURL spends less.)
 
@@ -58,14 +58,14 @@ A `{"message":"hello, world!"}` object serialised per request — no database.
 
 |              | Server  | C = 64 | C = 256 |
 |--------------|---------|--------:|--------:|
-| **req/s**    | NURL    | 104 350 | **97 334** |
-|              | Rust    | **104 406** | 94 349 |
-| **p50 (ms)** | NURL    | **0.27** | **1.49** |
-|              | Rust    | 0.28 | 1.56 |
-| **p99 (ms)** | NURL    | **3.41** | **4.68** |
-|              | Rust    | 3.44 | 4.84 |
-| **CPU us/req** | NURL    | **11.72** | **12.08** |
-|              | Rust    | 11.97 | 12.46 |
+| **req/s**    | NURL    | **145 719** | **123 738** |
+|              | Rust    | 143 023 | 123 180 |
+| **p50 (ms)** | NURL    | **0.20** | **1.01** |
+|              | Rust    | **0.20** | 1.02 |
+| **p99 (ms)** | NURL    | **3.31** | **4.29** |
+|              | Rust    | 3.32 | **4.29** |
+| **CPU us/req** | NURL    | 7.79 | **8.05** |
+|              | Rust    | **7.64** | 8.23 |
 
 ## 2. `/db`
 
@@ -73,14 +73,14 @@ One random `world` row by primary key, as json.
 
 |              | Server  | C = 64 | C = 256 |
 |--------------|---------|--------:|--------:|
-| **req/s**    | NURL    | 67 157 | 58 782 |
-|              | Rust    | **67 221** | **60 771** |
-| **p50 (ms)** | NURL    | **0.48** | 5.06 |
-|              | Rust    | **0.48** | **4.97** |
-| **p99 (ms)** | NURL    | 3.59 | 6.05 |
-|              | Rust    | **3.58** | **5.78** |
-| **CPU us/req** | NURL    | 26.03 | 27.86 |
-|              | Rust    | **24.56** | **23.41** |
+| **req/s**    | NURL    | **115 253** | 115 426 |
+|              | Rust    | 114 642 | **115 956** |
+| **p50 (ms)** | NURL    | **0.54** | 2.14 |
+|              | Rust    | **0.54** | **2.13** |
+| **p99 (ms)** | NURL    | **0.77** | **4.85** |
+|              | Rust    | 0.79 | 5.10 |
+| **CPU us/req** | NURL    | 16.56 | 15.92 |
+|              | Rust    | **16.07** | **14.83** |
 
 ## 3. `/queries?queries=20`
 
@@ -88,14 +88,14 @@ N random `world` rows, one query each — all n sent together — as a json arra
 
 |              | Server  | C = 64 | C = 256 |
 |--------------|---------|--------:|--------:|
-| **req/s**    | NURL    | 4 572 | **4 669** |
-|              | Rust    | **4 597** | 4 583 |
-| **p50 (ms)** | NURL    | 13.97 | **54.93** |
-|              | Rust    | **13.87** | 55.81 |
-| **p99 (ms)** | NURL    | 15.38 | **57.42** |
-|              | Rust    | **15.21** | 59.73 |
-| **CPU us/req** | NURL    | 186.10 | 230.72 |
-|              | Rust    | **183.11** | **188.90** |
+| **req/s**    | NURL    | **6 801** | 6 267 |
+|              | Rust    | 6 457 | **6 476** |
+| **p50 (ms)** | NURL    | **9.40** | 40.94 |
+|              | Rust    | 9.91 | **39.61** |
+| **p99 (ms)** | NURL    | **9.85** | 42.79 |
+|              | Rust    | 10.28 | **40.99** |
+| **CPU us/req** | NURL    | **132.23** | 205.55 |
+|              | Rust    | 138.62 | **143.32** |
 
 ## 4. `/fortunes`
 
@@ -103,14 +103,14 @@ Every `fortune` row plus one added at request time, sorted by message, as an esc
 
 |              | Server  | C = 64 | C = 256 |
 |--------------|---------|--------:|--------:|
-| **req/s**    | NURL    | 62 914 | 65 205 |
-|              | Rust    | **64 488** | **66 306** |
-| **p50 (ms)** | NURL    | 0.98 | 3.86 |
-|              | Rust    | **0.95** | **3.80** |
-| **p99 (ms)** | NURL    | **1.57** | 5.95 |
-|              | Rust    | 1.76 | **5.89** |
-| **CPU us/req** | NURL    | 29.28 | 28.60 |
-|              | Rust    | **27.97** | **27.23** |
+| **req/s**    | NURL    | 105 227 | 105 286 |
+|              | Rust    | **105 417** | **106 998** |
+| **p50 (ms)** | NURL    | **0.60** | 2.39 |
+|              | Rust    | **0.60** | **2.37** |
+| **p99 (ms)** | NURL    | **0.81** | **3.83** |
+|              | Rust    | 0.92 | 4.28 |
+| **CPU us/req** | NURL    | 18.71 | 18.66 |
+|              | Rust    | **18.38** | **18.07** |
 
 ## 5. `/updates?queries=20`
 
@@ -118,14 +118,14 @@ N random `world` rows read one query each, each given a new random number, writt
 
 |              | Server  | C = 64 | C = 256 |
 |--------------|---------|--------:|--------:|
-| **req/s**    | NURL    | 3 104 | 3 275 |
-|              | Rust    | **3 284** | **3 288** |
-| **p50 (ms)** | NURL    | 20.53 | 78.28 |
-|              | Rust    | **19.41** | **77.94** |
-| **p99 (ms)** | NURL    | 23.60 | 84.36 |
-|              | Rust    | **21.64** | **81.50** |
-| **CPU us/req** | NURL    | 237.80 | 279.14 |
-|              | Rust    | **182.11** | **191.74** |
+| **req/s**    | NURL    | 4 255 | 4 429 |
+|              | Rust    | **4 633** | **4 681** |
+| **p50 (ms)** | NURL    | 14.98 | 57.76 |
+|              | Rust    | **13.85** | **54.91** |
+| **p99 (ms)** | NURL    | 16.25 | 62.47 |
+|              | Rust    | **15.19** | **57.85** |
+| **CPU us/req** | NURL    | 181.03 | 221.33 |
+|              | Rust    | **141.79** | **152.57** |
 
 ## 6. `/async-db?limit=50`
 
@@ -133,14 +133,14 @@ Up to `limit` `items` rows with `price between min and max` (no index: a scan), 
 
 |              | Server  | C = 64 | C = 256 |
 |--------------|---------|--------:|--------:|
-| **req/s**    | NURL    | **10 009** | **10 031** |
-|              | Rust    | 9 152 | 9 177 |
-| **p50 (ms)** | NURL    | **6.39** | **25.50** |
-|              | Rust    | 6.97 | 27.93 |
-| **p99 (ms)** | NURL    | **6.64** | **27.14** |
-|              | Rust    | 7.43 | 28.38 |
-| **CPU us/req** | NURL    | 84.15 | 89.97 |
-|              | Rust    | **57.45** | **59.75** |
+| **req/s**    | NURL    | 14 084 | 14 012 |
+|              | Rust    | **15 114** | **15 405** |
+| **p50 (ms)** | NURL    | 4.54 | 18.28 |
+|              | Rust    | **4.23** | **16.54** |
+| **p99 (ms)** | NURL    | **4.68** | **18.62** |
+|              | Rust    | 4.94 | 19.34 |
+| **CPU us/req** | NURL    | 70.37 | 73.36 |
+|              | Rust    | **51.90** | **52.00** |
 
 (Best per row in **bold**; latency winners only among non-starved cells. ‡ = closed-loop starved. `n/a` = tool absent; `FAIL` = the server failed its check or did not complete the cell.)
 
