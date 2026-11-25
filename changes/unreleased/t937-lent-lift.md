@@ -1,3 +1,0 @@
-### Changed
-
-- **In the formal proof, a parameter lent to a call is now modelled through the call's own view of its argument** (AGORA-937). When a call is placed in the caller, the proof models a lent parameter as the callee's own record of what it depends on, with its region standing for what the argument holds. Before, the proof copied the argument's entry. The two give the same dependencies, now proven (`canon_inp_eq`). The old way could only bound them by an over-approximation, which the next step removes. No rule changes, nothing changes in nurlc, and the proof is complete with no theorem weakened.

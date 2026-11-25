@@ -1,7 +1,0 @@
-### Changed
-
-- **Breaking: a place a callee or a `sink` may have left empty is moved there, and may not be used before it gets a new value** (AGORA-991). Two kinds of place are emptied, set to a null handle. A function that hands its `inout` handle parameter to a `sink` on some paths empties its caller's slot on those paths (agora #778). A binding read out of a struct's field (`: R a . col res`) and handed to a `sink` takes the field over and leaves it empty where it lives. The caller could go on using either place: a Vec or a String read as empty, but a push through it stored through data pointer 0, which the optimiser treated as unreachable (an optimised program re-entered `main` until the stack overflowed), and an Rc read through it faulted. Now:
-  - the caller's argument to such a callee is moved on some paths after the call (a new summary, built from the calls that hand an `inout` parameter on);
-  - a field taken over through a binding read out of it is moved, as a field handed to the `sink` directly already was.
-
-  A use before a new value is refused ("use of possibly-moved value 'w' — 'g3' may hand it on to a 'sink' …"). The zero slot still drops as nothing, so releases are unchanged. Migration: give the place a new value after the call (`= w ( vec_new [i] )`, `= . col res …`) before using it. In this repository, `compiler/tests/field_viewer_rebound_handed_to_sink.nu` and `compiler/tests/inout_taken_on_some_paths_leaves_the_caller_its_value.nu` read the emptied place; they now give it a new value first.

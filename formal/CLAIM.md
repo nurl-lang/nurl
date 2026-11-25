@@ -4,7 +4,12 @@
 > `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim_full`, `A3.claim_made_full`;
 > [`README.md`](README.md)). Each phase's section below names what its
 > calculus leaves out. Phases B–D are the statement the proof is working
-> towards, not one it has reached.
+> towards, not one it has reached for every program nurlc accepts. B's
+> models of the library pieces it names are proven (B1–B9), C's verified
+> checker decides A1–A3 and certifies one program at a time (C13, C14:
+> `nurl --certify`, `docs/dev/CERTIFICATE.md`, with the translation from
+> nurlc's core IR a trusted step), and D is under way (D0–D2); the
+> README's phase table says what each covers.
 
 ## Statement
 
@@ -181,7 +186,9 @@ the LLVM / C11 memory model rather than redefining it.
     views, and a call into a function that does so which passes an
     argument holding views (`ThruFn`) of anything but a region of the
     caller's own signature (AGORA-937: a view-holding `sink` or `inout`
-    parameter may be handed to such a function, `A2/RegionThruWitness.lean`);
+    parameter may be handed to such a function, `A2/RegionThruWitness.lean`)
+    or of real memory the call changes only inside its elements (AGORA-937
+    B4, route U: `CallThruOK`, `A2/HeldViewThruWitness.lean`'s `call_ok`);
   - a closure whose code does so, through a borrow that is not fresh,
     when the call through its package passes an argument holding views, or
     its environment holds views, or it takes the environment handed over
@@ -216,10 +223,12 @@ the LLVM / C11 memory model rather than redefining it.
     A callee that changes a `Vec` it reaches through a slice its parameter
     holds, `( vec_reserve ( slice_at ( vec_at vv 0 ) 0 ) … )` with `vv : Vec
     (Slice (Vec i))`, changes through a borrow that is not fresh (an
-    element of a slice never is), landing in memory `vv`'s slices view: no
-    call of it passes an argument holding views
+    element of a slice never is), landing in memory `vv`'s slices view: a
+    call of it that also passes a view inside that memory, or while one is
+    live, has no typing
     (`A2/HeldViewThruWitness.lean`: `call_refused`, `call_alone_refused`;
-    AGORA-933, which nurlc accepted and fixes in github#2100).
+    AGORA-933, which nurlc accepted and fixes in github#2100). With that
+    view ended first, `( f1 vv )` types by route U (`call_ok`, AGORA-937 B4).
     A copy of a slice of views (a literal's owned `[s` field given a slice
     parameter, a `mem_dup` of one) is typed as A2 types a copy: a call whose
     summary hands back an owner and lends nothing (`CallT`, `callRes`). Its
@@ -424,7 +433,8 @@ the LLVM / C11 memory model rather than redefining it.
   views of, which the caller's result and `inout` argument hold already
   (`heldOfArgs`, `CallH.σ_held`). A call into through-changing code
   (`ThruFn`) may pass arguments that hold views of regions and of nothing
-  else (`CallT`). None of this is a new nurlc rule. It is A2's reading of
+  else (`CallT`), or, by route U (AGORA-937 B4), views of real memory it
+  changes only inside its elements (`CallThruOK`). None of this is a new nurlc rule. It is A2's reading of
   answers nurlc already makes (phase C):
   - The region is nurlc's pseudo source of a view-holding parameter.
     `__own_sink_str_params` marks the parameter `%name`, and the walk

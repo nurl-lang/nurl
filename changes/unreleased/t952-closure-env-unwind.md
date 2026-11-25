@@ -1,3 +1,0 @@
-### Fixed
-
-- **Releasing a closure counts as a way out when its environment holds a value whose `% Drop` may panic** (AGORA-952). Example: a closure made by `( mkf @ D { k } )`, where `mkf` takes the `D` over. That closure, released by a `=` over it or at its block's end, runs `D`'s drop. A field of an `inout` parameter that a `sink` took may not stay empty across that release, and an `inout` parameter may not view a value of the function across it. Before, a `recover`ing caller got the parameter back with the field empty and read a null handle (a SEGV), or read freed memory. A closure's type names nothing its environment holds, so the check follows what each maker took over, through wrappers that take the closure over too.

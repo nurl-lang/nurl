@@ -1,3 +1,0 @@
-### Changed
-
-- **Breaking: `= o ( pick o other k )` is refused however `pick` is spelled** (AGORA-966, AGORA-946 D4a). An option or result owner given back a call that may hand back either its own value or another argument's was refused only when the callee was a plain function defined above the call. A callee defined below, a generic instance and a `dyn` method were accepted on a run-time key. All four are now refused with the same message, as the formal model refuses the form. Migration: give `o` a value of its own (`= o ( mem_dup ( pick o other k ) )`), or bind the result to a new name and keep the two owners apart. No code in this repository used the accepted spellings.
