@@ -62,7 +62,15 @@ jobs:
           echo "${LEAN_SHA256}  /tmp/lean.tar.zst" | sha256sum -c -
           mkdir -p "$HOME/lean"
           tar --zstd -xf /tmp/lean.tar.zst -C "$HOME/lean"
-          echo "$HOME/lean/lean-${LEAN_VERSION}-linux/bin" >> "$GITHUB_PATH"
+          # Only lake and lean go on PATH: the archive's bin/ also has its
+          # own clang, which must not stand in for the toolchain's when
+          # build.sh compiles the runtime.
+          mkdir -p "$HOME/leanbin"
+          for t in lake lean; do
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$HOME/lean/lean-${LEAN_VERSION}-linux/bin/$t" > "$HOME/leanbin/$t"
+            chmod +x "$HOME/leanbin/$t"
+          done
+          echo "$HOME/leanbin" >> "$GITHUB_PATH"
       - name: Build the checker's modules (C.Cert and what it imports)
         working-directory: formal
         run: lake build C.Cert
