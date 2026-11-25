@@ -1,4 +1,5 @@
 import C.Check
+import C.Dedup
 
 /-!
 # C1: joins (`ite`, `while`) over finite contexts (AGORA-970)
@@ -42,6 +43,75 @@ theorem eq_of_agree {Γ Δ : Ctx} {D : List Var} (h1 : Supported Γ D) (h2 : Sup
   · have := List.all_eq_true.mp h v hv; simpa using this
   · rw [h1 v hv, h2 v hv]
 
+/-! ### `Weaker` decided over the domain (used by C1's dedup and C2's certificates) -/
+
+def subB (a b : List Dep) : Bool := a.all (fun d => decide (d ∈ b))
+
+theorem subB_sound {a b : List Dep} (h : subB a b = true) : a ⊆ b := fun d hd =>
+  of_decide_eq_true (List.all_eq_true.mp h d hd)
+
+/-- `EntryWeaker`, decided. -/
+def entryWeakerB (E E' : Entry) : Bool :=
+  decide (E'.ty = E.ty) && decide (E'.mode = E.mode) && (decide (E.mode ≠ .rootb) || decide (E' = E)) &&
+    (!E'.live || (E.live && (E.mode.ownSlot || subB E.path E'.path) && subB E.held E'.held))
+
+theorem entryWeakerB_sound {E E' : Entry} (h : entryWeakerB E E' = true) : EntryWeaker E E' := by
+  simp only [entryWeakerB, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at h
+  obtain ⟨⟨⟨hty, hm⟩, hr⟩, hl⟩ := h
+  refine ⟨hty, hm, fun e => hr.resolve_left (fun h' => h' e), fun hl' => ?_⟩
+  rcases hl with h0 | ⟨⟨h1, h2⟩, h3⟩
+  · rw [hl'] at h0; cases h0
+  · refine ⟨h1, fun ho => ?_, subB_sound h3⟩
+    rcases h2 with h2 | h2
+    · rw [ho] at h2; cases h2
+    · exact subB_sound h2
+
+/-- `CtxWF` over the domain, decided. -/
+def ctxWFB (D : List Var) (Γ : Ctx) : Bool :=
+  D.all fun v => match Γ v with
+    | some E => !E.live || !(decide (E.ty ≠ .int ∨ E.mode = .rootb)) ||
+        (roots E.vdeps).all fun r => match Γ r with
+          | some Er => Er.mode.isRoot
+          | none => false
+    | none => true
+
+theorem ctxWFB_sound {D : List Var} {Γ : Ctx} (hs : Supported Γ D) (h : ctxWFB D Γ = true) : CtxWF Γ := by
+  intro v E hv hl hk r hr
+  have hvD : v ∈ D := by
+    apply Classical.byContradiction; intro hn; rw [hs v hn] at hv; cases hv
+  have := List.all_eq_true.mp h v hvD
+  rw [hv] at this
+  simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at this
+  rcases this with (h0 | h0) | h0
+  · rw [hl] at h0; cases h0
+  · exact absurd hk h0
+  · have := List.all_eq_true.mp h0 r hr
+    split at this
+    · rename_i Er hEr; exact ⟨Er, hEr, this⟩
+    · cases this
+
+/-- `Weaker Γ Γ'` over the domain, decided. -/
+def weakerB (D : List Var) (Γ Γ' : Ctx) : Bool :=
+  (D.all fun v => match Γ v, Γ' v with
+    | none, none => true
+    | some E, some E' => entryWeakerB E E'
+    | _, _ => false) && ctxWFB D Γ'
+
+theorem weakerB_sound {D : List Var} {Γ Γ' : Ctx} (hs : Supported Γ D) (hs' : Supported Γ' D)
+    (h : weakerB D Γ Γ' = true) : Weaker Γ Γ' := by
+  simp only [weakerB, Bool.and_eq_true] at h
+  obtain ⟨h1, h2⟩ := h
+  refine ⟨fun v => ?_, ctxWFB_sound hs' h2⟩
+  by_cases hv : v ∈ D
+  · have := List.all_eq_true.mp h1 v hv
+    split at this
+    · rename_i ha hb; exact ⟨by simp [ha, hb], fun E E' e1 e2 => by rw [ha] at e1; cases e1⟩
+    · rename_i E E' ha hb
+      exact ⟨by simp [ha, hb], fun E1 E1' e1 e2 => by
+        rw [ha] at e1; rw [hb] at e2; cases e1; cases e2; exact entryWeakerB_sound this⟩
+    · cases this
+  · rw [hs v hv, hs' v hv]; exact ⟨Iff.rfl, fun E _ e => by cases e⟩
+
 theorem inferRhs_supported {Γ : Ctx} {F : List Var} {D : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
     (hs : Supported Γ D) (hD : ∀ v ∈ r.vars, v ∈ D) (h : inferRhs Γ F r = some (E, Γ1)) : Supported Γ1 D := by
   cases r with
@@ -68,6 +138,121 @@ theorem inferRhs_supported {Γ : Ctx} {F : List Var} {D : List Var} {r : Rhs} {E
   | pop y =>
     simp only [inferRhs] at h; split at h <;> (try split at h) <;> (try split at h) <;> cases h
     exact supported_kill hs _ _ _
+
+/-! ### Duplicate dependencies dropped (AGORA-988)
+
+A1's push appends what the pushed value depends on to what the `Vec`
+holds (`Ex1.held ++ D`), and a call appends what its arguments hold in
+every kind (`callPost`, `callRes`). The checker computes those lists
+exactly, so repeated pushes or calls grow them geometrically
+(github#2242's review). `Entry.dedup1` drops the duplicates. A1's
+`EntryWeaker` is stated by membership, so the entry is weaker than the
+original (`EntryWeaker.dedup1`), and a context with some entries
+deduplicated is `Weaker` once it is well formed, which the checker
+decides. The drop is one `sub` step: on what a call's continuation starts
+from (`settleL1`, in C2's `checkC`) or on where a push ends (`settleOutL1`,
+in `checkS`). Where a check fails, the exact context is kept, so nothing
+is refused for it. C0's `checkStmt` has no domain to decide well-formedness
+over, so it stays exact. -/
+
+/-- An entry with duplicates dropped from both lists. A borrowed
+    parameter's entry stays as it is: `EntryWeaker` keeps it exactly. -/
+def _root_.A1.Entry.dedup1 (E : Entry) : Entry :=
+  if E.mode = .rootb then E else { E with path := dedupL E.path, held := dedupL E.held }
+
+theorem EntryWeaker.dedup1 (E : Entry) : EntryWeaker E E.dedup1 := by
+  unfold Entry.dedup1
+  by_cases hm : E.mode = .rootb
+  · simp only [hm, ite_true]; exact EntryWeaker.refl E
+  · simp only [hm, ite_false]
+    exact ⟨rfl, rfl, fun h => absurd h hm, fun hl => ⟨hl, fun _ => sub_dedupL, sub_dedupL⟩⟩
+
+/-- Does dropping duplicates change one of the entries of `vs`? -/
+def dupsAt1 (vs : List Var) (Γ : Ctx) : Bool :=
+  vs.any fun v => match Γ v with
+    | some E => decide (E.dedup1 ≠ E)
+    | none => false
+
+theorem supported_tbl1 {D : List Var} (L : Var → Option Entry) : Supported (ctxOfTbl (tblOf D L)) D :=
+  fun _ hv => ctxOfTbl_none _ hv
+
+/-- `Γ` with the entries of `vs` deduplicated, read into a table over `D`. -/
+def dedupTbl1 (D vs : List Var) (Γ : Ctx) : List (Var × Option Entry) := tblOf D (mapAt Entry.dedup1 vs Γ)
+
+theorem weaker_dedup1 {Γ : Ctx} {D : List Var} (hs : Supported Γ D) (vs : List Var)
+    (hw : CtxWF (ctxOfTbl (dedupTbl1 D vs Γ))) : Weaker Γ (ctxOfTbl (dedupTbl1 D vs Γ)) := by
+  refine ⟨fun v => ?_, hw⟩
+  unfold dedupTbl1
+  rcases ctxOfTbl_mapAt hs Entry.dedup1 vs v with e | e <;> rw [e]
+  · exact ⟨Iff.rfl, fun E E' h1 h2 => by rw [h1] at h2; cases h2; exact EntryWeaker.refl E⟩
+  · refine ⟨by cases Γ v <;> simp, fun E E' h1 h2 => ?_⟩
+    rw [h1] at h2; cases h2; exact EntryWeaker.dedup1 E
+
+/-- `Weaker Γ Γ`, where `Γ` is well formed. -/
+theorem weaker_self1 {D : List Var} {Γ : Ctx} (hs : Supported Γ D) (h : ctxWFB D Γ = true) : Weaker Γ Γ :=
+  ⟨fun v => ⟨Iff.rfl, fun E E' e1 e2 => by rw [e1] at e2; cases e2; exact EntryWeaker.refl _⟩,
+    ctxWFB_sound hs h⟩
+
+/-- The context a statement starts from, read into a table over `D`, its
+    duplicates dropped if that changes it and keeps it well formed. As A2's
+    `settleL2`, it is a `List` the checker reads through `ctxOfTbl`, so it
+    is built once. -/
+def settleL1 (D vs : List Var) (Γ : Ctx) : List (Var × Option Entry) :=
+  if dupsAt1 vs Γ then
+    let L := dedupTbl1 D vs Γ
+    if ctxWFB D (ctxOfTbl L) then L else tblOf D Γ
+  else tblOf D Γ
+
+theorem settleL1_supported {Γ : Ctx} {D : List Var} (vs : List Var) :
+    Supported (ctxOfTbl (settleL1 D vs Γ)) D := by
+  unfold settleL1
+  split
+  · simp only; split
+    · exact supported_tbl1 _
+    · exact supported_tbl1 _
+  · exact supported_tbl1 _
+
+theorem settleL1_weaker {Γ : Ctx} {D : List Var} (hs : Supported Γ D) (vs : List Var) :
+    ctxOfTbl (settleL1 D vs Γ) = Γ ∨ Weaker Γ (ctxOfTbl (settleL1 D vs Γ)) := by
+  unfold settleL1
+  split
+  · simp only; split
+    · rename_i hc
+      exact Or.inr (weaker_dedup1 hs vs (ctxWFB_sound (supported_tbl1 _) hc))
+    · exact Or.inl (ctxOfTbl_self hs)
+  · exact Or.inl (ctxOfTbl_self hs)
+
+theorem stmtT_settleIn1 {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {D : List Var}
+    (hs : Supported Γ D) (vs : List Var) (ht : StmtT P (ctxOfTbl (settleL1 D vs Γ)) F s Δ) : StmtT P Γ F s Δ := by
+  rcases settleL1_weaker hs vs with e | w
+  · rw [e] at ht; exact ht
+  · exact .sub w ht (Or.inl rfl)
+
+/-- The context a statement ends in, as a table over `D`, its duplicates
+    dropped where that and the context it started from are well formed. -/
+def settleOutL1 (D vs : List Var) (Γ Δ : Ctx) : List (Var × Option Entry) :=
+  if dupsAt1 vs Δ && ctxWFB D (ctxOfTbl (tblOf D Γ)) then settleL1 D vs Δ else tblOf D Δ
+
+theorem settleOutL1_supported {Γ Δ : Ctx} {D : List Var} (vs : List Var) :
+    Supported (ctxOfTbl (settleOutL1 D vs Γ Δ)) D := by
+  unfold settleOutL1
+  split
+  · exact settleL1_supported vs
+  · exact supported_tbl1 _
+
+theorem stmtT_settleOut1 {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {D : List Var}
+    (hs : Supported Γ D) (hsΔ : Supported Δ D) (vs : List Var) (ht : StmtT P Γ F s Δ) :
+    StmtT P Γ F s (ctxOfTbl (settleOutL1 D vs Γ Δ)) := by
+  unfold settleOutL1
+  split
+  · rename_i hc
+    simp only [Bool.and_eq_true] at hc
+    have hc2 := hc.2
+    rw [ctxOfTbl_self hs] at hc2
+    rcases settleL1_weaker hsΔ vs with e | w
+    · rw [e]; exact ht
+    · exact .sub (weaker_self1 hs hc2) ht (Or.inr w)
+  · rw [ctxOfTbl_self hsΔ]; exact ht
 
 /-- The checker with joins. Straight-line leaves go to C0's `checkStmt`.
     Its soundness (`checkS_sound`) needs two things of the domain `D`: every
@@ -99,6 +284,7 @@ def checkS (D : List Var) : Ctx → List Var → Stmt → Option Ctx
       | some Δ => if D.all (fun v => Δ v == Γ v) then some Γ else none
       | none => none
     else none
+  | Γ, F, .push x y => (checkStmt Γ F (.push x y)).map fun Δ => ctxOfTbl (settleOutL1 D [x] Γ Δ)
   | Γ, F, s => checkStmt Γ F s
 
 /-- C0's leaves keep the support. -/
@@ -232,7 +418,9 @@ theorem checkS_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {Γ : Ctx} {F : 
   | push x y =>
     intro Γ F Δ hs hD h
     simp only [checkS] at h
-    exact ⟨checkStmt_sound h, checkStmt_leaf_supported hs hD h (Or.inr (Or.inr (Or.inl ⟨x, y, rfl⟩)))⟩
+    obtain ⟨Δ0, h0, rfl⟩ := Option.map_eq_some_iff.mp h
+    have s0 := checkStmt_leaf_supported hs hD h0 (Or.inr (Or.inr (Or.inl ⟨x, y, rfl⟩)))
+    exact ⟨stmtT_settleOut1 hs s0 [x] (checkStmt_sound h0), settleOutL1_supported [x]⟩
   | free x =>
     intro Γ F Δ hs hD h
     simp only [checkS] at h

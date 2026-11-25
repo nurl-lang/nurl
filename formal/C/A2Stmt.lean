@@ -1,5 +1,6 @@
 import C.A2Panic
 import C.A2Weaker
+import C.Dedup
 
 /-!
 # C7: A2's statements, decided (AGORA-970)
@@ -319,6 +320,132 @@ theorem liveAtB_sound {Γ : Ctx} {x : Var} (h : liveAtB Γ x = true) : ∃ E, Γ
   | none => intro h; cases h
   | some E => intro h; exact ⟨E, rfl, h⟩
 
+/-! ### Duplicate dependencies dropped (AGORA-988)
+
+A push appends what the pushed value depends on to what the `Vec` holds,
+and a call appends what its arguments hold; repeated, the lists grow
+geometrically (github#2242's review). `Entry.dedup2` drops the
+duplicates. The entry says what it said (`EntryWeaker.dedup2`: every
+clause of `EntryWeaker` is stated by membership), so a context with some
+entries deduplicated is `Weaker` than the one it came from once it is well
+formed, which the checker decides. The drop is then one `sub` step: on the
+context a call's continuation starts from (`settleL2`), or on the context
+a push ends in (`settleOutL2`, which also needs the start well formed).
+Either way the context is read once into a table over `D`, so a later read
+no longer replays the calls and kills it was built by. Where a check fails,
+the table holds the exact context, so no program is refused for it. -/
+
+/-- An entry with duplicates dropped from both lists. A fixed entry stays
+    as it is: `EntryWeaker` keeps one exactly. -/
+def _root_.A2.Entry.dedup2 (E : Entry) : Entry :=
+  if fixedB E then E else { E with path := dedupL E.path, held := dedupL E.held }
+
+theorem EntryWeaker.dedup2 (E : Entry) : EntryWeaker E E.dedup2 := by
+  unfold Entry.dedup2
+  cases hf : fixedB E
+  · have hnf := fixedB_sound hf
+    simp only [Bool.false_eq_true, ite_false]
+    exact ⟨rfl, rfl, fun h => absurd h hnf, fun hl => ⟨hl, fun _ => sub_dedupL, sub_dedupL⟩,
+      fun hd => ⟨hd, sub_dedupL⟩, rfl, fun hd => Or.inl hd, fun _ _ _ _ _ => mem_dedupL,
+      fun _ _ _ hfr => ⟨hfr, dedupL_sub⟩, fun _ _ h => h⟩
+  · simp only [ite_true]; exact EntryWeaker.refl E
+
+/-- Does dropping duplicates change one of the entries of `vs`? -/
+def dupsAt2 (vs : List Var) (Γ : Ctx) : Bool :=
+  vs.any fun v => match Γ v with
+    | some E => decide (E.dedup2 ≠ E)
+    | none => false
+
+/-- `Γ` with the entries of `vs` deduplicated, read into a table over `D`. -/
+def dedupTbl2 (D vs : List Var) (Γ : Ctx) : List (Var × Option Entry) := tblOf D (mapAt Entry.dedup2 vs Γ)
+
+theorem supported2_tbl {D : List Var} (L : Var → Option Entry) : Supported2 (ctxOfTbl (tblOf D L)) D :=
+  fun _ hv => ctxOfTbl_none _ hv
+
+/-- The deduplicated context is weaker, once it is well formed. -/
+theorem weaker_dedup2 {Γ : Ctx} {D : List Var} (hs : Supported2 Γ D) (vs : List Var)
+    (hw : CtxWF (ctxOfTbl (dedupTbl2 D vs Γ))) (hn : NameWF (ctxOfTbl (dedupTbl2 D vs Γ))) :
+    Weaker Γ (ctxOfTbl (dedupTbl2 D vs Γ)) := by
+  refine ⟨fun v => ?_, hw, hn⟩
+  unfold dedupTbl2
+  rcases ctxOfTbl_mapAt hs Entry.dedup2 vs v with e | e <;> rw [e]
+  · exact ⟨Iff.rfl, fun E E' h1 h2 => by rw [h1] at h2; cases h2; exact EntryWeaker.refl E⟩
+  · refine ⟨by cases Γ v <;> simp, fun E E' h1 h2 => ?_⟩
+    rw [h1] at h2; cases h2; exact EntryWeaker.dedup2 E
+
+/-- The context a statement starts from, read into a table over `D`, with
+    its duplicates dropped if that changes it and keeps it well formed. The
+    checker passes on `ctxOfTbl` of it, written where it is used, so the
+    table is built once there and every later read is one scan of `D` (and
+    no longer replays the calls and kills the context was built by). It is
+    a `List`: a definition whose result is a `Ctx` is compiled with the
+    slot added as an argument, and would rebuild the table on every read. -/
+def settleL2 (D vs : List Var) (Γ : Ctx) : List (Var × Option Entry) :=
+  if dupsAt2 vs Γ then
+    let L := dedupTbl2 D vs Γ
+    if ctxWF2B D (ctxOfTbl L) && nameWFB D (ctxOfTbl L) then L else tblOf D Γ
+  else tblOf D Γ
+
+theorem settleL2_supported {Γ : Ctx} {D : List Var} (vs : List Var) :
+    Supported2 (ctxOfTbl (settleL2 D vs Γ)) D := by
+  unfold settleL2
+  split
+  · simp only; split
+    · exact supported2_tbl _
+    · exact supported2_tbl _
+  · exact supported2_tbl _
+
+theorem settleL2_weaker {Γ : Ctx} {D : List Var} (hs : Supported2 Γ D) (vs : List Var) :
+    ctxOfTbl (settleL2 D vs Γ) = Γ ∨ Weaker Γ (ctxOfTbl (settleL2 D vs Γ)) := by
+  unfold settleL2
+  split
+  · simp only; split
+    · rename_i hc
+      simp only [Bool.and_eq_true] at hc
+      have hs' := supported2_tbl (D := D) (mapAt Entry.dedup2 vs Γ)
+      exact Or.inr (weaker_dedup2 hs vs (ctxWF2B_sound hs' hc.1) (nameWFB_sound hs' hc.2))
+    · exact Or.inl (ctxOfTbl_self hs)
+  · exact Or.inl (ctxOfTbl_self hs)
+
+/-- A statement typed from the settled context is typed from the context
+    itself: one `sub` step. -/
+theorem stmtT_settleIn2 {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {D : List Var}
+    (hs : Supported2 Γ D) (vs : List Var) (ht : StmtT P ξ (ctxOfTbl (settleL2 D vs Γ)) F s Δ) :
+    StmtT P ξ Γ F s Δ := by
+  rcases settleL2_weaker hs vs with e | w
+  · rw [e] at ht; exact ht
+  · exact .sub w ht (Or.inl rfl)
+
+/-- The context a statement ends in, as a table over `D`, its duplicates
+    dropped where that and the context it started from are well formed
+    (the start read into a table over `D` for its check). -/
+def settleOutL2 (D vs : List Var) (Γ Δ : Ctx) : List (Var × Option Entry) :=
+  if dupsAt2 vs Δ && (let L := tblOf D Γ; ctxWF2B D (ctxOfTbl L) && nameWFB D (ctxOfTbl L)) then
+    settleL2 D vs Δ
+  else tblOf D Δ
+
+theorem settleOutL2_supported {Γ Δ : Ctx} {D : List Var} (vs : List Var) :
+    Supported2 (ctxOfTbl (settleOutL2 D vs Γ Δ)) D := by
+  unfold settleOutL2
+  split
+  · exact settleL2_supported vs
+  · exact supported2_tbl _
+
+theorem stmtT_settleOut2 {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {D : List Var}
+    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (vs : List Var) (ht : StmtT P ξ Γ F s Δ) :
+    StmtT P ξ Γ F s (ctxOfTbl (settleOutL2 D vs Γ Δ)) := by
+  unfold settleOutL2
+  split
+  · rename_i hc
+    simp only [Bool.and_eq_true] at hc
+    have hc2 := hc.2
+    rw [ctxOfTbl_self hs] at hc2
+    have wΓ := weaker_self2 hs hc2.1 hc2.2
+    rcases settleL2_weaker hsΔ vs with e | w
+    · rw [e]; exact ht
+    · exact .sub wΓ ht (Or.inr w)
+  · rw [ctxOfTbl_self hsΔ]; exact ht
+
 def pushB (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option Ctx :=
   match liveE2 Γ x, liveE2 Γ y with
   | some Ex, some Ey =>
@@ -331,7 +458,8 @@ def pushB (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option Ctx :=
           match liveE2 Γ1 x with
           | some Ex1 =>
             if dtorSafeB D Γ1 .realloc t.holdsView x && (!Ex1.dbind || subB2 (ownHeld true t Ds) Ex1.held) then
-              some (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t Ds })
+              some (ctxOfTbl <| settleOutL2 D [x] Γ
+                (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t Ds }))
             else none
           | none => none
         | none => none
@@ -367,9 +495,11 @@ theorem pushB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List 
                 simp only [Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true'] at hc2
                 obtain ⟨hds, hdb⟩ := hc2
                 simp only [Option.some.injEq] at h; subst h
-                refine ⟨.push hx hxl (vecElem2_some ht) (canDoB2_sound hcd) hF hy hyl hty hne hpa' hroot hx1 hx1l
-                  (dtorSafeB_sound hs1' hds) (fun hdb' => ?_), supported2_setE (supported2_kill hs1' _ _ _)
-                  (hD x (by simp [Stmt.vars])) _⟩
+                have hsΔ := supported2_setE (supported2_kill hs1' .realloc t.holdsView x) (hD x (by simp [Stmt.vars]))
+                  { Ex1 with held := Ex1.held ++ ownHeld true t Ds }
+                refine ⟨stmtT_settleOut2 hs hsΔ [x] (.push hx hxl (vecElem2_some ht) (canDoB2_sound hcd) hF hy hyl
+                  hty hne hpa' hroot hx1 hx1l (dtorSafeB_sound hs1' hds) (fun hdb' => ?_)),
+                  settleOutL2_supported [x]⟩
                 rcases hdb with h0 | h0
                 · rw [hdb'] at h0; cases h0
                 · exact subB2_sound h0
@@ -1283,7 +1413,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
     if s.src ∧ Γ x = none ∧ x ∉ F ∧ dtorHeadB P f x s then
       match C Γ F f args with
       | some (E, Γ1) =>
-        match checkStmt2 P R C D (setE Γ1 x E) F s with
+        match checkStmt2 P R C D (ctxOfTbl <| settleL2 D (x :: args) (setE Γ1 x E)) F s with
         | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
         | none => none
       | none => none
@@ -1460,7 +1590,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
             if recvApartB zs Ec then
               match C Γ F σ (c :: zs) with
               | some (E, Γ1) =>
-                match checkStmt2 P R C D (setE Γ1 x (recvRes c Ec E)) F k with
+                match checkStmt2 P R C D (ctxOfTbl <| settleL2 D (x :: c :: zs) (setE Γ1 x (recvRes c Ec E))) F k with
                 | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
                 | none => none
               | none => none
@@ -1486,7 +1616,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
                 | some _ =>
                   match C (kill .replace false c Γ) F σ (c :: zs) with
                   | some (E, Γ1) =>
-                    match checkStmt2 P R C D (kill .replace false c (setE Γ1 x E)) F k with
+                    match checkStmt2 P R C D (ctxOfTbl <| settleL2 D (x :: zs) (kill .replace false c (setE Γ1 x E))) F k with
                     | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
                     | none => none
                   | none => none
@@ -1591,9 +1721,10 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
           · rename_i he
             simp only [Option.some.injEq] at h; subst h
             obtain ⟨hct, hs1⟩ := hC Γ F f args E Γ1 hs (fun a ha => hD a (by simp [Stmt.vars, ha])) hcall
-            obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
+            have hs2 := supported2_setE hs1 (hD x (by simp [Stmt.vars])) E
+            obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (settleL2_supported _)
               (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
-            exact ⟨.letcall hsrc hx hF hct t0 (endOK2B_sound s0 he) (dtorHeadB_sound hdk),
+            exact ⟨.letcall hsrc hx hF hct (stmtT_settleIn2 hs2 _ t0) (endOK2B_sound s0 he) (dtorHeadB_sound hdk),
               supported2_exitScope s0 x⟩
           · cases h
         · cases h
@@ -1987,9 +2118,11 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                     simp only [Option.some.injEq] at h; subst h
                     obtain ⟨hct, hs1⟩ := hC Γ F σ (c :: zs) E Γ1 hs
                       (fun a ha => hD a (by simp [Stmt.vars] at ha ⊢; rcases ha with ha | ha <;> simp [ha])) hcall
-                    obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (supported2_setE hs1 (hD x (by simp [Stmt.vars])) _)
+                    have hs2 := supported2_setE hs1 (hD x (by simp [Stmt.vars])) (recvRes c Ec E)
+                    obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (settleL2_supported _)
                       (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
-                    exact ⟨.callc hsrc hx hF hEc (fnTysOf_some hms) hj hsig hhd hout hct (recvApartB_sound hap) t0
+                    exact ⟨.callc hsrc hx hF hEc (fnTysOf_some hms) hj hsig hhd hout hct (recvApartB_sound hap)
+                      (stmtT_settleIn2 hs2 _ t0)
                       (endOK2B_sound s0 he) hdk, supported2_exitScope s0 x⟩
                   · cases h
                 · cases h
@@ -2030,9 +2163,10 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                         have hxD : x ∈ D := hD x (by simp [Stmt.vars])
                         obtain ⟨hct, hs1⟩ := hC _ F σ (c :: zs) E Γ1 (supported2_kill hs .replace false c)
                           (fun a ha => hD a (by simp [Stmt.vars] at ha ⊢; rcases ha with ha | ha <;> simp [ha])) hcall
-                        obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x)
-                          (supported2_kill (supported2_setE hs1 hxD E) .replace false c)
+                        have hs2 := supported2_kill (supported2_setE hs1 hxD E) .replace false c
+                        obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (settleL2_supported _)
                           (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+                        have t0 := stmtT_settleIn2 hs2 _ t0
                         have hq' : Cross.send.Le q ∨ q.drops = true := by
                           rcases hq with hq | hq
                           · exact Or.inl (sendLeB_sound hq)
