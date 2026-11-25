@@ -47,6 +47,12 @@
 #                              C/C++ frontend feature and can't apply to IR
 #                              input — the gcov pipeline is the one that maps
 #                              back through !dbg line metadata.)
+#    --certify                 After the build, write a memory-safety
+#                              certificate beside the binary (<output>.cert/,
+#                              docs/dev/CERTIFICATE.md) with nurl-cert. The
+#                              build is unchanged; the exit code is the
+#                              certificate's. `nurl verify <output>.cert
+#                              --binary <output>` checks it again.
 #
 #  Environment:
 #    NURL_OPT=-O0..-O3   Override default -O2 when no CLI flag given
@@ -111,6 +117,32 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# nurl_cert_bin: the certificate tool (packages/nurl-cert): $NURL_CERT,
+# else next to this script, else on PATH.
+nurl_cert_bin() {
+    if [ -n "${NURL_CERT:-}" ]; then echo "$NURL_CERT"; return 0; fi
+    for __c in "$SCRIPT_DIR/bin/nurl-cert" "$SCRIPT_DIR/build/nurl-cert"; do
+        [ -x "$__c" ] && { echo "$__c"; return 0; }
+    done
+    command -v nurl-cert 2>/dev/null && return 0
+    echo "ERROR: nurl-cert not found (\$NURL_CERT, next to nurl.sh, or on PATH)." >&2
+    echo "       Build it: cd packages/nurl-cert && ../../nurl.sh src/main.nu ../../build/nurl-cert" >&2
+    return 1
+}
+
+# `nurl verify` needs no compiler: it is dispatched before nurlc is looked
+# for.
+case "${1:-}" in
+    # `nurl verify prog.cert [--binary prog]`: check a certificate bundle
+    # again (docs/dev/CERTIFICATE.md). No compiler is involved.
+    verify)
+        shift
+        __cert="$(nurl_cert_bin)" || exit 1
+        if [ -z "${NURL_FORMAL:-}" ] && [ -d "$SCRIPT_DIR/formal" ]; then export NURL_FORMAL="$SCRIPT_DIR/formal"; fi
+        exec "$__cert" verify "$@"
+        ;;
+esac
 
 # ── Locate nurlc ─────────────────────────────────────────────
 NURLC="$SCRIPT_DIR/build/nurlc"
@@ -185,6 +217,7 @@ CLI_OPT=""
 NURLC_DIAG=""
 STDIN_NAME=""
 SIM=0
+CERTIFY=0
 
 while [ $# -gt 0 ]; do
     case "${1:-}" in
@@ -208,9 +241,19 @@ while [ $# -gt 0 ]; do
         # the cooperative no-libc runtime with a virtual clock, seeded
         # entropy and a seeded schedule. Run it with NURL_SIM=<seed>.
         --sim)                 SIM=1; shift ;;
+        # A memory-safety certificate beside the binary: <prog>.cert/,
+        # written by nurl-cert after the build (docs/dev/CERTIFICATE.md).
+        # The build itself is unchanged; the exit code is the
+        # certificate's (0 proved, 2 unsupported, 3 refused).
+        --certify|--certify=m) CERTIFY=1; shift ;;
         *) break ;;
     esac
 done
+
+if [ "$CERTIFY" -eq 1 ] && [ -n "$STDIN_NAME" ]; then
+    echo "ERROR: --certify needs the source as a file (a certificate hashes the files it rests on)." >&2
+    exit 1
+fi
 
 if [ -n "$STDIN_NAME" ]; then
     # No positional source: the name stands in for it, and an optional
@@ -225,11 +268,13 @@ if [ $# -eq 0 ]; then
     echo "         --no-borrowck | --strict-borrowck | --strict-arity | --no-strict-arity" >&2
     echo "         --no-dce | --keep=a,b | --stdin NAME (source on stdin, known as NAME)" >&2
     echo "         --sim (a deterministic simulation: run it with NURL_SIM=<seed>)" >&2
+    echo "         --certify (a memory-safety certificate, <output>.cert/, beside the binary)" >&2
     echo "" >&2
     echo "  Compiles a NURL source file to a native binary." >&2
     echo "  The intermediate .ll file is kept alongside the output." >&2
     echo "" >&2
     echo "  nurl --version | -v          Print the toolchain version." >&2
+    echo "  nurl verify <prog.cert> [--binary prog]  Check a certificate again." >&2
     echo "  nurl upgrade [--check]       Upgrade the toolchain in place" >&2
     echo "                               (--version vX.Y.Z pins a release, --force reinstalls)." >&2
     exit 1
@@ -1287,3 +1332,13 @@ LINK_PUBLISHED=1
 
 echo ""
 echo "Done: $OUTBASE"
+
+if [ "$CERTIFY" -eq 1 ]; then
+    __cert="$(nurl_cert_bin)" || exit 1
+    if [ -z "${NURL_FORMAL:-}" ] && [ -d "$SCRIPT_DIR/formal" ]; then export NURL_FORMAL="$SCRIPT_DIR/formal"; fi
+    echo "Certifying: $OUTBASE.cert"
+    # A child, not exec: the EXIT trap still cleans the link staging.
+    __rc=0
+    "$__cert" certify "$SRCFILE" --binary "$OUTBASE" --out "$OUTBASE.cert" --nurlc "$NURLC" || __rc=$?
+    exit "$__rc"
+fi

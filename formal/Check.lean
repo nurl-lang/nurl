@@ -1053,6 +1053,12 @@ import D
 #print axioms C.checked_program_safe2
 -- Phase C12: A3 end to end - a checked program's makes and run are memory-safe, race-free and leak-free
 #print axioms C.checked_claim_made_full
+-- Phase C13: a program's certificate claims, from the checker's one-boolean verdict (AGORA-1019)
+#print axioms C.cert_safe
+#print axioms C.cert_leak_end
+#print axioms C.cert_leak_panic
+#print axioms C.cert_witness_safe
+#print axioms C.cert_witness_leak
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided

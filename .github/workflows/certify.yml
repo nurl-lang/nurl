@@ -1,0 +1,106 @@
+name: certify
+
+# Memory-safety certificates of programs (AGORA-1019, docs/dev/CERTIFICATE.md):
+# nurl-cert (packages/nurl-cert, NURL) certifies every program of
+# tools/ncore/certify/ through nurlc --emit-core, the translation and the
+# kernel, re-verifies each bundle, and its selftest tampers with a bundle in
+# each of the ways verify must catch. Runs when a piece of that chain changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'formal/**'
+      - '!formal/rules/**'
+      - 'packages/nurl-cert/**'
+      - 'tools/ncore/**'
+      - 'compiler/nurlc.nu'
+      - 'nurl.sh'
+      - 'docs/dev/certificate.schema.json'
+      - '.github/workflows/certify.yml'
+  pull_request:
+    paths:
+      - 'formal/**'
+      - '!formal/rules/**'
+      - 'packages/nurl-cert/**'
+      - 'tools/ncore/**'
+      - 'compiler/nurlc.nu'
+      - 'nurl.sh'
+      - 'docs/dev/certificate.schema.json'
+      - '.github/workflows/certify.yml'
+  workflow_dispatch:
+
+jobs:
+  certify:
+    name: certify programs, verify the bundles, tamper selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      # The image ci.yml's build jobs use (containers/ci/Dockerfile): clang,
+      # zstd and the FFI libraries the toolchain build needs.
+      image: nurllang/ci:ubuntu24-20261109
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean (the release formal/lean-toolchain names, pinned by content)
+        # As formal.yml: the release archive checked against its digest; no
+        # elan. Bumping lean-toolchain means bumping both workflows.
+        env:
+          LEAN_VERSION: "4.35.0"
+          LEAN_SHA256: "7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d"
+        run: |
+          want="leanprover/lean4:v${LEAN_VERSION}"
+          have="$(tr -d '[:space:]' < formal/lean-toolchain)"
+          if [ "$have" != "$want" ]; then
+            echo "formal/lean-toolchain says $have; this step pins $want: update LEAN_VERSION and LEAN_SHA256" >&2
+            exit 1
+          fi
+          curl -fsSL --retry 5 --retry-delay 5 -o /tmp/lean.tar.zst \
+            "https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst"
+          echo "${LEAN_SHA256}  /tmp/lean.tar.zst" | sha256sum -c -
+          mkdir -p "$HOME/lean"
+          tar --zstd -xf /tmp/lean.tar.zst -C "$HOME/lean"
+          # Only lake and lean go on PATH: the archive's bin/ also has its
+          # own clang, which must not stand in for the toolchain's when
+          # build.sh compiles the runtime.
+          mkdir -p "$HOME/leanbin"
+          for t in lake lean; do
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$HOME/lean/lean-${LEAN_VERSION}-linux/bin/$t" > "$HOME/leanbin/$t"
+            chmod +x "$HOME/leanbin/$t"
+          done
+          echo "$HOME/leanbin" >> "$GITHUB_PATH"
+      - name: Build the checker's modules (C.Cert and what it imports)
+        working-directory: formal
+        run: lake build C.Cert
+      - name: Build the toolchain
+        run: ./build.sh --no-tests
+      - name: Build nurl-cert
+        env:
+          NURL_STDLIB: ${{ github.workspace }}
+        run: cd packages/nurl-cert && ../../nurl.sh src/main.nu ../../build/nurl-cert
+      - name: Certify and verify every certify program; the tamper selftest
+        env:
+          NURL_CERT: ${{ github.workspace }}/build/nurl-cert
+        run: packages/nurl-cert/tests/nurl-cert_test.sh
+      - name: Dogfood - nurl-cert's own certificate (reported, not gated)
+        # Whatever coverage the translation reaches on nurl-cert itself is
+        # what the bundle says; a program it does not cover yet is
+        # `unsupported`, with the reason in manifest.json.
+        env:
+          NURL_STDLIB: ${{ github.workspace }}
+          NURL_CERT: ${{ github.workspace }}/build/nurl-cert
+          NURL_FORMAL: ${{ github.workspace }}/formal
+        run: |
+          cd packages/nurl-cert
+          ../../nurl.sh --certify src/main.nu ../../build/nurl-cert-self || echo "nurl-cert's certificate: exit $? (2 unsupported, 3 refused)"
+          ../../build/nurl-cert verify ../../build/nurl-cert-self.cert --binary ../../build/nurl-cert-self
+      - name: Keep nurl-cert's own bundle
+        if: ${{ !cancelled() && hashFiles('build/nurl-cert-self.cert/manifest.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nurl-cert-certificate
+          path: build/nurl-cert-self.cert
+          retention-days: 30
+          if-no-files-found: error

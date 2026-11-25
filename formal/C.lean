@@ -18,6 +18,7 @@ import C.Dedup
 import C.A2Exit
 import C.A2Glue
 import C.DedupWitness
+import C.Cert
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
@@ -35,4 +36,8 @@ spawned functions and globals included (`C/A3Prog.lean`,
 `C.checked_claim_made_full`). The checkers keep dependency lists free of
 duplicates (C7d, `C/Dedup.lean`, AGORA-988): a push or a call drops the
 ones it makes, by one `sub` step, so re-pushing a slice no longer grows the
-lists geometrically (`C/DedupWitness.lean`). -/
+lists geometrically (`C/DedupWitness.lean`). C13, a program's certificate
+(`C/Cert.lean`, AGORA-1019): the checker's verdict on one program as one
+boolean (`certOK2B`), and A2's memory safety and leak freedom for it
+(`cert_safe`, `cert_leak_end`, `cert_leak_panic`), the theorems a bundle of
+`packages/nurl-cert` instantiates with its program's term. -/
