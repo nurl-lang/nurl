@@ -139,14 +139,15 @@ versions    { nurlc, formal_tree, formal_commit, lean_toolchain }
 ledger      [ { id, what, why, where, vouches, claims [..] } ]
 ```
 
-- `hashes.sources`: every file the compile read. nurlc's
-  `--list-sources` names them, one `source <real path>` line each, on
-  stderr (a path holding a newline stops the compile). certify hashes them
-  between two compiles that must agree. That guards against a file changed
-  by accident while certify runs. It is not a proof that the hashes are of
-  the bytes compiled: a file switched back and forth between the reads
-  would pass. That binding belongs to the `translation` row, and
-  `verify --rebuild` checks it.
+- `hashes.sources`: every file the compile read, hashed as the bytes
+  nurlc compiled. `nurlc --list-sources=TAG` prints each snapshot it
+  reads on stderr: a line `source:TAG <length> <real path>`, then the
+  bytes, then a newline. TAG is fresh and random per run, so no line a
+  diagnostic quotes from a source can pass for a record. A path holding a
+  newline stops the compile. certify hashes those bytes and requires each
+  file on disk to hold them still; a file changed during the run
+  certifies nothing. So the hashes are of exactly the bytes that made
+  Program.core, and `verify`'s re-hash of the files checks those bytes.
 - `hashes.llvm_ir` is the sha256 of nurlc's LLVM IR, with no flags, for
   the program. It is absent when nurlc refuses to compile the program.
 - `hashes.binary` is present when `--binary` was given.
@@ -252,9 +253,10 @@ refused), one at a time, on an x86-64 Linux host (AGORA-1019):
   typical one).
 
 Without `--certify`, nothing changes:
-- `--list-sources` is off by default;
+- `--list-sources=TAG` is off by default;
 - 2120 programs compile byte-identical (compiler/tests, the certify
   programs, examples);
-- the self-compile is +0.004 % instructions (25.6376 G → 25.6386 G: the
-  flag's test) with the same peak RSS (186 MB), both compilers built by
-  the same compiler and link.
+- the self-compile is neutral within codegen noise: +0.056 % instructions
+  at -O2 (25.669 G → 25.683 G) and −0.07 % at -O0, where layout does not
+  count (84.321 G → 84.261 G), with the same peak RSS (186 MB). Both
+  compilers were built by the same compiler and link.

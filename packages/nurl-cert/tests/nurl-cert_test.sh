@@ -147,12 +147,20 @@ p = sys.argv[1]; m = json.load(open(p)); del m["claims"][0]["reason"]
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
 expect_fail "a claim's required field dropped (claims[0].reason)" "every member is the schema's"
-fresh; python3 - "$P/w/manifest.json" <<'EOF2'
+# edit_manifest PY: apply one Python statement to the manifest `m`.
+edit_manifest() {
+    python3 - "$P/w/manifest.json" "$1" <<'EOF2'
 import json, sys
-p = sys.argv[1]; m = json.load(open(p)); m["tool"]["name"] = "some-other-tool"; m["hashes"]["extra"] = "x"
+p = sys.argv[1]; m = json.load(open(p)); exec(sys.argv[2])
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
-expect_fail "a fixed value changed (tool.name) and a member added (hashes.extra)" "every member is the schema's"
+}
+fresh; edit_manifest 'm["tool"]["name"] = "some-other-tool"'
+expect_fail "a fixed value changed (tool.name)" "every member is the schema's"
+fresh; edit_manifest 'm["hashes"]["extra"] = "x"'
+expect_fail "a member added (hashes.extra)" "every member is the schema's"
+fresh; edit_manifest 'm["coverage"]["functions"][0]["name"] = None'
+expect_fail "a coverage row's string field made null" "every member is the schema's"
 
 # Lean runs code while it elaborates: a Claims.lean that fails the template
 # must never reach it.
@@ -161,11 +169,20 @@ printf '\n#eval IO.FS.writeFile "%s" "ran"\n' "$TMP/pwned" >> "$P/w/Claims.lean"
 expect_fail "code put in Claims.lean is refused" "Lean checks Program.lean and Claims.lean"
 if [ -e "$TMP/pwned" ]; then bad "the planted #eval never ran"; else ok "the planted #eval never ran"; fi
 
+# The hashes are of the bytes nurlc compiled: a file on disk that differs
+# from its snapshot (here a NUL byte, past which nurlc reads nothing)
+# certifies nothing.
+cp "$P/prog.nu" "$P/nul.nu"; printf '\n// after\0hidden\n' >> "$P/nul.nu"
+if out=$("$C" certify "$P/nul.nu" "${CA[@]}" --out "$P/nul.cert" 2>&1); then bad "a file that is not its compiled snapshot certifies nothing"
+else
+    case "$out" in *"not the bytes nurlc compiled"*) ok "a file that is not its compiled snapshot certifies nothing" ;; *) bad "a file that is not its compiled snapshot certifies nothing ($out)" ;; esac
+fi
+
 # nurlc lists one file per line, or stops.
 mkdir -p "$P/nl"; nlf="$P/nl/a
 b.nu"
 cp "$P/prog.nu" "$nlf"
-if out=$("$NURLC" --emit-core --list-sources "$nlf" 2>&1 >/dev/null); then bad "a source path with a newline stops --list-sources"
+if out=$("$NURLC" --emit-core --list-sources=t "$nlf" 2>&1 >/dev/null); then bad "a source path with a newline stops --list-sources"
 else
     case "$out" in *"holds a newline"*) ok "a source path with a newline stops --list-sources" ;; *) bad "a source path with a newline stops --list-sources ($out)" ;; esac
 fi

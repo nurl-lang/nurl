@@ -17,6 +17,7 @@ $ `claims.nu`
 $ `shape.nu`
 $ `lean.nu`
 $ `manifest.nu`
+$ `stdlib/std/random.nu`
 
 : s NURLCERT_VERSION ( pkg_version )
 
@@ -87,24 +88,49 @@ $ `manifest.nu`
 
 // ── What nurlc says ──────────────────────────────────────────────────
 
-// `source <path>` lines of a `--list-sources` run.
-@ __ct_sources String err → ( Vec String ) {
-    : ( Vec String ) out ( vec_new [String] )
-    : ( Vec String ) ls ( nc_lines ( string_data err ) )
-    : i n ( vec_len [String] ls )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] ls k ) {
-            T l → {
-                ? ( string_starts_with l `source ` ) {
-                    ( vec_push [String] out ( string_substr l 7 - ( string_len l ) 7 ) )
-                } {}
-            }
-            F _ → {}
+// The records of a `--list-sources=TAG` run (nurlc prints them on stderr):
+//   source:TAG <length> <path>\n<length bytes>\n
+// each path into `paths` and the sha256 of the bytes nurlc compiled into
+// `shas`. F when a record is cut short. A line a diagnostic quotes from a
+// source cannot pass for a record: TAG is fresh and random per run.
+@ __ct_records String err s tag ( Vec String ) paths ( Vec String ) shas → b {
+    : String head ( string_from `source:` )
+    ( string_push_str head tag )
+    ( string_push_str head ` ` )
+    : ( Slice u ) hv ( slice_of_str ( string_data head ) )
+    : i hn ( slice_len [u] hv )
+    : ( Slice u ) t ( slice_of_str ( string_data err ) )
+    : i n ( slice_len [u] t )
+    : ~ i a 0
+    ~ < a n {
+        : ~ i z a
+        ~ & < z n != ( slice_byte t z ) 10 { = z + z 1 }
+        : ~ b is_head <= + a hn z
+        : ~ i k 0
+        ~ & is_head < k hn {
+            ? != ( slice_byte t + a k ) ( slice_byte hv k ) { = is_head F } {}
+            = k + k 1
         }
-        = k + k 1
+        ? is_head {
+            : ~ i p + a hn
+            : ~ i len 0
+            : i d0 p
+            ~ & < p z & >= ( slice_byte t p ) 48 <= ( slice_byte t p ) 57 {
+                = len + * len 10 - ( slice_byte t p ) 48
+                = p + p 1
+            }
+            ? | == p d0 | >= p z != ( slice_byte t p ) 32 { ^ F } {}
+            : String path ( string_new )
+            ( string_push_window path t + p 1 - - z p 1 )
+            : i start + z 1
+            ? > + start len n { ^ F } {}
+            : ( Vec u ) bytes ( slice_to_vec [u] ( slice_window [u] t start len ) )
+            ( vec_push [String] paths path )
+            ( vec_push [String] shas ( bytes_to_hex ( sha256_pure bytes ) ) )
+            = a + + start len 1
+        } { = a + z 1 }
     }
-    ^ out
+    ^ T
 }
 
 // `--unsafe-report` lines: `file:line what`, a colon and digits and then a
@@ -329,7 +355,10 @@ $ `manifest.nu`
     // 1. nurlc: the core IR and the files it read.
     : ( Vec String ) a1 ( vec_new [String] )
     ( vec_push [String] a1 ( string_from `--emit-core` ) )
-    ( vec_push [String] a1 ( string_from `--list-sources` ) )
+    : String tag ( rand_hex_str 16 )
+    : String tag_arg ( string_from `--list-sources=` )
+    ( string_push_str tag_arg ( string_data tag ) )
+    ( vec_push [String] a1 tag_arg )
     ( vec_push [String] a1 ( string_from src ) )
     : Run r1 ( nc_run ( string_data . o nurlc ) a1 )
     ? | ! . r1 started != . r1 code 0 {
@@ -338,29 +367,18 @@ $ `manifest.nu`
     } {}
     : String core_path ( nc_join out `Program.core` )
     ? ! ( nc_write ( string_data core_path ) ( string_data . r1 out ) ) { ^ ( __ct_fail `cannot write Program.core` ) } {}
-    : ( Vec String ) sources ( __ct_sources . r1 err )
-    ( nc_sort sources )
-    // The hashes are of the bytes the core IR was made from. Every source
-    // is hashed (H1), the core IR is made again (run 2) and every source is
-    // hashed again (H2); the two runs must give the same core IR and the
-    // same files, and H1 must equal H2. Run 2 read its sources between two
-    // equal hash passes, so the recorded hashes are of bytes that make
-    // exactly this core IR (byte for byte the one run 1 made, which is
-    // Program.core); a change between any two reads that alters the core
-    // or the bytes certifies nothing. This is a guard against accidents, not
-    // a proof of the binding: a file that holds B during both compiles and
-    // A during both hash passes would pass it. That binding (source → core
-    // → term) is the `translation` ledger row, and `verify --rebuild`
-    // checks it: it compiles the recorded sources again and compares the
-    // core byte for byte.
-    : ( Vec String ) shas ( __ct_hash_all sources )
-    ? != ( vec_len [String] shas ) ( vec_len [String] sources ) { ^ ( __ct_fail `a source file nurlc read cannot be read back` ) } {}
-    : Run r1b ( nc_run ( string_data . o nurlc ) a1 )
-    : ( Vec String ) sources_b ( __ct_sources . r1b err )
-    ( nc_sort sources_b )
-    : ( Vec String ) shas_b ( __ct_hash_all sources_b )
-    ? | | ! ( string_eq . r1 out . r1b out ) ! ( cert_same sources sources_b ) ! ( cert_same shas shas_b ) {
-        ^ ( __ct_fail `the sources changed while they were certified; nothing is certified` )
+    // The hashes are of the bytes the core IR was made from: nurlc prints
+    // each snapshot it compiled, and certify hashes those bytes. The files
+    // on disk must still hold them (a file changed during the run, or one
+    // whose bytes nurlc does not read whole, certifies nothing), so that
+    // verify, which re-hashes the files, checks the same bytes.
+    : ( Vec String ) sources ( vec_new [String] )
+    : ( Vec String ) shas ( vec_new [String] )
+    ? ! ( __ct_records . r1 err ( string_data tag ) sources shas ) { ^ ( __ct_fail `nurlc's list of sources is cut short` ) } {}
+    ? == 0 ( vec_len [String] sources ) { ^ ( __ct_fail `nurlc listed no sources` ) } {}
+    : ( Vec String ) disk ( __ct_hash_all sources )
+    ? ! ( cert_same shas disk ) {
+        ^ ( __ct_fail `a source file on disk is not the bytes nurlc compiled (changed during the run?); nothing is certified` )
     } {}
 
     // 2. nurlc: the LLVM IR and the unsafe report.

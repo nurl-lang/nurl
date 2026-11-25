@@ -388,6 +388,12 @@ $ `certify.nu`
     ~ ( __vf_has m ( string_data ( __vf_path `coverage.functions.` f `` ) ) ) {
         : String fp ( __vf_path `coverage.functions.` f `` )
         ( __vf_obj m ( string_data fp ) `name file line status reason` `` bad )
+        : String fps ( string_from `` )
+        ( string_push_str fps ( string_data ( __vf_path `coverage.functions.` f `.name ` ) ) )
+        ( string_push_str fps ( string_data ( __vf_path `coverage.functions.` f `.file ` ) ) )
+        ( string_push_str fps ( string_data ( __vf_path `coverage.functions.` f `.line ` ) ) )
+        ( string_push_str fps ( string_data ( __vf_path `coverage.functions.` f `.reason` ) ) )
+        ( __vf_strings m ( string_data fps ) bad )
         : String fs ( __vf_path `coverage.functions.` f `.status` )
         ? ! ( __vf_enum ( mj_get_str m ( string_data fs ) ) `proved validated open refused unsupported error` ) {
             ( string_push_str bad ( string_data fs ) )
