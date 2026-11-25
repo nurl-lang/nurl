@@ -2921,36 +2921,61 @@ $ `coreir.nu`
 // the function (`let v closure code …`), no binding of the chain assigned.
 // Every value of the chain goes to sendv (its code to sendc), each code to
 // spawned (once). T when the program spawns at all.
-// Does line l name one of `chain`'s variables (a token `v<id>`, the
-// line split at whitespace and `/`) other than where it may: the spawn
-// line `sl` its argument chain[0], the copy line dl[i] of chain[i] its
-// source chain[i + 1]?
-@ __names_chain TlMod m i p i l ( Vec i ) chain ( Vec i ) dl i sl → b {
+// A count word, 0 where it is not one (__wellformed refuses it later).
+@ __wcount s w → i { ^ ? ( __int_syntax w ) ( __pcount w ) 0 }
+
+// The word positions of line l that are operands or places (a call's
+// callee, a count, a variant, a field name and the like are not): what a
+// statement reads or writes.
+@ __operand_words TlMod m i p i l → ( Vec i ) {
+    : ( Vec i ) out ( vec_new [i] )
     : i nw ( __nw m p l )
+    : s w ( __wd m p l 0 )
+    // (`assign <place> …`, `if/match/loopcond/ret <op>`, `foreach <x> <op>`)
+    ? | | | | ( __eq w `assign` ) ( __eq w `if` ) ( __eq w `match` ) ( __eq w `loopcond` ) ( __eq w `ret` ) { ( vec_push [i] out 1 ) } {}
+    ? ( __eq w `foreach` ) { ( vec_push [i] out 2 ) } {}
+    : i off ( __wf_rv m p l )
+    ? & >= off 0 < off nw {
+        : s h ( __wd m p l off )
+        : ~ i from -1
+        : ~ i cnt 0
+        ? | ( __eq h `use` ) ( __eq h `payload` ) { = from + off 1 = cnt 1 } {}
+        ? | | | ( __eq h `call` ) ( __eq h `closure` ) ( __eq h `agg` ) ( __eq h `opaque` ) {
+            ? < + off 2 nw { = from + off 3 = cnt ( __wcount ( __wd m p l + off 2 ) ) } {}
+        } {}
+        ? | ( __eq h `callind` ) ( __eq h `scalar` ) {
+            ? < + off 1 nw { = from + off 2 = cnt ( __wcount ( __wd m p l + off 1 ) ) } {}
+        } {}
+        : ~ i j 0
+        ~ & & >= from 0 < j cnt < + from j nw {
+            ( vec_push [i] out + from j )
+            = j + j 1
+        }
+    } {}
+    ^ out
+}
+
+// Does line l name one of `chain`'s variables as an operand (a whole
+// variable `v<id>`, or the root of a place `v<id>/…`) other than where it
+// may: the spawn line `sl` its argument chain[0], the copy line dl[i] of
+// chain[i] its source chain[i + 1]?
+@ __names_chain TlMod m i p i l ( Vec i ) chain ( Vec i ) dl i sl → b {
+    : ( Vec i ) ops ( __operand_words m p l )
+    : i no ( vec_len [i] ops )
     : i nc ( vec_len [i] chain )
     : ~ i q 0
-    ~ < q nw {
-        : String wq ( string_from ( __wd m p l q ) )
-        : ( Slice u ) tq ( slice_of_str ( string_data wq ) )
-        : i nq ( slice_len [u] tq )
-        : ~ i x 0
-        ~ < x nq {
-            : ~ i z x
-            ~ & < z nq != ( slice_byte tq z ) 47 { = z + z 1 }
-            ? < x z {
-                : String tok ( string_new )
-                ( string_push_window tok tq x - z x )
-                : ~ i c 0
-                ~ < c nc {
-                    ? ( __is_v ( string_data tok ) ( vec_at [i] chain c ) ) {
-                        : b at_spawn & == l sl == c 0
-                        : b at_copy & > c 0 == l ( vec_at [i] dl - c 1 )
-                        ? ! | at_spawn at_copy { ^ T } {}
-                    } {}
-                    = c + c 1
-                }
+    ~ < q no {
+        : s word ( __wd m p l ( vec_at [i] ops q ) )
+        : i sl2 ( nurl_str_find word `/` )
+        : String root ? < sl2 0 ( string_from word ) ( __sl word 0 sl2 )
+        : ~ i c 0
+        ~ < c nc {
+            ? ( __is_v ( string_data root ) ( vec_at [i] chain c ) ) {
+                : b at_spawn & == l sl == c 0
+                : b at_copy & > c 0 == l ( vec_at [i] dl - c 1 )
+                ? ! | at_spawn at_copy { ^ T } {}
             } {}
-            = x + z 1
+            = c + c 1
         }
         = q + q 1
     }

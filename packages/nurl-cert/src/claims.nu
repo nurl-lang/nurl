@@ -55,7 +55,7 @@ $ `stdlib/core/vec.nu`
 @ cert_claim_sentence b threads i k → s {
     ? threads {
         ? == k 0 { ^ `It never reads or writes memory it does not own, on any run in which every thread it spawns starts.` } {}
-        ? == k 1 { ^ `Once every thread it starts has finished, it has released everything it allocated.` } {}
+        ? == k 1 { ^ `On any run in which every thread it spawns starts, once every thread has finished, it has released everything it allocated.` } {}
         ^ `Its threads never race on shared memory, on any run in which every thread it spawns starts.`
     } {}
     ? == k 0 { ^ `It never reads or writes memory it does not own, on any run.` } {}
@@ -65,7 +65,7 @@ $ `stdlib/core/vec.nu`
 @ cert_claim_sentence_fi b threads i k → s {
     ? threads {
         ? == k 0 { ^ `Se ei koskaan lue eikä kirjoita muistia, jota se ei omista, millään ajolla, jolla jokainen sen käynnistämä säie käynnistyy.` } {}
-        ? == k 1 { ^ `Kun jokainen sen käynnistämä säie on päättynyt, se on vapauttanut kaiken minkä varasi.` } {}
+        ? == k 1 { ^ `Millä tahansa ajolla, jolla jokainen sen käynnistämä säie käynnistyy, se on vapauttanut kaiken minkä varasi, kun jokainen säie on päättynyt.` } {}
         ^ `Sen säikeet eivät koskaan kilpaile jaetusta muistista millään ajolla, jolla jokainen sen käynnistämä säie käynnistyy.`
     } {}
     ? == k 0 { ^ `Se ei koskaan lue eikä kirjoita muistia, jota se ei omista, millään ajolla.` } {}

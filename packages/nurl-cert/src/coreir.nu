@@ -32,7 +32,7 @@
 // (`internal: line N of the core IR: malformed: …`): a count below 0 (a
 // parameter, field, type-argument, variant or payload count), a type
 // argument, variant or payload count past what the line holds (or, for
-// the type arguments, short of it), a variable
+// the type arguments, short of it), columns after its variants, a variable
 // id below 0 or a kind outside 0–3, an `fn` line while a function is
 // open, and the input ending inside a function. An informative column that
 // is not an integer (a source line, a depth, a value block, a function's
@@ -352,7 +352,10 @@ $ `stdlib/std/hashmap.nu`
             }
             = j + j 1
         }
-    } {}
+        ? < k n { ^ @ !CoreTy String { F ( __cr_mal line `a ty line with columns after its variants` ) } } {}
+    } {
+        ? < after n { ^ @ !CoreTy String { F ( __cr_mal line `a ty line with columns after its fields` ) } } {}
+    }
     ( vec_push [i] vstart ( vec_len [String] vtys ) )
     ^ @ !CoreTy String { T @ CoreTy { ( string_from ( __cr_col f 1 ) ) ( string_from ( __cr_col f 2 ) ) ( string_from ( __cr_col f 3 ) )
             ( string_from ( __cr_col f 4 ) ) targs fnames ftys vnames vstart vtys } }

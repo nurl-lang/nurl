@@ -183,6 +183,10 @@ expect_internal "a statement's variable id -3" "$TMP/q8.core" "malformed: a vari
 # columns between `A n` and `F`; a call has exactly its operands.
 { cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\ti64\tF\t0\tV\t0\n'; } > "$TMP/x1.core"
 expect_internal "a ty line with surplus type-argument columns" "$TMP/x1.core" "malformed: a ty line with more type arguments than it counts"
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t0\tV\t1\tA\t0\tjunk\n'; } > "$TMP/x3.core"
+expect_internal "a ty line with columns after its variants" "$TMP/x3.core" "malformed: a ty line with columns after its variants"
+{ cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t0\tV\t0\n'; } > "$TMP/x3b.core"
+rc=$(tl "$TMP/x3b.core"); [ "$rc" = 0 ] && ok "a ty line A 0 F 0 V 0 reads" || bad "a ty line A 0 F 0 V 0 reads (exit $rc)"
 sed 's/^eval call helper 1 c$/eval call helper 0 v0/' "$TMP/s.core" > "$TMP/x2.core"
 expect_internal "a call with an operand word past its count" "$TMP/x2.core" "malformed operands: main, statement 2: a call that counts 0 operands and has 1"
 
@@ -292,6 +296,28 @@ for k in th4 th5 th6; do "$NURLC" --emit-core "$TMP/$k.nu" > "$TMP/$k.core" 2> /
 expect_unsupported "a spawned closure called after its spawn" "$TMP/th4.core" "main: a spawned closure used again after its spawn (thread_spawn_owned copies the environment; the copy is not translated yet)"
 expect_unsupported "a closure spawned twice" "$TMP/th5.core" "main: a spawned closure used again after its spawn"
 expect_unsupported "a spawned closure passed to a helper" "$TMP/th6.core" "main: a spawned closure passed to a function that takes the ordinary closure type"
+# Only operands count as a use: a callee and a field named like the spawned
+# closure's variable (`v2` here) are not one, and the program translates.
+cat > "$TMP/th7.nu" <<'NU'
+$ `stdlib/std/thread.nu`
+: P { i v2 i w }
+@ v2 → i { ^ 1 }
+@ main → i {
+    : i n 41
+    : ( @ v ) body \ → v { : i m + n 1 }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    : P q @ P { 1 2 }
+    : i a . q v2
+    : i b ( v2 )
+    ^ ?? r { T t → + ( thread_join t ) + a b F _ → 1 }
+}
+NU
+"$NURLC" --emit-core "$TMP/th7.nu" > "$TMP/th7.core" 2> /dev/null || bad "th7: nurlc --emit-core"
+if grep -q '^let 3 call thread_spawn_owned 1 v2$' "$TMP/th7.core" && grep -q '^eval call v2 0$' "$TMP/th7.core" && grep -q ' v[0-9]*/v2$' "$TMP/th7.core"; then
+    rc=$(tl "$TMP/th7.core")
+    if [ "$rc" = 0 ] && grep -q '^def spawns : List Nat := ' "$TMP/out"; then ok "th7: a callee and a field named like the spawned closure are no use of it"
+    else bad "th7: a callee and a field named like the spawned closure are no use of it (exit $rc)"; sed 's/^/        /' "$TMP/err" | head -3; fi
+else bad "th7: the core IR names the spawned closure v2, a callee v2 and a field v2 (nurlc's numbering changed: update the test)"; fi
 
 echo "== 2. the reference (tools/ncore/tolean.py)"
 if command -v python3 > /dev/null; then
