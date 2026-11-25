@@ -340,10 +340,14 @@ $ `manifest.nu`
     ? ! ( nc_write ( string_data core_path ) ( string_data . r1 out ) ) { ^ ( __ct_fail `cannot write Program.core` ) } {}
     : ( Vec String ) sources ( __ct_sources . r1 err )
     ( nc_sort sources )
-    // The hashes are of the bytes the core IR was made from: every source
-    // hashed, then the core IR made again and every source hashed again;
-    // any difference (a file changed under the run, or unreadable) and
-    // nothing is certified.
+    // The hashes are of the bytes the core IR was made from. Every source
+    // is hashed (H1), the core IR is made again (run 2) and every source is
+    // hashed again (H2); the two runs must give the same core IR and the
+    // same files, and H1 must equal H2. Run 2 read its sources between two
+    // equal hash passes, so the recorded hashes are of bytes that make
+    // exactly this core IR (byte for byte the one run 1 made, which is
+    // Program.core); a change between any two reads that alters the core
+    // or the bytes certifies nothing.
     : ( Vec String ) shas ( __ct_hash_all sources )
     ? != ( vec_len [String] shas ) ( vec_len [String] sources ) { ^ ( __ct_fail `a source file nurlc read cannot be read back` ) } {}
     : Run r1b ( nc_run ( string_data . o nurlc ) a1 )

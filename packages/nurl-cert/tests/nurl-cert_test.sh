@@ -134,6 +134,13 @@ for c in m["claims"]:
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
 expect_fail "the translation's ledger row and premise dropped" "the trust ledger is the one certify writes"
+fresh; python3 - "$P/w/manifest.json" <<'EOF2'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p))
+m["claims"][0]["premises"] = [" ".join(m["claims"][0]["premises"])]
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF2
+expect_fail "the premises merged into one string" "the claims are the template's"
 
 # Lean runs code while it elaborates: a Claims.lean that fails the template
 # must never reach it.

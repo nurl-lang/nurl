@@ -347,8 +347,11 @@ $ `certify.nu`
             ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.fi` ) ) ) ( cert_claim_sentence_fi c ) ) { = claims_ok F } {}
         }
         : String pk ( __vf_path `claims.` c `.premises` )
-        : String have ?? ( json_get m ( string_data pk ) ) { T j → ( __vf_strs j ) F → ( string_from `-` ) }
-        ? ! ( nc_is have prem ) { = claims_ok F } {}
+        // element by element: one string that reads like the four
+        // premises is one premise, which no ledger row is.
+        : ( Vec String ) have ?? ( json_get m ( string_data pk ) ) { T j → ( __vf_strs j ) F → ( vec_new [String] ) }
+        : ( Vec String ) wantp ( string_split ( string_from prem ) ` ` )
+        ? ! ( cert_same have wantp ) { = claims_ok F } {}
         = c + c 1
     }
     ( __vf_check t claims_ok `the claims are the template's: ids, theorems, sentences, premises` `` )
@@ -375,17 +378,14 @@ $ `certify.nu`
     ( __vf_check t ( string_eq lws lhs ) `the trust ledger is the one certify writes (no row dropped or reworded)` `` )
 }
 
-// A JSON array of strings as one space-separated String.
-@ __vf_strs Json a → String {
-    : String o ( string_new )
+// A JSON array's elements, each as a String (`` for a non-string).
+@ __vf_strs Json a → ( Vec String ) {
+    : ( Vec String ) o ( vec_new [String] )
     : i n ( json_arr_len a )
     : ~ i k 0
     ~ < k n {
         ?? ( json_arr_get a k ) {
-            T x → {
-                ? > k 0 { ( string_push_char o 32 ) } {}
-                ( string_push_str o ( json_as_str x ) )
-            }
+            T x → ( vec_push [String] o ( string_from ( json_as_str x ) ) )
             F → {}
         }
         = k + k 1
