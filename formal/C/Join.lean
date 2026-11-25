@@ -167,6 +167,14 @@ theorem EntryWeaker.dedup1 (E : Entry) : EntryWeaker E E.dedup1 := by
   · simp only [hm, ite_false]
     exact ⟨rfl, rfl, fun h => absurd h hm, fun hl => ⟨hl, fun _ => sub_dedupL, sub_dedupL⟩⟩
 
+/-- ... and the other way: the two entries say the same. -/
+theorem EntryWeaker.of_dedup1 (E : Entry) : EntryWeaker E.dedup1 E := by
+  unfold Entry.dedup1
+  by_cases hm : E.mode = .rootb
+  · simp only [hm, ite_true]; exact EntryWeaker.refl E
+  · simp only [hm, ite_false]
+    exact ⟨rfl, rfl, fun h => absurd h hm, fun hl => ⟨hl, fun _ => dedupL_sub, dedupL_sub⟩⟩
+
 /-- Does dropping duplicates change one of the entries of `vs`? -/
 def dupsAt1 (vs : List Var) (Γ : Ctx) : Bool :=
   vs.any fun v => match Γ v with
@@ -187,6 +195,18 @@ theorem weaker_dedup1 {Γ : Ctx} {D : List Var} (hs : Supported Γ D) (vs : List
   · exact ⟨Iff.rfl, fun E E' h1 h2 => by rw [h1] at h2; cases h2; exact EntryWeaker.refl E⟩
   · refine ⟨by cases Γ v <;> simp, fun E E' h1 h2 => ?_⟩
     rw [h1] at h2; cases h2; exact EntryWeaker.dedup1 E
+
+/-- ... and the other way, once the context it came from is well formed. -/
+theorem weaker_of_dedup1 {Γ : Ctx} {D : List Var} (hs : Supported Γ D) (vs : List Var) (hw : CtxWF Γ) :
+    Weaker (ctxOfTbl (dedupTbl1 D vs Γ)) Γ := by
+  refine ⟨fun v => ?_, hw⟩
+  unfold dedupTbl1
+  rcases ctxOfTbl_mapAt hs Entry.dedup1 vs v with e | e <;> rw [e]
+  · exact ⟨Iff.rfl, fun E E' h1 h2 => by rw [h1] at h2; cases h2; exact EntryWeaker.refl E⟩
+  · refine ⟨by cases Γ v <;> simp, fun E E' h1 h2 => ?_⟩
+    cases hv : Γ v with
+    | none => rw [hv] at h1; cases h1
+    | some E0 => rw [hv] at h1 h2; cases h1; cases h2; exact EntryWeaker.of_dedup1 _
 
 /-- `Weaker Γ Γ`, where `Γ` is well formed. -/
 theorem weaker_self1 {D : List Var} {Γ : Ctx} (hs : Supported Γ D) (h : ctxWFB D Γ = true) : Weaker Γ Γ :=

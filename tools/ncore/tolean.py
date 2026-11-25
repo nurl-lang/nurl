@@ -1380,7 +1380,13 @@ def emit(text):
     NAMES.update(names)
     if "main" not in names:
         raise Unsupported("no main")
-    out = ["import C.A3Prog", "open A2 C", ""]
+    # The program imports only the checker it runs: `progOK2B`, `checkA2` and
+    # `stmtCodesB` are C.A2Prog's. Their safety theorems
+    # (`C.checked_program_safe2`, A3's `C.checked_claim_made_full` in
+    # C.A3Prog) are about these same functions, and a run does not need
+    # them loaded. C.A3Prog would load A3's proofs too, about 37 MB more per
+    # run (AGORA-988).
+    out = ["import C.A2Prog", "open A2 C", ""]
     CLO_SIGS.clear()
     CLO_LIST.clear()
     CLO_BASE[0] = len(fns)
