@@ -71,9 +71,9 @@ jobs:
             chmod +x "$HOME/leanbin/$t"
           done
           echo "$HOME/leanbin" >> "$GITHUB_PATH"
-      - name: Build the checker's modules (C.Cert and what it imports)
+      - name: Build the checker's modules (C.Cert, C.Cert3 and what they import)
         working-directory: formal
-        run: lake build C.Cert
+        run: lake build C.Cert C.Cert3
       - name: Build the toolchain
         run: ./build.sh --no-tests
       - name: Build nurl-cert

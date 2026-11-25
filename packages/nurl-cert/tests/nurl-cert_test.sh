@@ -5,7 +5,7 @@
 #  nurl-cert end-to-end tests (AGORA-1019).
 #
 #  Run from anywhere in a checkout:  packages/nurl-cert/tests/nurl-cert_test.sh
-#  Needs: build/nurlc, Lean's lake on PATH, formal/ built (lake build C.Cert).
+#  Needs: build/nurlc, Lean's lake on PATH, formal/ built (lake build C.Cert C.Cert3).
 #  Env:   NURL_CERT  a built nurl-cert (default: build it into build/)
 #         JOBS       parallel certify runs (default: nproc)
 #

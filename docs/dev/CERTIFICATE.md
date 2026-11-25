@@ -20,7 +20,7 @@ unchanged. The exit code is the certificate's: 0 when every claim is
 proved, 2 when the translation does not cover the program, 3 when the
 checker refuses it. `nurl verify` runs `nurl-cert verify`. Both find
 `formal/` through `$NURL_FORMAL`, then next to `nurl.sh`. They need Lean's
-`lake` on `PATH`, and `formal/` built (`lake build C.Cert`).
+`lake` on `PATH`, and `formal/` built (`lake build C.Cert C.Cert3`).
 
 The flag's and the subcommand's names are working names. The owner
 confirms them before 1.0.

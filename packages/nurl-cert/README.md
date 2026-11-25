@@ -55,6 +55,6 @@ closures and channels in part. Threads and globals are not covered yet.
 Needs:
 - `nurlc`;
 - Lean's `lake` on `PATH`;
-- `formal/` built (`cd formal && lake build C.Cert`).
+- `formal/` built (`cd formal && lake build C.Cert C.Cert3`).
 
 `verify` needs only Lean.
