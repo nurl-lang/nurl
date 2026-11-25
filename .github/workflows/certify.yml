@@ -80,6 +80,10 @@ jobs:
         env:
           NURL_STDLIB: ${{ github.workspace }}
         run: cd packages/nurl-cert && ../../nurl.sh src/main.nu ../../build/nurl-cert
+      - name: The translator - fail closed, and the same bytes as tools/ncore/tolean.py
+        env:
+          NURL_CERT: ${{ github.workspace }}/build/nurl-cert
+        run: packages/nurl-cert/tests/translate_test.sh
       - name: Certify and verify every certify program; the tamper selftest
         env:
           NURL_CERT: ${{ github.workspace }}/build/nurl-cert

@@ -70,7 +70,7 @@ The kernel profile adds no axiom: `#print axioms` lists only `propext`,
 `M.race` (A3's data-race freedom) is not claimed yet. A program that
 spawns a thread or has globals is not translated at all. A3's claim
 (`C.checked_claim_made_full`) needs the spawn list and the declarations in
-the term, and those come with the NURL translator (AGORA-1020).
+the term, and the translator does not put them there yet (AGORA-1020).
 
 ## 2. The bundle
 
@@ -82,6 +82,16 @@ prog.cert/
   Claims.lean     the claims above, stated and proved; only when the checker accepts
 ```
 
+- **Program.lean** is made from Program.core by nurl-cert's translator
+  (`packages/nurl-cert/src/tolean.nu`, on the one reader of the core IR,
+  `coreir.nu`), with no other program in between: `nurl-cert translate
+  prog.core` prints the same term with the checker's `#eval` frame. It
+  is the NURL port of the Python prototype `tools/ncore/tolean.py`, which
+  stays its reference: `tools/ncore/tolean_parity.sh` runs both over
+  every certify program and every hole probe and finds no byte of
+  difference, and `packages/nurl-cert/tests/translate_test.sh` holds the
+  fail-closed cases (a core IR the translation cannot render is
+  `unsupported`, never a term).
 - **Program.lean** is held to the translator's grammar:
   - the lines `import C.Cert` and `open A2 C`;
   - `def fn<k> : Fn := …`;
@@ -170,7 +180,7 @@ One row per thing the claims rest on and do not prove:
 | `lean-kernel` | the Lean 4 kernel and the pinned toolchain |
 | `lean-compiler` | (profile `fast` only) the Lean compiler, which computes the verdict |
 | `claim-definitions` | the claims' definitions, A2's semantics (`formal/CLAIM.md`) |
-| `translation` | the step from source to term: `nurlc --emit-core`, then `tools/ncore/tolean.py` (AGORA-1020 removes it) |
+| `translation` | the step from source to term: `nurlc --emit-core`, then nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`; AGORA-1020 takes it out of the trusted path) |
 | `library-summaries` | the standard library as the term has it, A2 primitives and declared summaries; the models follow the library by inspection (AGORA-1014) |
 | `llvm`, `linker`, `os`, `c-runtime` | the path from the IR to a running binary |
 | `unsafe-report` | `M.unsafe` is what nurlc's `--unsafe-report` says |

@@ -17,6 +17,7 @@ $ `claims.nu`
 $ `shape.nu`
 $ `lean.nu`
 $ `manifest.nu`
+$ `tolean.nu`
 $ `stdlib/std/random.nu`
 
 : s NURLCERT_VERSION ( pkg_version )
@@ -27,7 +28,6 @@ $ `stdlib/std/random.nu`
     String prof
     String nurlc
     String formal
-    String tolean
     String lake
     String binary
     String stdlib
@@ -35,11 +35,12 @@ $ `stdlib/std/random.nu`
 
 // ── The translation (one interface) ──────────────────────────────────
 //
-// `.core` text in, Program.lean out. Until the translator written in NURL
-// lands (AGORA-1020), this calls the Python prototype tools/ncore/tolean.py
-// unchanged and only rewrites its frame: the import (C.Cert, which has the
-// claims' lemmas) and the `#eval` line (the claims replace it). The shape
-// check in shape.nu then holds the result to the program grammar.
+// `.core` text in, Program.lean out. The translator is tolean.nu (the
+// NURL port of the Python prototype tools/ncore/tolean.py, which it
+// matches byte for byte: tools/ncore/tolean_parity.sh); only its frame is
+// rewritten here: the import (C.Cert, which has the claims' lemmas) and
+// the `#eval` line (the claims replace it). The shape check in shape.nu
+// then holds the result to the program grammar.
 
 : Translated {
     b ok
@@ -71,19 +72,15 @@ $ `stdlib/std/random.nu`
     ^ o
 }
 
-@ cert_translate s tolean s core_path → Translated {
-    : ( Vec String ) a ( vec_new [String] )
-    ( vec_push [String] a ( string_from tolean ) )
-    ( vec_push [String] a ( string_from core_path ) )
-    : Run r ( nc_run `python3` a )
-    ? ! . r started { ^ @ Translated { F ( string_new ) ( string_clone . r err ) } } {}
-    ? != . r code 0 {
-        : ~ String why ( string_trim . r err )
-        ? ( string_starts_with why `unsupported: ` ) { = why ( string_substr why 13 - ( string_len why ) 13 ) } {}
-        ? == 0 ( string_len why ) { ^ @ Translated { F ( string_new ) ( string_from `the translator failed` ) } } {}
-        ^ @ Translated { F ( string_new ) why }
-    } {}
-    ^ @ Translated { T ( __ct_reframe ( string_data . r out ) ) ( string_new ) }
+@ cert_translate s core_path → Translated {
+    : String text ?? ( nc_read core_path ) {
+        T x → x
+        F → { ^ @ Translated { F ( string_new ) ( string_from `cannot read the core IR` ) } }
+    }
+    ^ ?? ( tolean_translate ( string_data text ) ) {
+        T lean → @ Translated { T ( __ct_reframe ( string_data lean ) ) ( string_new ) }
+        F why → @ Translated { F ( string_new ) why }
+    }
 }
 
 // ── What nurlc says ──────────────────────────────────────────────────
@@ -283,12 +280,12 @@ $ `stdlib/std/random.nu`
     ( json_arr_push L ( mj_row `claim-definitions` `the claims' definitions: A2's semantics (A2.Steps, A2.Stuck, A2.emptyMem, Mem.alloc)`
     `a claim means what these definitions say; formal/CLAIM.md is their review document`
     `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` `M.safe M.leak` ) )
-    ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then tools/ncore/tolean.py`
+    ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
     `nothing yet proves that P is the program the source describes (AGORA-1020 moves it inside the kernel's sight)`
-    `compiler/nurlc.nu (--emit-core), tools/ncore/tolean.py` `nurl-cert's translator (untrusted, tested by tolean_selftest.sh)` `M.safe M.leak` ) )
+    `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted, tested by tests/translate_test.sh and tools/ncore/tolean_parity.sh)` `M.safe M.leak` ) )
     ( json_arr_push L ( mj_row `library-summaries` `the standard library as the term has it: its calls are A2 primitives and declared summaries`
     `the library's unsafe base follows formal/B's models by inspection, not by proof (AGORA-1014 ties each to its theorem)`
-    `tools/ncore/tolean.py, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` `M.safe M.leak` ) )
+    `packages/nurl-cert/src/tolean.nu, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` `M.safe M.leak` ) )
     ( json_arr_push L ( mj_row `llvm` `LLVM: the IR to machine code` `the claims are about the program's model; phase D validates the drops, nothing proves codegen`
     `the LLVM IR hash in this manifest` `the LLVM project` `M.safe M.leak` ) )
     ( json_arr_push L ( mj_row `linker` `the linker` `it joins the program with the C runtime` `the build` `the toolchain's linker` `M.safe M.leak` ) )
@@ -423,7 +420,7 @@ $ `stdlib/std/random.nu`
     // 3. The translation, held to the program grammar.
     : ~ String verdict ( string_from `accepted` )
     : ~ String reason ( string_new )
-    : Translated tr ( cert_translate ( string_data . o tolean ) ( string_data core_path ) )
+    : Translated tr ( cert_translate ( string_data core_path ) )
     : String prog_path ( nc_join out `Program.lean` )
     : String claims_path ( nc_join out `Claims.lean` )
     : ~ i nv 0

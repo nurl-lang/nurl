@@ -3,17 +3,21 @@
 //   nurl-cert certify prog.nu [--out prog.cert] [--profile kernel|fast]
 //                             [--binary prog]
 //   nurl-cert verify prog.cert [--binary prog]
+//   nurl-cert translate prog.core
 //
 // `certify` turns a program into a bundle whose Claims.lean states, about
 // the program's own term, that it never gets stuck (M.safe) and that it
 // releases everything it allocates, a panic's unwinding included
 // (M.leak), each proved from formal/'s theorems with the checker's verdict
 // decided by the Lean kernel. `verify` checks a bundle again without
-// nurlc. docs/dev/CERTIFICATE.md describes the bundle.
+// nurlc. `translate` prints the Lean term of a core IR (`nurlc
+// --emit-core`), as tools/ncore/tolean.py prints it. docs/dev/CERTIFICATE.md
+// describes the bundle.
 //
 // Exit codes: certify 0 every claim proved (or, under fast, validated) ·
 // 1 an error · 2 unsupported by the translation · 3 refused by the
-// checker; verify 0 verified · 1 a check failed · 2 usage or no bundle.
+// checker; verify 0 verified · 1 a check failed · 2 usage or no bundle;
+// translate 0 translated · 1 a core IR it cannot read · 2 unsupported.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -28,7 +32,8 @@ $ `verify.nu`
     ( nurl_print `nurl-cert — memory-safety certificates for NURL programs\n\n` )
     ( nurl_print `Usage:\n` )
     ( nurl_print `  nurl-cert certify <prog.nu> [options]   write the certificate bundle\n` )
-    ( nurl_print `  nurl-cert verify <prog.cert> [options]  check a bundle again (no nurlc needed)\n\n` )
+    ( nurl_print `  nurl-cert verify <prog.cert> [options]  check a bundle again (no nurlc needed)\n` )
+    ( nurl_print `  nurl-cert translate <prog.core>         print the Lean term of a core IR (nurlc --emit-core)\n\n` )
     ( nurl_print `Options:\n` )
     ( nurl_print `  --out DIR        the bundle (default <prog>.cert)\n` )
     ( nurl_print `  --profile P      kernel (default: the Lean kernel decides, standard axioms only)\n` )
@@ -38,7 +43,6 @@ $ `verify.nu`
     ( nurl_print `                   again with nurlc and the translator, and compare them\n` )
     ( nurl_print `  --formal DIR     the formal/ tree (default $NURL_FORMAL, else ./formal)\n` )
     ( nurl_print `  --nurlc PATH     the compiler (default $NURLC, else nurlc)\n` )
-    ( nurl_print `  --tolean PATH    the translator (default <formal>/../tools/ncore/tolean.py)\n` )
     ( nurl_print `  --lake PATH      Lean's build tool (default lake)\n` )
     ( nurl_print `  --stdlib DIR     the standard library's root (default $NURL_STDLIB, else <formal>/..)\n` )
     ( nurl_print `  --version        print the version and exit\n` )
@@ -54,7 +58,6 @@ $ `verify.nu`
     ( args_opt p `binary` 0 `FILE` `the built program` )
     ( args_opt p `formal` 0 `DIR` `the formal/ tree` )
     ( args_opt p `nurlc` 0 `PATH` `the compiler` )
-    ( args_opt p `tolean` 0 `PATH` `the translator` )
     ( args_opt p `lake` 0 `PATH` `Lean's build tool` )
     ( args_opt p `stdlib` 0 `DIR` `the standard library's root` )
     ^ p
@@ -109,14 +112,12 @@ $ `verify.nu`
         ^ 2
     } {}
     : String formal ( __opt_abs p `formal` `NURL_FORMAL` `formal` )
-    : String tl_dflt ( nc_join ( string_data formal ) `../tools/ncore/tolean.py` )
-    : String tolean ( __opt_abs p `tolean` `NURL_TOLEAN` ( string_data tl_dflt ) )
     : String nurlc ( __opt_cmd p `nurlc` `NURLC` `nurlc` )
     : String lake ( __opt_cmd p `lake` `LAKE` `lake` )
     : String binary ( __opt_abs p `binary` `` `` )
     : String sl_dflt ( nc_join ( string_data formal ) `..` )
     : String stdlib ( __opt_abs p `stdlib` `NURL_STDLIB` ( string_data sl_dflt ) )
-    : CertOpts o @ CertOpts { src out prof nurlc formal tolean lake binary stdlib }
+    : CertOpts o @ CertOpts { src out prof nurlc formal lake binary stdlib }
     ^ ( cert_certify o )
 }
 
@@ -127,12 +128,38 @@ $ `verify.nu`
     : String lake ( __opt_cmd p `lake` `LAKE` `lake` )
     : b rebuild ( args_present p `rebuild` )
     : String nurlc ( __opt_cmd p `nurlc` `NURLC` `nurlc` )
-    : String tl_dflt ( nc_join ( string_data formal ) `../tools/ncore/tolean.py` )
-    : String tolean ( __opt_abs p `tolean` `NURL_TOLEAN` ( string_data tl_dflt ) )
     : String sl_dflt ( nc_join ( string_data formal ) `..` )
     : String stdlib ( __opt_abs p `stdlib` `NURL_STDLIB` ( string_data sl_dflt ) )
-    : VerOpts o @ VerOpts { bundle binary formal lake rebuild nurlc tolean stdlib }
+    : VerOpts o @ VerOpts { bundle binary formal lake rebuild nurlc stdlib }
     ^ ( cert_verify o )
+}
+
+// `translate`: the term on stdout, or `unsupported: <why>` on stderr and
+// exit 2 (tolean.py's output and exit code); a core IR it cannot read is
+// exit 1.
+@ __cmd_translate String target → i {
+    : String text ?? ( nc_read ( string_data target ) ) {
+        T x → x
+        F → {
+            ( nc_eprint2 `nurl-cert: cannot read ` ( string_data target ) )
+            ^ 1
+        }
+    }
+    ^ ?? ( tolean_translate ( string_data text ) ) {
+        T lean → {
+            ( nurl_print ( string_data lean ) )
+            0
+        }
+        F why → {
+            ? ( string_starts_with why `internal: ` ) {
+                ( nc_eprint2 `nurl-cert: ` ( string_data why ) )
+                1
+            } {
+                ( nc_eprint2 `unsupported: ` ( string_data why ) )
+                2
+            }
+        }
+    }
 }
 
 @ main → i {
@@ -155,9 +182,11 @@ $ `verify.nu`
                 : String arg ?? ( vec_get [String] pos 1 ) { T s → ( string_clone s ) F _ → ( string_new ) }
                 ? ( nc_is cmd `certify` ) { = rc ( __cmd_certify p arg ) } {
                     ? ( nc_is cmd `verify` ) { = rc ( __cmd_verify p arg ) } {
-                        ( nurl_eprint `nurl-cert: unknown command: ` )
-                        ( nurl_eprintln ( string_data cmd ) )
-                        = rc 2
+                        ? ( nc_is cmd `translate` ) { = rc ( __cmd_translate arg ) } {
+                            ( nurl_eprint `nurl-cert: unknown command: ` )
+                            ( nurl_eprintln ( string_data cmd ) )
+                            = rc 2
+                        }
                     }
                 }
             }
