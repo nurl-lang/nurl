@@ -14,8 +14,10 @@ import C.A2Panic
 import C.A2Prog
 import C.A3Prog
 import C.A2Weaker
+import C.Dedup
 import C.A2Exit
 import C.A2Glue
+import C.DedupWitness
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
@@ -30,4 +32,7 @@ checker that puts them together, `checkA2` (`C/A2Call.lean`); C10, `CtxWF` / `Na
 arms end apart, a loop whose round ends weaker than it began); C7x, `exit` by obligations (`C/A2Exit.lean`); C11, its whole programs (`C/A2Prog.lean`,
 `C.checked_program_safe2`). For A3: C12, its claim for a checked program,
 spawned functions and globals included (`C/A3Prog.lean`,
-`C.checked_claim_made_full`). -/
+`C.checked_claim_made_full`). The checkers keep dependency lists free of
+duplicates (C7d, `C/Dedup.lean`, AGORA-988): a push or a call drops the
+ones it makes, by one `sub` step, so re-pushing a slice no longer grows the
+lists geometrically (`C/DedupWitness.lean`). -/

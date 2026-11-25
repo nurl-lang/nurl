@@ -37,73 +37,6 @@ theorem CtxL.supported {L : CtxL} {D : List Var} (h : L.all (fun p => decide (p.
     have : p.1 = v := by simpa using hp
     exact hv (this ▸ of_decide_eq_true (List.all_eq_true.mp h p hm))
 
-def subB (a b : List Dep) : Bool := a.all (fun d => decide (d ∈ b))
-
-theorem subB_sound {a b : List Dep} (h : subB a b = true) : a ⊆ b := fun d hd =>
-  of_decide_eq_true (List.all_eq_true.mp h d hd)
-
-/-- `EntryWeaker`, decided. -/
-def entryWeakerB (E E' : Entry) : Bool :=
-  decide (E'.ty = E.ty) && decide (E'.mode = E.mode) && (decide (E.mode ≠ .rootb) || decide (E' = E)) &&
-    (!E'.live || (E.live && (E.mode.ownSlot || subB E.path E'.path) && subB E.held E'.held))
-
-theorem entryWeakerB_sound {E E' : Entry} (h : entryWeakerB E E' = true) : EntryWeaker E E' := by
-  simp only [entryWeakerB, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at h
-  obtain ⟨⟨⟨hty, hm⟩, hr⟩, hl⟩ := h
-  refine ⟨hty, hm, fun e => hr.resolve_left (fun h' => h' e), fun hl' => ?_⟩
-  rcases hl with h0 | ⟨⟨h1, h2⟩, h3⟩
-  · rw [hl'] at h0; cases h0
-  · refine ⟨h1, fun ho => ?_, subB_sound h3⟩
-    rcases h2 with h2 | h2
-    · rw [ho] at h2; cases h2
-    · exact subB_sound h2
-
-/-- `CtxWF` over the domain, decided. -/
-def ctxWFB (D : List Var) (Γ : Ctx) : Bool :=
-  D.all fun v => match Γ v with
-    | some E => !E.live || !(decide (E.ty ≠ .int ∨ E.mode = .rootb)) ||
-        (roots E.vdeps).all fun r => match Γ r with
-          | some Er => Er.mode.isRoot
-          | none => false
-    | none => true
-
-theorem ctxWFB_sound {D : List Var} {Γ : Ctx} (hs : Supported Γ D) (h : ctxWFB D Γ = true) : CtxWF Γ := by
-  intro v E hv hl hk r hr
-  have hvD : v ∈ D := by
-    apply Classical.byContradiction; intro hn; rw [hs v hn] at hv; cases hv
-  have := List.all_eq_true.mp h v hvD
-  rw [hv] at this
-  simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at this
-  rcases this with (h0 | h0) | h0
-  · rw [hl] at h0; cases h0
-  · exact absurd hk h0
-  · have := List.all_eq_true.mp h0 r hr
-    split at this
-    · rename_i Er hEr; exact ⟨Er, hEr, this⟩
-    · cases this
-
-/-- `Weaker Γ Γ'` over the domain, decided. -/
-def weakerB (D : List Var) (Γ Γ' : Ctx) : Bool :=
-  (D.all fun v => match Γ v, Γ' v with
-    | none, none => true
-    | some E, some E' => entryWeakerB E E'
-    | _, _ => false) && ctxWFB D Γ'
-
-theorem weakerB_sound {D : List Var} {Γ Γ' : Ctx} (hs : Supported Γ D) (hs' : Supported Γ' D)
-    (h : weakerB D Γ Γ' = true) : Weaker Γ Γ' := by
-  simp only [weakerB, Bool.and_eq_true] at h
-  obtain ⟨h1, h2⟩ := h
-  refine ⟨fun v => ?_, ctxWFB_sound hs' h2⟩
-  by_cases hv : v ∈ D
-  · have := List.all_eq_true.mp h1 v hv
-    split at this
-    · rename_i ha hb; exact ⟨by simp [ha, hb], fun E E' e1 e2 => by rw [ha] at e1; cases e1⟩
-    · rename_i E E' ha hb
-      exact ⟨by simp [ha, hb], fun E1 E1' e1 e2 => by
-        rw [ha] at e1; rw [hb] at e2; cases e1; cases e2; exact entryWeakerB_sound this⟩
-    · cases this
-  · rw [hs v hv, hs' v hv]; exact ⟨Iff.rfl, fun E _ e => by cases e⟩
-
 /-- A certificate: how the statement was typed, with the contexts its
     subsumption steps used. -/
 inductive Cert where
@@ -140,7 +73,7 @@ def checkC (P : Prog) (D : List Var) : Cert → Ctx → List Var → Stmt → Op
   | .letcall c, Γ, F, .letcall x f args s =>
     if s.src ∧ Γ x = none ∧ x ∉ F then
       match callB P Γ F f args with
-      | some (E, Γ1) => (checkC P D c (setE Γ1 x E) F s).map (exitScope x)
+      | some (E, Γ1) => (checkC P D c (ctxOfTbl <| settleL1 D (x :: args) (setE Γ1 x E)) F s).map (exitScope x)
       | none => none
     else none
   | .ite ca cb, Γ, F, .ite c a b =>
@@ -234,9 +167,10 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
           have ⟨fn, _, _, _, _, hpost⟩ := hct
           have hs1 : Supported Γ1 D := by
             rw [hpost]; exact callPost_supported hs (fun a ha => hD a (by simp [Stmt.vars, ha]))
-          obtain ⟨t0, s0⟩ := ih (supported_setE hs1 (hD x (by simp [Stmt.vars])) E)
+          have hs2 := supported_setE hs1 (hD x (by simp [Stmt.vars])) E
+          obtain ⟨t0, s0⟩ := ih (settleL1_supported _)
             (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
-          exact ⟨.letcall hsrc hx hF hct t0, supported_exitScope s0 x⟩
+          exact ⟨.letcall hsrc hx hF hct (stmtT_settleIn1 hs2 _ t0), supported_exitScope s0 x⟩
         · cases h
       · cases h
     | _ => simp [checkC] at h

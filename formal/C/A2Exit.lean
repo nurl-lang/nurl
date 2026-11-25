@@ -402,7 +402,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
       if s.src ∧ Γ x = none ∧ x ∉ F ∧ dtorHeadB P f x s then
         match C Γ F f args with
         | some (E, Γ1) =>
-          match checkX P R C D (setE Γ1 x E) F s with
+          match checkX P R C D (ctxOfTbl <| settleL2 D (x :: args) (setE Γ1 x E)) F s with
           | some rs =>
             if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x) then
               some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
@@ -755,12 +755,14 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
               simp only [Bool.and_eq_true] at he
               obtain ⟨hend, hendE⟩ := he
               obtain ⟨hct, hs1⟩ := hC Γ F f args E Γ1 hs (fun a ha => hD a (by simp [Stmt.vars, ha])) hcall
-              obtain ⟨s0, e0, t0, _⟩ := ih (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
+              have hs2 := supported2_setE hs1 (hD x (by simp [Stmt.vars])) E
+              obtain ⟨s0, e0, t0, _⟩ := ih (settleL2_supported _)
                 (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
               refine ⟨supported2_exitScope s0 x, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
               · obtain ⟨e', he', rfl⟩ := List.mem_map.mp he
                 exact supported2_exitScope (e0 e' he') x
-              · exact .letcall hsrc hx hF hct (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
+              · exact .letcall hsrc hx hF hct (stmtT_settleIn2 hs2 _ (t0 _ (oblUnder_ok e0 hendE hξ)))
+                  (endOK2B_sound s0 hend)
                   (dtorHeadB_sound hdk)
             · cases h
           · cases h
