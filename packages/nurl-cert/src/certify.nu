@@ -252,6 +252,19 @@ $ `stdlib/std/random.nu`
     ^ ?? ( vec_get [String] ls 0 ) { T l → ( string_trim l ) F → ( string_new ) }
 }
 
+// The first line of `s` that is one of Lean's errors, else its first line.
+@ __ct_first_err String s → String {
+    : ( Vec String ) ls ( nc_lines ( string_data s ) )
+    : i n ( vec_len [String] ls )
+    : ~ i k 0
+    ~ < k n {
+        : String l ( string_clone ( vec_at [String] ls k ) )
+        ? ( string_contains l `: error` ) { ^ ( string_trim l ) } {}
+        = k + k 1
+    }
+    ^ ( __ct_first_line s )
+}
+
 @ __ct_cov_status String verdict ( Vec String ) statuses → String {
     ? ! ( nc_is verdict `accepted` ) { ^ ( string_clone verdict ) } {}
     : ~ i rank 2
@@ -477,6 +490,8 @@ $ `stdlib/std/random.nu`
     : ( Vec String ) statuses ( vec_new [String] )
     : i nclaims ( cert_claim_count threads )
     : ~ b elab F
+    // why a candidate the checker accepts has no Cert.elab (printed)
+    : ~ String elab_why ( string_new )
     ? ( nc_is verdict `accepted` ) {
         : String claims ( cert_claims_lean prof nv threads )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
@@ -513,6 +528,10 @@ $ `stdlib/std/random.nu`
         // and a run that proved Cert.elab on the standard axioms; otherwise
         // it is as before, its term the translator's (the translation row).
         = elab & & try_elab ( nc_is verdict `accepted` ) ( cert_elab_proved lr )
+        ? & & try_elab ( nc_is verdict `accepted` ) ! elab {
+            = elab_why ( __ct_first_err . lr elab_log )
+            ? == 0 ( string_len elab_why ) { = elab_why ( string_from `Lean did not prove it on the standard axioms` ) } {}
+        } {}
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ? ! elab { ?? ( file_delete ( string_data elab_path ) ) { T _ → {} F _ → {} } } {}
         : ~ i k 0
@@ -699,6 +718,10 @@ $ `stdlib/std/random.nu`
             = z + z 1
         }
         ( nurl_println ? elab `  term: Cert.elab (the kernel built it from the core IR's words)` `  term: the translator's (the translation ledger row)` )
+        ? > ( string_len elab_why ) 0 {
+            ( nurl_print `  Cert.elab not proved: ` )
+            ( nurl_println ( string_data elab_why ) )
+        } {}
         ^ ? all 0 1
     } {}
     ? ( nc_is verdict `refused` ) { ^ 3 } {}

@@ -161,6 +161,7 @@ EOF2
 )
 if [ "$rc" = 0 ] && [ "$cand" = yes ] && [ -n "$ctors" ] && grep -q "M.safe proved" "$P1/out" && grep -q "M.leak proved" "$P1/out" \
     && grep -q "term: the translator's" "$P1/out" && [ ! -e "$P1/vs.cert/Elab.lean" ] \
+    && grep -Eq "^  Cert.elab not proved: .*All\.lean:[0-9]+:[0-9]+: error" "$P1/out" \
     && "$C" verify "$P1/vs.cert" --formal "$ROOT/formal" > /dev/null 2>&1; then
     ok "a candidate whose Elab.lean part fails: accepted, no Elab.lean, verifies"
 else bad "a candidate whose Elab.lean part fails: accepted, no Elab.lean, verifies (rc $rc, candidate $cand)"; cat "$P1/out" | head -5; fi
@@ -198,10 +199,31 @@ m["hashes"]["program_lean"] = hashlib.sha256(open(sys.argv[2], "rb").read()).hex
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
 out=$("$C" verify "$R" --formal "$ROOT/formal" 2>&1); vrc=$?
-if [ "$vrc" != 0 ] && printf '%s\n' "$out" | grep -q "FAIL  Lean checks Program.lean and Claims.lean" \
-    && ! printf '%s\n' "$out" | grep -q "ok    M.safe"; then
+# (Lean's own refusal, placed in the claims' part; not a check before Lean)
+if [ "$vrc" != 0 ] && printf '%s\n' "$out" | grep -Eq "FAIL  Lean checks Program.lean and Claims.lean: .*All\.lean:[0-9]+:[0-9]+: error" \
+    && ! printf '%s\n' "$out" | grep -q "not run" && ! printf '%s\n' "$out" | grep -q "ok    M.safe"; then
     ok "a refused program's term in a bundle with Elab.lean: verify fails on the claims"
 else bad "a refused program's term in a bundle with Elab.lean: verify fails on the claims (rc $vrc)"; printf '%s\n' "$out" | sed 's/^/        /' | head -12; fi
+
+# A Lean run that ends abnormally (here: a lake that dies, exit 137, on any
+# file with an Elab.lean part) costs the optional Cert.elab only: certify
+# checks the claims again alone and keeps them; verify of a bundle that holds
+# Elab.lean still fails on Cert.elab.
+KL="$TMP/killlake"; cat > "$KL" <<'EOF2'
+#!/usr/bin/env bash
+for a in "$@"; do case "$a" in *.lean) grep -q '^import C.Elab$' "$a" && exit 137;; esac; done
+exec lake "$@"
+EOF2
+chmod +x "$KL"
+K="$TMP/kl"; rm -rf "$K"; mkdir -p "$K"; cp tools/ncore/certify/vec_push_len.nu "$K/p.nu"
+"$C" certify "$K/p.nu" "${CA[@]}" --lake "$KL" > "$K/out" 2>&1; krc=$?
+kv=$("$C" verify "$TMP/progs/vec_push_len/vec_push_len.cert" --formal "$ROOT/formal" --lake "$KL" 2>&1); kvrc=$?
+if [ "$krc" = 0 ] && grep -q "M.safe proved" "$K/out" && grep -q "M.leak proved" "$K/out" && [ ! -e "$K/p.cert/Elab.lean" ] \
+    && grep -q "Cert.elab not proved: the Lean run ended abnormally (exit 137)" "$K/out" \
+    && "$C" verify "$K/p.cert" --formal "$ROOT/formal" > /dev/null 2>&1 \
+    && [ "$kvrc" != 0 ] && printf '%s\n' "$kv" | grep -q "FAIL  Lean proves Cert.elab"; then
+    ok "a Lean run that dies in the Elab.lean part: certify keeps the claims without Elab.lean, verify still needs Cert.elab"
+else bad "a Lean run that dies in the Elab.lean part (certify rc $krc, verify rc $kvrc)"; head -8 "$K/out"; fi
 
 echo "== 2. tampering"
 # (a program outside C.Elab's subset: its bundle's term is the translator's,

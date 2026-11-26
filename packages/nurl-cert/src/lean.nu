@@ -311,6 +311,8 @@ $ `stdlib/ext/json.nu`
     : ( Vec String ) ls ( nc_lines ( string_data . r out ) )
     : i n ( vec_len [String] ls )
     : ~ i k 0
+    // an error Lean itself placed in the claims' part
+    : ~ b cerr F
     ~ < k n {
         : String l ( string_clone ( vec_at [String] ls k ) )
         ? > ( string_len ( string_trim l ) ) 0 {
@@ -330,6 +332,7 @@ $ `stdlib/ext/json.nu`
                                     ( string_push_str elog ( string_data mt ) )
                                 } {
                                     ( string_push_str log ( string_data mt ) )
+                                    ? ( nc_is_s ( string_data sev ) `error` ) { = cerr T } {}
                                 }
                                 = placed T
                             } {}
@@ -357,6 +360,18 @@ $ `stdlib/ext/json.nu`
     } {}
     : b ok0 & . r started == . r code 0
     : b elab_failed & & & & has_elab . r started == . r code 1 ( cert_lean_has_error elog ) ! ( cert_lean_has_error log )
+    // A run that ended otherwise (killed, out of memory, an exit Lean does
+    // not give for an error) with no error of Lean's in the claims' part
+    // may have ended in the optional Elab.lean part: the claims are checked
+    // again alone, once, and Elab.lean is not proved. (Without Elab.lean,
+    // as in verify of a bundle that holds it, Cert.elab then fails.)
+    ? & & has_elab ! | ok0 elab_failed ! cerr {
+        : LeanRun again ( cert_lean_check lake formal bundle work F )
+        : String note ( string_from `the Lean run ended abnormally (exit ` )
+        ( string_push_int note . r code )
+        ( string_push_str note `) before the Elab.lean part was checked; the claims were checked again alone` )
+        ^ @ LeanRun { . again ran . again log F note }
+    } {}
     ^ @ LeanRun { | ok0 elab_failed log & ok0 has_elab elog }
 }
 

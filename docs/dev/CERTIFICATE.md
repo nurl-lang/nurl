@@ -243,7 +243,13 @@ prog.cert/
   modules. An error of the Elab.lean part alone means only that
   `Cert.elab` is not proved (no Elab.lean; the translation row the
   translator's). `Cert.elab` still counts only on
-  an exit 0 and `#print axioms` listing the standard axioms. The selftest
+  an exit 0 and `#print axioms` listing the standard axioms. A run that
+  ends any other way (killed, out of memory) with no error of Lean's in
+  the claims' part is run again once without the Elab.lean part: the
+  claims count if that run passes, and `Cert.elab` is not proved, so
+  certify writes no Elab.lean and verify of a bundle that holds one fails.
+  certify prints why a candidate has no `Cert.elab`
+  (`Cert.elab not proved: …`). The selftest
   checks three bundles both ways (verdict, each claim's axioms,
   Cert.elab), a candidate whose Elab.lean part fails (accepted, no
   Elab.lean), the refused programs of the subset (their claims refused
