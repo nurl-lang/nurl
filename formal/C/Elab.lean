@@ -641,6 +641,41 @@ def modeOf (tops : List (List String)) (fn : CoreFn) (j : Nat) : PMode :=
 def topNext (vs : List (Nat × Nat × Nat × String)) : Nat :=
   vs.foldl (fun acc v => max acc (v.1 + 2)) 0
 
+/-- A statement's operand count where its right-hand side counts its
+    operands (`__wellformed`): a `let`/`assign` right-hand side (word 2) or
+    an `eval`'s (word 1) that is a `call`/`closure` (count at +2), a
+    `callind`/`scalar` (+1) or an `agg` (+2) has a count that is a number
+    and exactly that many operand words after it (an `agg` at least that
+    many: its type follows). Checked for every statement of the body, the
+    ones the translation skips (a store to a `void`, code after a `ret`)
+    included, as the translator does before it translates. -/
+def opsOk (l : List String) : Bool :=
+  let off : Option Nat := match l with
+    | "let" :: _ => some 2
+    | "assign" :: _ => some 2
+    | "eval" :: _ => some 1
+    | _ => none
+  match off with
+  | none => true
+  | some off =>
+    match nth? l off with
+    | none => true
+    | some h =>
+      let cp : Option Nat :=
+        if h == "call" || h == "closure" || h == "agg" then some (off + 2)
+        else if h == "callind" || h == "scalar" then some (off + 1)
+        else none
+      match cp with
+      | none => true
+      | some cp =>
+        match nth? l cp with
+        | none => false
+        | some w => match natOf w with
+          | none => false
+          | some n =>
+            let nops := l.length - (cp + 1)
+            if h == "agg" then decide (n ≤ nops) else n == nops
+
 /-- A function of the subset as A2's `Fn` (`__fn_init`, `__lean`). -/
 def fnElab (tops : List (List String)) (prog : List CoreFn) (fn : CoreFn) : Option Fn := do
   if startsB fn.name closureB then none
@@ -648,6 +683,7 @@ def fnElab (tops : List (List String)) (prog : List CoreFn) (fn : CoreFn) : Opti
   if !(intTy fn.ret) then none
   if sumVal tops fn.name "retdyn" == some [49] then none
   if borrowedB tops fn.name then none
+  if !(fn.body.all opsOk) then none
   let params ← (List.range fn.np).mapM fun j =>
     (lastVar fn.vars j).map fun _ => (modeOf tops fn j, Ty.int)
   let items ← match parseB (fn.body.length + 1) fn.body [] with
@@ -661,14 +697,65 @@ def fnElab (tops : List (List String)) (prog : List CoreFn) (fn : CoreFn) : Opti
   pure { params := params, resTy := .int, resOwn := false, lends := [], rholds := [],
          outHolds := [], body := .block inner, nvars := s.next + 1 }
 
+/-- Drop exactly `n` elements, or fail if there are fewer. -/
+def dropN {α : Type} : Nat → List α → Option (List α)
+  | 0, l => some l
+  | _ + 1, [] => none
+  | n + 1, _ :: l => dropN n l
+
+/-- `n` variants, each a name, a payload count and that many payloads,
+    and nothing after them. -/
+def variantsOk : Nat → List String → Bool
+  | 0, l => l.isEmpty
+  | n + 1, _ :: np :: rest => match natOf np with
+    | some k => match dropN k rest with
+      | some r => variantsOk n r
+      | none => false
+    | none => false
+  | _ + 1, _ => false
+
+/-- After the fields: nothing, or `V n` and `n` variants. -/
+def afterFieldsOk : List String → Bool
+  | [] => true
+  | "V" :: nv :: rest => match natOf nv with
+    | some k => variantsOk k rest
+    | none => false
+  | _ => false
+
+/-- `F n`, `n` name–type pairs, then `afterFieldsOk`. -/
+def fieldsOk : List String → Bool
+  | "F" :: nf :: rest => match natOf nf with
+    | some k => match dropN (2 * k) rest with
+      | some r => afterFieldsOk r
+      | none => false
+    | none => false
+  | _ => false
+
+/-- A `ty` line the reader accepts (`__cr_ty`), and not a destructor type:
+    name, class, drops (no `d`) and base, then either `A n` and exactly `n`
+    type arguments or nothing, then the fields and the variants, and no
+    column after them. The reader finds the fields at the first column `F`,
+    so no column before them is `F`. -/
+def tyOk : List String → Bool
+  | "ty" :: name :: cls :: drops :: base :: rest =>
+    !(bytesOf drops).contains 100 &&                  -- 'd'
+    ![name, cls, drops, base].contains "F" &&
+    match rest with
+    | "A" :: na :: more => match natOf na with
+      | some k => match dropN k more with
+        | some r => !(more.take k).contains "F" && fieldsOk r
+        | none => false
+      | none => false
+    | _ => fieldsOk rest
+  | _ => false
+
 /-- The top-level lines the reader would refuse (a `sum` line without its
-    function, a `ty` line without its drops), and a destructor type (a `ty`
-    line whose drops say `d`), are outside the subset. -/
+    function, a `ty` line of another shape), and a destructor type, are
+    outside the subset. -/
 def topOk (tops : List (List String)) : Bool :=
   tops.all fun l => match l with
     | ["sum"] => false
-    | "ty" :: _ :: _ :: drops :: _ => !(bytesOf drops).contains 100   -- 'd'
-    | "ty" :: _ => false
+    | "ty" :: _ => tyOk l
     | _ => true
 
 /-- The program and its entry statement (`__emit`): the functions whose
@@ -681,6 +768,9 @@ def elabIR (ir : IR) : Option (Prog × Stmt) := do
   let names := prog.map (·.name)
   if !(nodupB names) then none
   if names.any (fun n => startsB n dropB) then none
+  -- a function of the program named like a library call the translator
+  -- lowers to an A2 construct, called or not
+  if names.any intrinsicName then none
   let mi ← indexOf names "main"
   let P ← prog.mapM (fnElab tops prog)
   pure (P, .letcall 0 mi [] .skip)
@@ -837,5 +927,28 @@ example : (elabIR [["fn", "main", "i64", "0", "1", "a.nu", "0", ""],
   decide +kernel
 example : (elabIR [["fn", "main", "i64", "0", "1", "a.nu", "0", ""],
     ["scope"], ["loop"], ["loopcond", "c"], ["ret", "c"], ["end"], ["endfn"]]).isNone := by decide +kernel
+
+/-- Refused as the translator refuses it, though the translation itself
+    would skip it: a miscounted scalar stored to a `void` (the translator's
+    `__wellformed` checks every statement's count first); a `ty` line
+    without its fields (the reader refuses it); and a function of the
+    program named like an intrinsic, even one no one calls. -/
+def irRet (extra : IR) (pre : IR) : IR :=
+  pre ++ [["fn", "main", "i64", "0", "1", "a.nu", "0", ""],
+    ["v", "0", "2", "1", "0", "2", "-1", "", "void"],
+    ["scope"]] ++ extra ++ [["ret", "c"], ["end"], ["endfn"]]
+example : (elabIR (irRet [["let", "0", "none"], ["assign", "v0", "scalar", "2", "c"]] [])).isNone := by
+  decide +kernel
+example : (elabIR (irRet [] [] ++ [["ty", "%X", "struct", "", ""]])).isNone := by decide +kernel
+example : (elabIR ([["fn", "nurl_println_int", "i64", "0", "1", "a.nu", "0", ""],
+    ["scope"], ["ret", "c"], ["end"], ["endfn"]] ++ irRet [] [])).isNone := by decide +kernel
+
+/-- …while their well-formed neighbours are in the subset: the store to a
+    `void` with its count right, and a struct `ty` line no one uses. -/
+example : (elabIR (irRet [["let", "0", "none"], ["assign", "v0", "scalar", "1", "c"]] [])).isSome := by
+  decide +kernel
+example : (elabIR (irRet [] [] ++
+    [["ty", "%X", "1", "0-----", "", "A", "0", "F", "2", "a", "i64", "b", "i64", "V", "0"]])).isSome := by
+  decide +kernel
 
 end C.Elab

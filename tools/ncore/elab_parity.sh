@@ -39,21 +39,38 @@ NURLC="${NURLC:-$ROOT/build/nurlc}"
 CERT="${NURL_CERT:-$ROOT/build/nurl-cert}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 KERNEL="${KERNEL:-1}"
-if [ -n "${PARITY_DIR:-}" ]; then W="$PARITY_DIR"; mkdir -p "$W"
+if [ -n "${PARITY_DIR:-}" ]; then
+    mkdir -p "$PARITY_DIR" || exit 1
+    W="$(cd "$PARITY_DIR" && pwd)" || exit 1     # absolute: Lean runs in formal/
 else W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT; fi
 [ -x "$NURLC" ] || { echo "no nurlc at $NURLC"; exit 1; }
 [ -x "$CERT" ] || { echo "no nurl-cert at $CERT"; exit 1; }
 command -v lake > /dev/null || export PATH="$HOME/.elan/bin:$PATH"
 
-if [ $# -ge 1 ]; then cp "$1" "$W/progs.txt"
-else { ls tools/ncore/certify/*.nu; find tools/fuzz/holes -name '*.nu' | sort; ls tools/ncore/elab_scalar/*.nu; } > "$W/progs.txt"; fi
+# The programs every default sweep must find in the subset and matching:
+# each scalar program written for this test, and the certify programs in
+# the subset. (A regression that makes elabIR answer `none` for one, or
+# nurlc fail on one, is a failure, not one more program outside the subset.)
+EXPECT_CERTIFY="int_recursion_early_return loop_with_continue_and_break while_loop_summing"
+
+rm -f "$W/progs.txt" "$W/expect.txt"
+if [ $# -ge 1 ]; then
+    cp "$1" "$W/progs.txt" || { echo "elab_parity.sh: can not read the program list $1"; exit 1; }
+else
+    { ls tools/ncore/certify/*.nu && find tools/fuzz/holes -name '*.nu' | sort && ls tools/ncore/elab_scalar/*.nu; } > "$W/progs.txt" \
+        || { echo "elab_parity.sh: can not list the programs"; exit 1; }
+fi
+{ ls tools/ncore/elab_scalar/*.nu; for c in $EXPECT_CERTIFY; do echo "tools/ncore/certify/$c.nu"; done; } > "$W/expect.txt"
 nprog=$(wc -l < "$W/progs.txt")
+[ "$nprog" -gt 0 ] || { echo "elab_parity.sh: no programs"; exit 1; }
 
 # 0. Per program k: k.core, k.words (the Lean literal), k.json, k.tl and
 #    k.rc (the translator's file and exit status), k.path.
 rm -rf "$W/r"; mkdir -p "$W/r"
 t0=$(date +%s)
-nl -ba -w1 -s' ' "$W/progs.txt" | W="$W" NURLC="$NURLC" CERT="$CERT" ROOT="$ROOT" xargs -P "$JOBS" -L 1 bash -c '
+# (index and path NUL-delimited: a path may hold spaces)
+i=0; while IFS= read -r p || [ -n "$p" ]; do i=$((i + 1)); printf '%s\0%s\0' "$i" "$p"; done < "$W/progs.txt" \
+  | W="$W" NURLC="$NURLC" CERT="$CERT" ROOT="$ROOT" xargs -0 -n 2 -P "$JOBS" bash -c '
     k="$0"; p="$1"; d="$W/r"
     printf "%s\n" "$p" > "$d/$k.path"
     if ! timeout 120 "$NURLC" --emit-core "$p" > "$d/$k.core" 2> /dev/null; then
@@ -68,7 +85,9 @@ t1=$(date +%s)
 ls "$W/r" | grep '\.json$' | sed 's/\.json$//' | sort -n > "$W/ok.txt"
 sed "s|^\(.*\)$|$W/r/\1.json|" "$W/ok.txt" > "$W/json.txt"
 (cd "$ROOT/formal" && lake env lean --run "$ROOT/tools/ncore/elab_parity_run.lean" "$W/json.txt") > "$W/run.txt" 2>&1
+rrc=$?
 t2=$(date +%s)
+if [ "$rrc" != 0 ]; then echo "elab_parity_run.lean failed (exit $rrc):"; tail -5 "$W/run.txt"; exit 1; fi
 n_run=$(grep -c ' \(some\|none\)$' "$W/run.txt")
 if [ "$n_run" != "$(wc -l < "$W/ok.txt")" ]; then
     echo "elab_parity_run.lean answered for $n_run of $(wc -l < "$W/ok.txt") programs:"; tail -5 "$W/run.txt"; exit 1; fi
@@ -121,15 +140,22 @@ for k in $(awk '$2 == "some" {print $1}' "$W/run.txt" | sed 's|.*/||; s|\.json$|
         echo "  | none => \"none\")"
         [ "$KERNEL" = 1 ] && echo "theorem same : C.Elab.elabIR ir = some (T.P, T.entry) := C.Elab.elabIs_sound _ _ _ (by decide +kernel)"
     } > "$f"
-    out=$(cd "$ROOT/formal" && lake env lean "$f" 2>&1)
+    out=$(cd "$ROOT/formal" && lake env lean "$f" 2>&1); lrc=$?
     v=$(printf '%s\n' "$out" | head -1)
-    if [ "$v" = match ] && [ "$(printf '%s\n' "$out" | wc -l)" = 1 ]; then echo "match $p" >> "$W/verdicts.txt"
+    # (a match is Lean's exit status 0 too: the kernel check completed)
+    if [ "$v" = match ] && [ "$lrc" = 0 ] && [ "$(printf '%s\n' "$out" | wc -l)" = 1 ]; then echo "match $p" >> "$W/verdicts.txt"
     elif [ "$v" = DIFF ]; then { echo "DIFF $p"; printf '%s\n' "$out" | tail -n +2; echo "translator:"; grep 'body :=' "$W/r/$k.tl"; } >> "$W/verdicts.txt"
     else { echo "ERROR $p"; printf '%s\n' "$out" | head -20; } >> "$W/verdicts.txt"; fi
 done
 t3=$(date +%s)
 
 grep -v '^match ' "$W/verdicts.txt"
+# every expected program that is in the list must match
+missing=0
+while IFS= read -r e; do
+    grep -qFx -- "$e" "$W/progs.txt" || continue
+    if ! grep -qFx -- "match $e" "$W/verdicts.txt"; then echo "EXPECTED a match: $e"; missing=$((missing + 1)); fi
+done < "$W/expect.txt"
 count() { grep -c "^$1 " "$W/verdicts.txt"; }
 echo "programs:                     $nprog"
 echo "nurlc failed:                 $(ls "$W/r" | grep -c '\.nocore$')"
@@ -142,6 +168,7 @@ echo "    DIFF:                     $(count DIFF)"
 echo "    LAX (translator refuses): $(count LAX)"
 echo "    errors:                   $(count ERROR)"
 echo "  elabIR none:                $(grep -c ' none$' "$W/run.txt")"
-echo "matched: $(awk '$1 == "match" {print $2}' "$W/verdicts.txt" | tr '\n' ' ')"
+echo "expected matches missing:     $missing"
+echo "matched: $(sed -n 's/^match //p' "$W/verdicts.txt" | tr '\n' ' ')"
 echo "time, $JOBS jobs: IR and terms $((t1 - t0)) s, elabIR $((t2 - t1)) s, comparisons $((t3 - t2)) s"
-[ "$(count DIFF)" = 0 ] && [ "$(count LAX)" = 0 ] && [ "$(count ERROR)" = 0 ] && [ "$(ls "$W/r" | grep -c '\.nowords$')" = 0 ]
+[ "$missing" = 0 ] && [ "$(count DIFF)" = 0 ] && [ "$(count LAX)" = 0 ] && [ "$(count ERROR)" = 0 ] && [ "$(ls "$W/r" | grep -c '\.nowords$')" = 0 ]
