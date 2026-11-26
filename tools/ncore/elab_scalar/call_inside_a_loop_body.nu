@@ -2,6 +2,7 @@
     : i b * a 2
     ^ b
 }
+
 @ main → i {
     : ~ i t 0
     : ~ i q 0
