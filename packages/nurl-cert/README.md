@@ -31,7 +31,7 @@ accepted
   IR, so the translator is not trusted for it. Certify tries it for an
   accepted program whose term `elabIR` could build (numbers, raw text,
   Strings, Vecs of numbers and of raw strings, views, slices of Vecs of
-  numbers, `foreach`);
+  numbers, `foreach` over a Vec of numbers);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
 - `manifest.json`, with:
