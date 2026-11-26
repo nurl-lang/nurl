@@ -53,15 +53,18 @@ command -v lake > /dev/null || export PATH="$HOME/.elan/bin:$PATH"
 # nurlc fail on one, is a failure, not one more program outside the subset.)
 EXPECT_CERTIFY="int_recursion_early_return loop_with_continue_and_break while_loop_summing"
 
-rm -f "$W/progs.txt" "$W/expect.txt"
+# (the list is copied aside first: it may be the work directory's own
+# progs.txt from an earlier run)
+rm -f "$W/progs.new" "$W/expect.txt"
 if [ $# -ge 1 ]; then
-    cp "$1" "$W/progs.txt" || { echo "elab_parity.sh: can not read the program list $1"; exit 1; }
+    cp "$1" "$W/progs.new" || { echo "elab_parity.sh: can not read the program list $1"; exit 1; }
 else
-    { ls tools/ncore/certify/*.nu && find tools/fuzz/holes -name '*.nu' | sort && ls tools/ncore/elab_scalar/*.nu; } > "$W/progs.txt" \
+    { ls tools/ncore/certify/*.nu && find tools/fuzz/holes -name '*.nu' | sort && ls tools/ncore/elab_scalar/*.nu; } > "$W/progs.new" \
         || { echo "elab_parity.sh: can not list the programs"; exit 1; }
 fi
+mv -f "$W/progs.new" "$W/progs.txt" || exit 1
 { ls tools/ncore/elab_scalar/*.nu; for c in $EXPECT_CERTIFY; do echo "tools/ncore/certify/$c.nu"; done; } > "$W/expect.txt"
-nprog=$(wc -l < "$W/progs.txt")
+nprog=$(grep -c '' "$W/progs.txt")       # records: a last one without its newline counts
 [ "$nprog" -gt 0 ] || { echo "elab_parity.sh: no programs"; exit 1; }
 
 # 0. Per program k: k.core, k.words (the Lean literal), k.json, k.tl and
@@ -122,7 +125,8 @@ def fn (f : Fn) : String :=
 end Show
 EOF
 : > "$W/verdicts.txt"
-for k in $(awk '$2 == "some" {print $1}' "$W/run.txt" | sed 's|.*/||; s|\.json$||'); do
+# (the status is the line's last word; the path before it may hold spaces)
+for k in $(sed -n 's|^.*/\([0-9][0-9]*\)\.json some$|\1|p' "$W/run.txt"); do
     p=$(cat "$W/r/$k.path")
     if [ "$(cat "$W/r/$k.rc")" != 0 ]; then
         { echo "LAX $p"; head -2 "$W/r/$k.tl"; } >> "$W/verdicts.txt"; continue; fi
