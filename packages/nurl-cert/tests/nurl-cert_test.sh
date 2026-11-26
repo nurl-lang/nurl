@@ -305,6 +305,12 @@ expect_only_fail "Elab.lean's theorem edited, its hash updated" "Elab.lean is Pr
 efresh; rm -f "$TMP/pwned"; printf '\n#eval IO.FS.writeFile "%s" "ran"\n' "$TMP/pwned" >> "$P/w/Elab.lean"; rehash elab_lean "$P/w/Elab.lean"
 expect_fail "code put in Elab.lean is refused" "Lean proves Cert.elab (Elab.lean) on the standard axioms: not run"
 if [ -e "$TMP/pwned" ]; then bad "the #eval planted in Elab.lean never ran"; else ok "the #eval planted in Elab.lean never ran"; fi
+# A NUL byte, and what follows it, read to the end: the files are checked
+# as the bytes Lean reads, not as the C string up to the first NUL.
+efresh; printf '\000\377\n' >> "$P/w/Program.core"; rehash core_ir "$P/w/Program.core"
+expect_fail "a NUL and a byte that is not UTF-8 after Program.core's text, its hash updated" "Elab.lean is Program.core's words and the template"
+efresh; printf '\000\naxiom cheat : False\n' >> "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
+expect_fail "a NUL and an axiom after Program.lean's term, its hash updated: the grammar sees it, Lean never runs" "Program.lean only defines the program"
 # Downgraded: Elab.lean removed and its hash dropped. With the translation
 # row the translator's again it is the weaker bundle, and verifies as one;
 # with the kernel's row kept, it does not.
@@ -360,6 +366,10 @@ for b in '\377' '\300\257' '\355\240\200' '\364\220\200\200' '\303'; do
     if "$C" words "$TMP/y.core" > /dev/null 2>&1; then bad "a core IR that is not UTF-8 ($b) has no words"
     else ok "a core IR that is not UTF-8 ($b) has no words"; fi
 done
+# The bytes after a NUL are read too: `ret c`, NUL, 0xff.
+printf 'ret c\000\377\n' > "$TMP/y.core"
+if "$C" words "$TMP/y.core" > /dev/null 2>&1; then bad "a core IR with a NUL and a byte that is not UTF-8 after it has no words"
+else ok "a core IR with a NUL and a byte that is not UTF-8 after it has no words"; fi
 
 echo "== 3. the fast profile"
 "$C" certify "$P/prog.nu" "${CA[@]}" --profile fast --out "$P/fast.cert" > "$TMP/f.out" 2>&1

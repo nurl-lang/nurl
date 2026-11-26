@@ -26,9 +26,12 @@ accepted
 - `Program.lean`, the program as a term of the formal model;
 - `Claims.lean`, the theorems;
 - `Program.core`, the compiler's core IR;
-- for a program in the scalar subset, `Elab.lean`: the proof that the
-  term is the one the Lean kernel builds from the core IR (`Cert.elab`),
-  so the translator is not trusted for it;
+- `Elab.lean`, only when Lean proves `Cert.elab` on the standard axioms:
+  the proof that the term is the one the Lean kernel builds from the core
+  IR, so the translator is not trusted for it. Certify tries it for an
+  accepted program whose term `elabIR` could build (the scalar subset);
+  when the proof fails, there is no Elab.lean and the bundle keeps the
+  translator's ledger row;
 - `manifest.json`, with:
   - each claim's status, read off `#print axioms`;
   - the program's functions;

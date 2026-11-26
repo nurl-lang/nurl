@@ -116,12 +116,15 @@ $ `util.nu`
 // Whether `core` is well-formed UTF-8 (RFC 3629: no overlong form, no
 // surrogate, nothing past U+10FFFF). Lean reads each such sequence back as
 // the same bytes; any other byte it reads as U+FFFD.
-@ cert_words_utf8 s core → b {
-    : ( Slice u ) t ( slice_of_str core )
+// (`core` read to its own length; a NUL byte is refused: no core IR holds
+// one, and the words are made from the text up to the first NUL)
+@ cert_words_utf8 String core → b {
+    : ( Slice u ) t ( string_bytes core )
     : i n ( slice_len [u] t )
     : ~ i k 0
     ~ < k n {
         : i c ( slice_byte t k )
+        ? == c 0 { ^ F } {}
         ? < c 128 { = k + k 1 } {
             // the continuation bytes a lead byte takes, and the range of the first
             : ~ i len 0

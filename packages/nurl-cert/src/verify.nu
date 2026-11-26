@@ -96,7 +96,7 @@ $ `certify.nu`
     // A threaded program's claims are A3's (one more, M.race): it is
     // threaded when its Program.lean, held to the grammar, names spawns.
     : String ptext0 ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → ( string_new ) }
-    : ShapeRes sh0 ( cert_shape ( string_data ptext0 ) )
+    : ShapeRes sh0 ( cert_shape ptext0 )
     : b threads & . sh0 ok . sh0 threads
     // The bundle's term is the kernel's (Elab.lean, Cert.elab) when the
     // manifest records Elab.lean's hash; the translation ledger row then
@@ -170,7 +170,7 @@ $ `certify.nu`
         ( __vf_hash t m bundle `Program.lean` `program_lean` )
         ( __vf_hash t m bundle `Claims.lean` `claims_lean` )
         : String ptext ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → ( string_new ) }
-        : ShapeRes sh ( cert_shape ( string_data ptext ) )
+        : ShapeRes sh ( cert_shape ptext )
         ( __vf_check t . sh ok `Program.lean only defines the program` ( string_data . sh why ) )
         : i slots ?? ( json_get m `program.slots` ) { T j → ( json_as_int j ) F → -1 }
         ( __vf_check t == slots . sh nv `the claims are stated over the program's slots` `` )
@@ -181,7 +181,7 @@ $ `certify.nu`
             ( __vf_hash t m bundle `Elab.lean` `elab_lean` )
             : String core_text ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
             : String ehave ?? ( nc_read ( string_data elab_path ) ) { T x → x F → ( string_new ) }
-            : b esame ?? ( cert_elab_lean ( string_data core_text ) ) { T w → ( string_eq w ehave ) F → F }
+            : b esame ?? ( cert_elab_lean core_text ) { T w → ( string_eq w ehave ) F → F }
             ( __vf_check t esame `Elab.lean is Program.core's words and the template, byte for byte`
             `its words, statement or proof are not what nurl-cert makes of Program.core` )
         } {}

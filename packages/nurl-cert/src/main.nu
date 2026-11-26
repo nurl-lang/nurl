@@ -146,7 +146,7 @@ $ `words.nu`
         }
     }
     // (a byte that is not UTF-8 would not read back as itself in Lean)
-    ? ! ( cert_words_utf8 ( string_data text ) ) {
+    ? ! ( cert_words_utf8 text ) {
         ( nc_eprint2 `nurl-cert: the core IR is not UTF-8: ` ( string_data target ) )
         ^ 1
     } {}

@@ -171,8 +171,10 @@ $ `stdlib/core/slice.nu`
 }
 
 // The check. `text` is the whole of Program.lean.
-@ cert_shape s text → ShapeRes {
-    : ( Slice u ) t ( slice_of_str text )
+// (`text` as a String, read to its own length: a NUL byte is a byte the
+// grammar refuses, not the end of the file Lean goes on reading)
+@ cert_shape String text → ShapeRes {
+    : ( Slice u ) t ( string_bytes text )
     : i n ( slice_len [u] t )
     : ~ i a 0
     : ~ i line 1
