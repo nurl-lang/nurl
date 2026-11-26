@@ -358,42 +358,55 @@ if command -v python3 > /dev/null; then
         # whose sixth starts with `stdlib/`, closed by `endfn`) when Lean's
         # reader reads its records (the `fn` line's fourth word a number,
         # each `v` line's id, kind (at most 3) and flags numbers and a sixth
-        # word); else its `fn`, `v` and `endfn` lines kept
+        # word); else its `fn`, `v` and `endfn` lines kept; and a `sum` line
+        # outside every function (more `endfn` than `fn` lines above it, an
+        # `endfn` with none open not counted) left out when its name (its
+        # second word) is none of the words of the kept lines but those
+        # `sum` lines (one with no name is kept). Each
+        # word printed as its number: `nat_lit 0x1`, then its bytes, last to
+        # first
         python3 - "$TMP/$k.wcore" "$TMP/$k.words" <<'EOF2' || wbad=$((wbad + 1))
-import json, sys
-t = open(sys.argv[1]).read()
-rows = [l.split("\t") if l.startswith(("fn\t", "v\t", "ty\t", "sum\t")) else l.split()
-        for l in t.splitlines() if l.strip()]
-nat = lambda w: w != "" and all("0" <= c <= "9" for c in w)
+import re, sys
+t = open(sys.argv[1], "rb").read()
+rows = [l.split(b"\t") if l.startswith((b"fn\t", b"v\t", b"ty\t", b"sum\t")) else l.split()
+        for l in t.split(b"\n") if l.strip()]
+nat = lambda w: w != b"" and all(48 <= c <= 57 for c in w)
 var_ok = lambda r: len(r) > 5 and nat(r[1]) and nat(r[2]) and int(r[2]) <= 3 and nat(r[4])
-records = lambda fn: [r for r in fn if r and r[0] in ("fn", "v", "endfn")]
-kept, in_fn, lib = [], False, None
+records = lambda fn: [(r, False) for r in fn if r and r[0] in (b"fn", b"v", b"endfn")]
+kept, in_fn, lib, depth = [], False, None, 0
 for r in rows:
     w0 = r[0] if r else None
+    top = depth == 0
+    if w0 == b"fn": depth += 1
+    elif w0 == b"endfn" and depth > 0: depth -= 1
     if lib is not None:
-        if w0 == "fn":
+        if w0 == b"fn":
             kept += records(lib); lib = None
         else:
             lib.append(r)
-            if w0 == "endfn":
-                ok = nat(lib[0][3]) and all(var_ok(x) for x in lib if x[0] == "v")
+            if w0 == b"endfn":
+                ok = nat(lib[0][3]) and all(var_ok(x) for x in lib if x[0] == b"v")
                 if not ok: kept += records(lib)
                 lib, in_fn = None, False
             continue
-    if w0 == "fn":
-        if not in_fn and len(r) > 5 and r[5].startswith("stdlib/"):
+    if w0 == b"fn":
+        if not in_fn and len(r) > 5 and r[5].startswith(b"stdlib/"):
             lib, in_fn = [r], True
             continue
         in_fn = True
-    elif w0 == "endfn":
+    elif w0 == b"endfn":
         in_fn = False
-    kept.append(r)
+    kept.append((r, top))
 if lib is not None: kept += records(lib)
-src = open(sys.argv[2]).read()
-sys.exit(0 if json.loads(src[src.index(":= [") + 3:]) == kept else 1)
+tsum = lambda r, top: top and r[0] == b"sum"
+seen = {w for r, top in kept if not tsum(r, top) for w in r}
+kept = [r for r, top in kept if not tsum(r, top) or len(r) < 2 or r[1] in seen]
+num = lambda w: "nat_lit 0x1" + w[::-1].hex()
+want = "def ir : C.Elab.IR := [" + ",".join("\n  [" + ", ".join(num(w) for w in r) + "]" for r in kept) + "]\n"
+sys.exit(0 if open(sys.argv[2]).read() == want else 1)
 EOF2
     done
-    [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split, the library's functions left out" || bad "words: $wbad of $nw differ from the split"
+    [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split as numbers, the library's functions and the sum lines no other word names left out" || bad "words: $wbad of $nw differ from the split"
 else
     echo "  SKIP  words parity: no python3"
 fi

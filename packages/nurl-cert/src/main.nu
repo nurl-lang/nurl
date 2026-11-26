@@ -145,9 +145,9 @@ $ `words.nu`
             ^ 1
         }
     }
-    // (a byte that is not UTF-8 would not read back as itself in Lean)
-    ? ! ( cert_words_utf8 text ) {
-        ( nc_eprint2 `nurl-cert: the core IR is not UTF-8: ` ( string_data target ) )
+    // (the words are made from the text up to its first NUL)
+    ? ! ( cert_words_ok text ) {
+        ( nc_eprint2 `nurl-cert: the core IR holds a NUL byte: ` ( string_data target ) )
         ^ 1
     } {}
     : String w ( cert_words ( string_data text ) )

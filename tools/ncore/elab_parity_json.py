@@ -2,19 +2,26 @@
 """elab_parity_json.py: `nurl-cert words`'s Lean literal (`def ir : C.Elab.IR
 := [ … ]`) as JSON, for tools/ncore/elab_parity.sh.
 
-The literal is parsed, not repaired: a list of lines, each a list of string
-words, with commas exactly between elements (none trailing), whitespace
-only between tokens, and nothing after the closing bracket but a newline.
-In a word, only the escapes words.nu writes (`\\"`, `\\\\`, `\\xHH`) are
-rewritten; any other escape, a control character, or any other shape is
-refused with exit status 1. A literal this refuses is never classified, so
-it can not be read differently from the Lean literal the kernel stage
-reads."""
+The literal is parsed, not repaired: a list of lines, each a list of words,
+each word `nat_lit 0x1` and then hex digits in pairs (the word's bytes, last
+to first: words.nu's form), with commas exactly between elements (none
+trailing), whitespace only between tokens, and nothing after the closing
+bracket but a newline. Each word is written to the JSON as its number. Any
+other shape is refused with exit status 1. A literal this refuses is never
+classified, so it can not be read differently from the Lean literal the
+kernel stage reads."""
 import json
 import sys
 
+# A word is a number of 8 bits a byte: a 2000-byte word has ~4800 decimal
+# digits, past CPython's default limit (4300) for writing one in decimal,
+# which json.dump does.
+if hasattr(sys, "set_int_max_str_digits"):
+    sys.set_int_max_str_digits(0)
+
 HEAD = "def ir : C.Elab.IR := "
-HEX = "0123456789abcdefABCDEF"
+WORD = "nat_lit 0x1"
+HEX = "0123456789abcdef"
 
 
 class Bad(Exception):
@@ -56,40 +63,25 @@ class P:
             return out
 
     def word(self):
-        self.eat('"')
-        t, w = self.t, []
-        while True:
-            if self.i >= len(t):
-                raise Bad("a word not closed")
-            c = t[self.i]
-            if c == '"':
-                self.i += 1
-                return "".join(w)
-            if c == "\\":
-                e = t[self.i + 1:self.i + 2]
-                if e in ('"', "\\"):
-                    w.append(e)
-                    self.i += 2
-                elif e == "x":
-                    h = t[self.i + 2:self.i + 4]
-                    if len(h) != 2 or any(x not in HEX for x in h):
-                        raise Bad("a \\x escape without two hex digits at offset %d" % self.i)
-                    w.append(chr(int(h, 16)))
-                    self.i += 4
-                else:
-                    raise Bad("an escape words.nu does not write: \\" + e)
-            elif ord(c) < 0x20:
-                raise Bad("a control character in a word at offset %d" % self.i)
-            else:
-                w.append(c)
-                self.i += 1
+        self.ws()
+        t = self.t
+        if not t.startswith(WORD, self.i):
+            raise Bad("expected a word (%r) at offset %d" % (WORD, self.i))
+        self.i += len(WORD)
+        a = self.i
+        while self.i < len(t) and t[self.i] in HEX:
+            self.i += 1
+        h = t[a:self.i]
+        if len(h) % 2:
+            raise Bad("a word with an odd number of hex digits at offset %d" % a)
+        return int("1" + h, 16)
 
     def line(self):
         return self.seq(self.word)
 
 
 def main(path):
-    t = open(path, encoding="utf-8").read()
+    t = open(path, encoding="ascii").read()
     if not t.startswith(HEAD):
         raise Bad("not a words literal")
     p = P(t)

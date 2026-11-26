@@ -108,10 +108,12 @@ want_elab=$(printf '%s\n' cursor_over_a_vec int_recursion_early_return joins_eac
     owners_rotated_in_a_loop raw_string_given_to_a_sink raw_strings_literal_and_fresh \
     temporary_dropped_in_an_if_arm vec_elements_read_between_pushes vec_push_len while_loop_summing \
     view_taken_after_the_pushes vec_cleared_then_pushed vec_reserved_then_pushed foreach_summing_a_vec \
-    raw_strings_held_in_a_vec \
+    raw_strings_held_in_a_vec clo_called_in_a_loop clo_changes_a_captured_vec clo_no_captures_two_arguments \
+    clo_number_capture_called clo_returned_owning_a_vec_capture clo_returned_with_a_number_capture \
+    clo_string_captured_and_read_after clo_two_captures_passed_to_a_function \
     | sort | tr '\n' ' ')
-if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 18 accepted certify programs in the subset have Elab.lean (Cert.elab)"
-else bad "exactly the 18 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
+if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 26 accepted certify programs in the subset have Elab.lean (Cert.elab)"
+else bad "exactly the 26 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
 if grep -qx "ok struct_fields_read accepted (translator)" "$TMP/progs.txt"; then ok "struct_fields_read (outside the subset): no Elab.lean, and it verifies"
 else bad "struct_fields_read (outside the subset): no Elab.lean, and it verifies"; fi
 
@@ -183,7 +185,11 @@ for n in moved_on_one_branch_then_read_refused owner_moved_in_a_loop_without_ret
     view_kept_across_a_realloc_refused view_kept_across_pushes_in_a_loop_refused \
     view_kept_across_a_clear_refused view_kept_across_a_reserve_refused \
     string_copied_from_a_view_of_a_freed_string_refused string_pushed_its_own_view_refused \
-    vec_pushed_while_iterated_refused raw_string_held_in_a_vec_past_its_source_refused; do
+    vec_pushed_while_iterated_refused raw_string_held_in_a_vec_past_its_source_refused \
+    clo_called_on_a_moved_vec_refused clo_called_with_a_moved_vec_refused \
+    clo_changes_a_captured_vec_under_a_slice_refused \
+    clo_returned_over_a_parameter_then_called_after_its_free_refused \
+    clo_string_capture_rebound_then_called_refused; do
     pl="$TMP/progs/$n/$n.cert/Program.lean"
     c=$(python3 - "$pl" "$ctors" <<'EOF2'
 import re, sys
@@ -194,7 +200,7 @@ EOF2
 )
     if [ "$c" = yes ] && grep -qx "ok $n refused" "$TMP/progs.txt"; then nref=$((nref + 1)); else badref="$badref $n"; fi
 done
-[ "$nref" = 14 ] && ok "the 14 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
+[ "$nref" = 19 ] && ok "the 19 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
     || bad "the refused programs in the subset are refused:$badref"
 R="$TMP/rv"; rm -rf "$R"; cp -r "$TMP/progs/vec_push_len/vec_push_len.cert" "$R"
 cp "$TMP/progs/use_after_move_refused/use_after_move_refused.cert/Program.lean" "$R/Program.lean"
@@ -424,8 +430,10 @@ cp "$P/w2.cert/Program.lean" "$P/w/Program.lean"; rehash program_lean "$P/w/Prog
 expect_only_fail "another scalar program's term, its hash updated: plain verify fails on Cert.elab" "Lean proves Cert.elab"
 efresh; rm "$P/w/Elab.lean"
 expect_fail "Elab.lean deleted, the manifest kept" "Elab.lean is there"
-efresh; sed -i '0,/"scope"/s//"scope", "x"/' "$P/w/Elab.lean"; rehash elab_lean "$P/w/Elab.lean"
-grep -q '"scope", "x"' "$P/w/Elab.lean" || bad "the edit of Elab.lean's words applied"
+# (a word put after the first `scope`: its number is `scope`'s bytes, last
+# to first, after `nat_lit 0x1`; `x` is 0x178)
+efresh; sed -i '0,/nat_lit 0x165706f6373\]/s//nat_lit 0x165706f6373, nat_lit 0x178]/' "$P/w/Elab.lean"; rehash elab_lean "$P/w/Elab.lean"
+grep -q 'nat_lit 0x165706f6373, nat_lit 0x178' "$P/w/Elab.lean" || bad "the edit of Elab.lean's words applied"
 expect_only_fail "Elab.lean's words edited, its hash updated" "Elab.lean is Program.core's words and the template"
 efresh; sed -i 's/= some (P, entry) :=/= some (P, entry) ∨ True :=/' "$P/w/Elab.lean"; rehash elab_lean "$P/w/Elab.lean"
 grep -q '∨ True' "$P/w/Elab.lean" || bad "the Elab.lean edit applied"
@@ -463,16 +471,19 @@ else bad "downgraded honestly (the translator's row again): verifies as the weak
 fresh; cp "$E/Elab.lean" "$P/w/Elab.lean"
 expect_fail "Elab.lean beside a manifest that records none" "no Elab.lean"
 
-echo "== 2c. every word of a core IR is a string literal"
+echo "== 2c. every word of a core IR decodes to its bytes"
 # Quotes, backslashes, comment openers and closers, a would-be declaration,
-# control characters, a CR, a header's empty word, a line of tabs only, and
-# non-ASCII UTF-8 (two, three and four bytes). Lean must read every word
-# back as its bytes, and declare nothing but `ir`.
+# control characters, a CR, a header's empty word, a line of tabs only,
+# non-ASCII UTF-8 (two, three and four bytes), and bytes that are not
+# UTF-8. Each word is a number (`nat_lit 0x1`, then its bytes last to
+# first); Lean must read every word back as its bytes (`C.Elab.wordOf`),
+# and declare nothing but `ir`.
 printf 'fn\tq"uo\\te\ti64\t0\t1\t/d i r/\303\244\342\202\254\360\237\230\200.nu\t0\t\n' > "$TMP/x.core"
 printf 'let 0 -/ /- "] axiom cheat : False -- \\x41 \\ "" \\"\n' >> "$TMP/x.core"
 printf 'eval \001\037\177 end" /-!\n\t\t\n  \n--\tret c\r\n' >> "$TMP/x.core"
+printf 'eval \377 \300\257 \355\240\200 \364\220\200\200 \303\n' >> "$TMP/x.core"
 if "$C" words "$TMP/x.core" > "$TMP/x.words" 2> "$TMP/x.err"; then
-    { echo "import C.Elab"; cat "$TMP/x.words"; echo; echo '#eval IO.println (toString (ir.map (·.map C.Elab.bytesOf)))'; echo '#print axioms ir'; } > "$TMP/x.lean"
+    { echo "import C.Elab"; cat "$TMP/x.words"; echo; echo '#eval IO.println (toString (ir.map (·.map C.Elab.wordOf)))'; echo '#print axioms ir'; } > "$TMP/x.lean"
     want=$(python3 - "$TMP/x.core" <<'EOF2'
 import sys
 t = open(sys.argv[1], "rb").read()
@@ -485,19 +496,29 @@ EOF2
     have=$(cd "$ROOT/formal" && lake env lean "$TMP/x.lean" 2>&1); lrc=$?
     if [ "$lrc" = 0 ] && [ "$(printf '%s\n' "$have" | head -1)" = "$want" ] \
         && [ "$(printf '%s\n' "$have" | sed -n 2p)" = "'ir' does not depend on any axioms" ] && [ "$(printf '%s\n' "$have" | wc -l)" = 2 ]; then
-        ok "every word is a string literal Lean reads back as its bytes"
-    else bad "every word is a string literal Lean reads back as its bytes (lean rc $lrc)"; printf '%s\n%s\n' "$want" "$have" | head -5 | cut -c1-300 | sed 's/^/        /'; fi
+        ok "every word is a number Lean reads back as its bytes (non-UTF-8 bytes included)"
+    else bad "every word is a number Lean reads back as its bytes (lean rc $lrc)"; printf '%s\n%s\n' "$want" "$have" | head -5 | cut -c1-300 | sed 's/^/        /'; fi
 else bad "nurl-cert words reads the crafted core IR"; cat "$TMP/x.err"; fi
-# A byte Lean would read as U+FFFD: no words (and so no Elab.lean).
-for b in '\377' '\300\257' '\355\240\200' '\364\220\200\200' '\303'; do
-    printf "fn\tmain\ti64\t0\t1\ta$b.nu\t0\t\n" > "$TMP/y.core"
-    if "$C" words "$TMP/y.core" > /dev/null 2>&1; then bad "a core IR that is not UTF-8 ($b) has no words"
-    else ok "a core IR that is not UTF-8 ($b) has no words"; fi
-done
-# The bytes after a NUL are read too: `ret c`, NUL, 0xff.
+# A long word (2000 bytes: its number has ~4800 decimal digits) reaches the
+# parity test's JSON whole, from the words and from every line alike.
+printf 'eval %s\n' "$(head -c 2000 /dev/zero | tr '\0' 'x')" > "$TMP/long.core"
+if "$C" words "$TMP/long.core" > "$TMP/long.words" 2> /dev/null \
+    && python3 "$ROOT/tools/ncore/elab_parity_json.py" "$TMP/long.words" > "$TMP/long.json" \
+    && python3 "$ROOT/tools/ncore/elab_parity_full.py" "$TMP/long.core" > "$TMP/long.full" \
+    && python3 - "$TMP/long.json" "$TMP/long.full" <<'EOF2'
+import json, sys
+hasattr(sys, "set_int_max_str_digits") and sys.set_int_max_str_digits(0)
+a, b = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+w = b"x" * 2000
+sys.exit(0 if a == b == [[256 ** 4 + int.from_bytes(b"eval"[::-1], "big"), 256 ** 2000 + int.from_bytes(w, "big")]] else 1)
+EOF2
+then ok "a 2000-byte word reaches the parity JSON whole"
+else bad "a 2000-byte word reaches the parity JSON whole"; fi
+# The words are made from the text up to its first NUL: a core IR with one
+# has no words (`ret c`, NUL, 0xff).
 printf 'ret c\000\377\n' > "$TMP/y.core"
-if "$C" words "$TMP/y.core" > /dev/null 2>&1; then bad "a core IR with a NUL and a byte that is not UTF-8 after it has no words"
-else ok "a core IR with a NUL and a byte that is not UTF-8 after it has no words"; fi
+if "$C" words "$TMP/y.core" > /dev/null 2>&1; then bad "a core IR with a NUL has no words"
+else ok "a core IR with a NUL has no words"; fi
 
 echo "== 2d. a library function is left out of the words only when Lean's reader reads it"
 # A library function (file under stdlib/) and main. The words leave the
@@ -510,11 +531,8 @@ lib_case() {  # name, want (true/false), then the core IR's lines
     local n="$1" want="$2"; shift 2
     printf '%s\n' "$@" > "$TMP/l_$n.core"
     if "$C" words "$TMP/l_$n.core" > "$TMP/l_$n.words" 2> /dev/null; then
-        # every line, split as the words are (the cases are plain ASCII)
-        full=$(python3 -c 'import json, re, sys
-rows = [l.split("\t") if l.startswith(("fn\t", "v\t", "ty\t", "sum\t")) else [w for w in re.split(r"[ \t]", l) if w]
-        for l in open(sys.argv[1]).read().split("\n") if l.strip(" ")]
-print(json.dumps(rows))' "$TMP/l_$n.core")
+        # every line, split as the words are, each word its number
+        full=$(python3 "$ROOT/tools/ncore/elab_parity_full.py" "$TMP/l_$n.core")
         { echo "namespace L_$n"; cat "$TMP/l_$n.words"; echo "def full : C.Elab.IR := $full"
           echo "#eval IO.println s!\"$n {(C.Elab.fnsOf ir).isSome} {(C.Elab.fnsOf full).isSome} $want\""; echo "end L_$n"; } >> "$TMP/l.lean"
     else bad "nurl-cert words reads the library case $n"; fi
@@ -535,13 +553,43 @@ lib_case np_empty false "fn${T}libf${T}i64${T}${T}1${T}stdlib/core/x.nu${T}0${T}
 lib_case nested false "$LF" "$LV" "fn${T}q${T}i64${T}0${T}1${T}q.nu${T}0${T}" "endfn" "${MAIN[@]}"
 lib_case in_main false "${MAIN[0]}" "$LF" "$LV" "endfn" "ret c" "endfn"
 lib_case unclosed false "${MAIN[@]}" "$LF" "$LV" "ret v0"
-if grep -q '"libf"' "$TMP/l_clean.words"; then bad "a library function the reader reads is left out of the words"
+if grep -q "$(python3 -c 'print("0x1" + b"libf"[::-1].hex())')" "$TMP/l_clean.words"; then bad "a library function the reader reads is left out of the words"
 else ok "a library function the reader reads is left out of the words"; fi
 have=$(cd "$ROOT/formal" && lake env lean "$TMP/l.lean" 2>&1); lrc=$?
 nl=$(printf '%s\n' "$have" | awk 'NF == 4 && $2 == $3 && $3 == $4' | wc -l)
 if [ "$lrc" = 0 ] && [ "$nl" = 11 ] && [ "$(printf '%s\n' "$have" | wc -l)" = 11 ]; then
     ok "the reader accepts the words of each library case as it accepts its every line (11 cases)"
 else bad "the reader accepts the words of each library case as it accepts its every line (lean rc $lrc)"; printf '%s\n' "$have" | head -20 | sed 's/^/        /'; fi
+
+echo "== 2e. a sum line is left out of the words only outside every function"
+# A top-level `sum` line no other word names is left out (elabIR looks a
+# summary up only by a function's, a callee's or a let-called function's
+# name); one inside a function is a statement of its body, kept, so that
+# elabIR refuses the words as it refuses every line. Each case: elabIR
+# answers on the words as on every line, the answer the case expects, and
+# the line is left out (or kept) as the case says.
+sum_case() {  # name, want (true/false), out (left out: true/false), then the core IR's lines
+    local n="$1" want="$2" out="$3"; shift 3
+    printf '%s\n' "$@" > "$TMP/s_$n.core"
+    if "$C" words "$TMP/s_$n.core" > "$TMP/s_$n.words" 2> /dev/null; then
+        full=$(python3 "$ROOT/tools/ncore/elab_parity_full.py" "$TMP/s_$n.core")
+        { echo "namespace S_$n"; cat "$TMP/s_$n.words"; echo "def full : C.Elab.IR := $full"
+          echo "#eval IO.println s!\"$n {(C.Elab.elabIR ir).isSome} {(C.Elab.elabIR full).isSome} $want\""; echo "end S_$n"; } >> "$TMP/s.lean"
+        if grep -q "$(python3 -c 'print("0x1" + b"unused"[::-1].hex())')" "$TMP/s_$n.words"; then o=false; else o=true; fi
+        [ "$o" = "$out" ] && ok "sum case $n: the line is $( [ "$out" = true ] && echo left out || echo kept )" \
+            || bad "sum case $n: the line is $( [ "$out" = true ] && echo left out || echo kept )"
+    else bad "nurl-cert words reads the sum case $n"; fi
+}
+echo "import C.Elab" > "$TMP/s.lean"
+sum_case top_unused true true "${MAIN[@]}" "sum${T}unused${T}0"
+sum_case top_before_main true true "sum${T}unused${T}0" "${MAIN[@]}"
+sum_case in_main_stmt false false "${MAIN[0]}" "sum unused 0" "ret c" "endfn"
+sum_case in_main_header false false "${MAIN[0]}" "sum${T}unused${T}0" "ret c" "endfn"
+have=$(cd "$ROOT/formal" && lake env lean "$TMP/s.lean" 2>&1); lrc=$?
+nl=$(printf '%s\n' "$have" | awk 'NF == 4 && $2 == $3 && $3 == $4' | wc -l)
+if [ "$lrc" = 0 ] && [ "$nl" = 4 ] && [ "$(printf '%s\n' "$have" | wc -l)" = 4 ]; then
+    ok "elabIR answers on the words of each sum case as on its every line (4 cases)"
+else bad "elabIR answers on the words of each sum case as on its every line (lean rc $lrc)"; printf '%s\n' "$have" | head -20 | sed 's/^/        /'; fi
 
 echo "== 3. the fast profile"
 "$C" certify "$P/prog.nu" "${CA[@]}" --profile fast --out "$P/fast.cert" > "$TMP/f.out" 2>&1

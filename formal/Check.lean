@@ -1070,6 +1070,12 @@ import D
 #print axioms C.Elab.elabIs_sound
 #print axioms C.Elab.editBeq_sound
 #print axioms C.Elab.elab_while
+-- AGORA-1029 step 6: closures (stmtBeq_sound covers `callc`)
+#print axioms C.Elab.stmtBeq_sound
+#print axioms C.Elab.elab_clo
+-- AGORA-1029: the words as numbers, read back into their bytes
+#print axioms C.Elab.wordOf_encB
+#print axioms C.Elab.elabLIs_sound
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided
