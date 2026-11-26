@@ -1,7 +1,7 @@
 import C.A2Prog
 
 /-!
-# The core IR as words, read in the kernel (AGORA-1029, steps 1, 2 and 4)
+# The core IR as words, read in the kernel (AGORA-1029, steps 1, 2, 4 and 5)
 
 docs/dev/TRANSLATION_TRUST.md route (b): a certificate holds nurlc's core IR
 as plain Lean data, one entry per line and each line its words (header
@@ -9,7 +9,8 @@ lines `fn`, `v`, `ty` and `sum` split at tabs, statements at spaces), and
 Lean builds the calculus term from it, so the translation is no longer a
 trusted step. This file is the data and its reader (step 1), and the term
 of a program of the subset built from it (`elabIR`: numbers, step 2;
-buffers of numbers, step 4).
+buffers of numbers, step 4; views, slices and changes through a borrow,
+step 5).
 
 Everything here reduces in the kernel (`decide +kernel`): numbers are read
 by structural recursion over a word's bytes, since Lean's own
@@ -122,26 +123,34 @@ example : fnsOf [["fn", "broken"]] = none := by decide +kernel
 example : fnsOf [["fn", "f", "i64", "0", "1", "a.nu", "0"],
     ["v", "0", "4", "0", "0", "1", "-1", "", "i64"], ["endfn"]] = none := by decide +kernel
 
-/-! ## Steps 2 and 4: the term of a program of numbers and buffers (AGORA-1029)
+/-! ## Steps 2, 4 and 5: the term of a program of numbers, buffers and views (AGORA-1029)
 
 `elabIR ir` (`elab` is a keyword of Lean) builds the A2 program and its
 entry statement from the words of a core IR, for the **subset**: every
 function of the program (the ones whose file is not the standard
-library's, as the translator selects them) has only variables, parameters
-and a result of a number type (step 2), or a buffer of numbers (step 4,
-`bufTy`: raw text `i8*`, a `String`, a `Vec` of a number type; A2's
-`.vec .int`), and its statements are among
-`scope`/`if`/`else`/`loop`/`loopcond`/`end`, `line`, `drop`, `break`,
-`continue`, `let k use|none|scalar …`, `let k call f …`,
+library's, as the translator selects them) has only variables and
+parameters of a type `tyOf` takes: a number (step 2); a buffer of numbers
+(step 4: raw text `i8*`, a `String`, a `Vec` of a number type; A2's `.vec
+.int`); a `Vec` of raw text (`%Vec__str`, `.vec (.slice .int)`) or a
+`Slice` of a number type (`.slice .int`, step 5). Raw text bound from a
+view (`string_data`, an element of a `Vec` of raw text, a copy of such a
+view) is a slice too (`viewVars`, the translator's `__view_vars`). A
+result is a number, or a buffer or `Vec` handed over (owned), never a
+slice. Its statements are among
+`scope`/`if`/`else`/`loop`/`loopcond`/`foreach`/`end`, `line`, `drop`,
+`break`, `continue`, `let k use|none|scalar …`, `let k call f …`,
 `eval scalar|use|none …`, `eval call f …`, `assign vK use|none|scalar …`
 and `ret c|-|vK`, where every call is of a function of the program or one
 of the library calls `intrS` lowers (`vec_new`, `vec_push`, `vec_len`,
 `vec_at`, `vec_free`, `string_from`, `string_len`, `string_free`,
-`nurl_str_cat`, `nurl_str_len`). A buffer moves (`.var`), is borrowed by a
-cursor (`.borrow`), is copied into an `inout` parameter, and its `drop` is
-the end of its scope. No variable of the subset holds a view but a number
-element read out of a Vec (`letCallOk`, `viewsOf`). Anything else is `none`
-(fail closed).
+`nurl_str_cat`, `nurl_str_len`; step 5: `string_data`, `slice_from_vec`,
+`slice_len`, `nurl_println`, `vec_clear`, `vec_truncate`, `vec_reserve`,
+`vec_shrink_to_fit`, `string_push_str`). A buffer or a view moves
+(`.var`), is borrowed by a cursor (`.borrow`), a Vec is copied into an
+`inout` parameter, and a `drop` is the end of a scope. A view is a
+`.view` of a buffer, a `foreach` a loop over a view of its Vec lending
+each element (`.sat`), and a change of a Vec's elements in place an
+`.edit` through a borrow of it. Anything else is `none` (fail closed).
 
 It is `packages/nurl-cert/src/tolean.nu`'s translation of that subset,
 rule for rule, meant to make exactly the term it prints:
@@ -155,13 +164,17 @@ Where the translator reads a core IR nurlc does not print as if it were
 well formed, `elabIR` refuses it (stricter, never laxer): a count or an id
 that is not plain digits, two functions of one name, a function of the
 program named as a library call the translator makes a construct of, a
-`Vec` of anything but numbers, a `let x` of a library call the translator
-lowers by falling through to a call (`vec_push`, `vec_free`), a call whose
-result may be a view. The checks the translator makes on what it
-translates are made here too, the ones on code it then passes over
-included (a buffer named after its `drop`, `__views_of`). It does not read
-the IR's `ty`, `virt` and `sum` lines past what the subset needs (a `d`
-drop flag: the program has a destructor; a `sum` line's keys).
+`Vec` of anything but numbers and raw text, a slice of anything but
+numbers, a slice handed back, a `let x` of a library call the translator
+lowers by falling through to a call (`vec_push`, `vec_free`,
+`vec_reserve`, `nurl_println`, …), a call whose result the summary says
+is lent (but `string_data`'s), a change in place of a `foreach`'s element.
+The checks the translator makes on what it translates are made here too,
+the ones on code it then passes over included (a buffer, or a view of it,
+named after its `drop`, `__views_of`; raw text that holds a view,
+`__view_vars`, over the whole body). It does not read the IR's `ty`,
+`virt` and `sum` lines past what the subset needs (a `d` drop flag: the
+program has a destructor; a `sum` line's keys).
 
 Everything is total and reduces in the kernel: recursion is structural
 (over a fuel bound by the body's length where a list is rebuilt), and
@@ -221,18 +234,32 @@ example : intNamesB = ["i64", "i1", "i32", "i16", "i8", "void", "u64", "u32", "u
 def vecTyB : List Nat := [37, 86, 101, 99, 95, 95]
 example : vecTyB = bytesOf "%Vec__" := by decide +kernel
 
-/-- A buffer of numbers (`__lean_ty`'s `(.vec .int)`): raw text bound from a
-    literal or a fresh string (`i8*`; the subset holds no view of one, see
-    `letCallOk`), a `String`, a `Vec` of a number type. -/
-def bufTy (t : String) : Bool :=
-  t == "i8*" || t == "%String" ||
-  (let cs := bytesOf t
-   prefixN vecTyB cs && intTyB (cs.drop 6))
+def sliceTyB : List Nat := [37, 83, 108, 105, 99, 101, 95, 95]
+def strB : List Nat := [115, 116, 114]
+example : sliceTyB = bytesOf "%Slice__" ∧ strB = bytesOf "str" := by decide +kernel
 
-/-- A type of the subset as A2's (`__lean_ty`): a number, or a buffer of
-    numbers. -/
+/-- An element type of a `Vec` of the subset, as A2's (`__lean_ty` of the
+    name's last part): a number, or `str`, raw text held in a value, a view
+    (`(.slice .int)`). -/
+def elemTy (cs : List Nat) : Option Ty :=
+  if intTyB cs then some .int else if cs == strB then some (.slice .int) else none
+
+/-- A type of the subset as A2's (`__lean_ty`): a number; a buffer of
+    numbers (`(.vec .int)`: raw text `i8*`, a `String`, a `Vec` of a number
+    type); a `Vec` of raw text (`(.vec (.slice .int))`, `%Vec__str`); a
+    `Slice` of a number type (`(.slice .int)`). (Raw text that holds a view
+    is a slice too, `Ctx.vl`: that is the variable's, not its type's.) -/
 def tyOf (t : String) : Option Ty :=
-  if intTy t then some .int else if bufTy t then some (.vec .int) else none
+  if intTy t then some .int
+  else if t == "i8*" || t == "%String" then some (.vec .int)
+  else
+    let cs := bytesOf t
+    if prefixN vecTyB cs then (elemTy (cs.drop 6)).map .vec
+    else if prefixN sliceTyB cs && intTyB (cs.drop 8) then some (.slice .int)
+    else none
+
+example : tyOf "%Vec__str" = some (.vec (.slice .int)) ∧ tyOf "%Slice__u8" = some (.slice .int) ∧
+    tyOf "%Slice__str" = none ∧ tyOf "%Vec__String" = none := by decide +kernel
 
 /-- Standard-library calls the translator makes A2 constructs of
     (`__intrinsic_`): a function of the program of such a name, or with
@@ -299,10 +326,31 @@ example : [strCatB, strLenB, stringFromB, stringLenB, stringFreeB, vecNewB, vecP
     vecFreeB, vecAtB] = ["nurl_str_cat", "nurl_str_len", "string_from", "string_len", "string_free",
     "vec_new__", "vec_push__", "vec_len__", "vec_free__", "vec_at__"].map bytesOf := by decide +kernel
 
+/-- The library calls of views and of changes through a borrow (step 5). -/
+def stringDataB : List Nat := [115, 116, 114, 105, 110, 103, 95, 100, 97, 116, 97]
+def stringPushStrB : List Nat := [115, 116, 114, 105, 110, 103, 95, 112, 117, 115, 104, 95, 115, 116, 114]
+def printlnB : List Nat := [110, 117, 114, 108, 95, 112, 114, 105, 110, 116, 108, 110]
+def sliceFromVecB : List Nat := [115, 108, 105, 99, 101, 95, 102, 114, 111, 109, 95, 118, 101, 99, 95, 95]
+def sliceLenB : List Nat := [115, 108, 105, 99, 101, 95, 108, 101, 110, 95, 95]
+def vecClearB : List Nat := [118, 101, 99, 95, 99, 108, 101, 97, 114, 95, 95]
+def vecTruncB : List Nat := [118, 101, 99, 95, 116, 114, 117, 110, 99, 97, 116, 101, 95, 95]
+def vecReserveB : List Nat := [118, 101, 99, 95, 114, 101, 115, 101, 114, 118, 101, 95, 95]
+def vecShrinkB : List Nat :=
+  [118, 101, 99, 95, 115, 104, 114, 105, 110, 107, 95, 116, 111, 95, 102, 105, 116, 95, 95]
+/-- `vec_at__str` (exact): its result is raw text held in the Vec, a view
+    (`__view_vars`). -/
+def vecAtStrB : List Nat := vecAtB ++ strB
+example : [stringDataB, stringPushStrB, printlnB, sliceFromVecB, sliceLenB, vecClearB, vecTruncB,
+    vecReserveB, vecShrinkB, vecAtStrB] = ["string_data", "string_push_str", "nurl_println",
+    "slice_from_vec__", "slice_len__", "vec_clear__", "vec_truncate__", "vec_reserve__",
+    "vec_shrink_to_fit__", "vec_at__str"].map bytesOf := by decide +kernel
+
 /-- Each is a name `intrinsicName` takes, so no function of the program is
     named like one: a call is the library's or the program's, never both. -/
-example : [strCatB, strLenB, stringFromB, stringLenB, stringFreeB].all (intrinsicExact.contains ·) ∧
-    [vecNewB, vecPushB, vecLenB, vecFreeB, vecAtB].all (intrinsicPrefix.contains ·) := by decide +kernel
+example : [strCatB, strLenB, stringFromB, stringLenB, stringFreeB, stringDataB, stringPushStrB,
+      printlnB].all (intrinsicExact.contains ·) ∧
+    [vecNewB, vecPushB, vecLenB, vecFreeB, vecAtB, sliceFromVecB, sliceLenB, vecClearB, vecTruncB,
+      vecReserveB, vecShrinkB].all (intrinsicPrefix.contains ·) := by decide +kernel
 
 /-- The calls whose result the translator takes for a view of an argument
     (`__views_of`, `__view_vars`): `string_data…`, `slice_from_vec__…`,
@@ -315,8 +363,9 @@ def viewCallB : List (List Nat) := [
 example : viewCallB = ["string_data", "slice_from_vec__", "vec_at__", "slice_at__"].map bytesOf := by
   decide +kernel
 
-/-- Of those, the ones outside the subset: all but `vec_at__…`, whose
-    result is a number lent out of the Vec (`.at`). -/
+/-- Of those, the ones `letCallOk` refuses a `let` of: all but `vec_at__…`
+    (an element lent out of the Vec, `.at`), and of these all but
+    `slice_from_vec__…` and `string_data` itself (`.view`). -/
 def viewOutB : List (List Nat) := viewCallB.filter (· != [118, 101, 99, 95, 97, 116, 95, 95])
 example : viewOutB = ["string_data", "slice_from_vec__", "slice_at__"].map bytesOf := by decide +kernel
 
@@ -449,6 +498,7 @@ inductive Item where
   | scope (b : List Item)
   | ite (c : String) (a b : List Item)
   | loop (cond : List Item) (c : String) (body : List Item)
+  | each (x xs : String) (body : List Item)
 
 /-- How a list of statements ended. -/
 inductive Close where
@@ -459,7 +509,8 @@ inductive Close where
 
 /-- The statements up to the closer of their block, read into a tree, and
     the lines after it. A closer out of place, a block not closed, or an
-    opener outside the subset (`match`, `foreach`, `defer`) is `none`. -/
+    opener outside the subset (`match`, `defer`) is `none`. A `foreach x v`
+    (step 5) is a block up to its `end`. -/
 def parseB : Nat → List (List String) → List Item → Option (List Item × Close × List (List String))
   | 0, _, _ => none
   | _ + 1, [], acc => some (acc.reverse, .eof, [])
@@ -487,6 +538,10 @@ def parseB : Nat → List (List String) → List Item → Option (List Item × C
         match parseB f ls' [] with
         | some (b, .fin, ls'') => parseB f ls'' (.loop cnd c b :: acc)
         | _ => none
+      | _ => none
+    | "foreach" :: x :: xs :: _ =>
+      match parseB f ls [] with
+      | some (b, .fin, ls') => parseB f ls' (.each x xs b :: acc)
       | _ => none
     | w :: _ =>
       if w == "match" || w == "foreach" || w == "defer" || w == "arm" ||
@@ -594,37 +649,89 @@ def mentionsFrom : Nat → List (List String) → List (Nat × Nat)
 /-- The root of a place (`v3/a`: `v3`) as a variable. -/
 def rootId (w : List Nat) : Option Nat := vIdOf (w.takeWhile (· != 47))
 
-/-- One pass of `__views_of`: a `let j call f …` whose `f` hands back a
-    view of what it is handed (`viewCallB`), one of whose words from `f` on
-    names a variable of `out` by its root, adds `j`. (The translator adds
-    a `let j use` copy of a raw-text view too; the subset has none,
-    `letCallOk`.) -/
-def viewsStep (body : List (List String)) (out : List Nat) : List Nat :=
+/-- One pass of `__view_vars`: raw text that holds a view, not its own text.
+    A `let j call string_data …` or `let j call vec_at__str …` adds `j`; so
+    does a `let j use vK` of such a `k`. (The translator adds `j` too for a
+    call whose summary says its result is lent, `__borrowed`; the subset
+    has no other such call, `letCallOk`: `string_data` is one.) -/
+def viewVarStep (body : List (List String)) (out : List Nat) : List Nat :=
   body.foldl (fun acc l => match l with
-    | "let" :: j :: "call" :: f :: more =>
+    | "let" :: j :: "call" :: f :: _ =>
       match idOf j with
       | some jj =>
-        if !acc.contains jj && viewCallB.any (prefixN · (bytesOf f)) &&
-            (f :: more).any (fun w => match rootId (bytesOf w) with
-              | some q => acc.contains q
-              | none => false)
-        then jj :: acc else acc
+        let fb := bytesOf f
+        if !acc.contains jj && (fb == stringDataB || fb == vecAtStrB) then jj :: acc else acc
       | none => acc
+    | "let" :: j :: "use" :: op :: _ =>
+      match idOf j, varOf op with
+      | some jj, some q => if !acc.contains jj && acc.contains q then jj :: acc else acc
+      | _, _ => acc
     | _ => acc) out
 
-/-- `out` and every variable that may view one of it (`__views_of`): passes
-    until one adds nothing (each adds one at least, so `body.length + 1`
-    passes suffice). -/
-def viewsOf (body : List (List String)) : Nat → List Nat → List Nat
+/-- `__view_vars`: passes until one adds nothing. -/
+def viewVars (body : List (List String)) : Nat → List Nat → List Nat
   | 0, out => out
   | n + 1, out =>
-    let o' := viewsStep body out
-    if o'.length == out.length then out else viewsOf body n o'
+    let o' := viewVarStep body out
+    if o'.length == out.length then out else viewVars body n o'
+
+/-- Variable `k`'s last `v` line. -/
+def lastVar (vs : List (Nat × Nat × Nat × String)) (k : Nat) : Option (Nat × Nat × Nat × String) :=
+  vs.foldl (fun acc v => if v.1 == k then some v else acc) none
+
+/-- The lines of the body that may add a variable to `__views_of`'s set,
+    in order, each as the variable it adds and the variables its words name
+    by their roots (from the fourth word on): a `let j call f …` whose `f`
+    hands back a view of what it is handed (`viewCallB`), or a `let j use …`
+    of a temporary `j` that is raw text holding a view (`views`,
+    `__view_vars`). (The translator adds a call whose summary says it lends
+    its result too, `__borrowed`; the subset has no other, `letCallOk`.)
+    Read once per function: every `drop` of it runs the passes below over
+    these lines only. -/
+def viewEdges (body : List (List String)) (vs : List (Nat × Nat × Nat × String)) (views : List Nat) :
+    List (Nat × List Nat) :=
+  let roots (ws : List String) : List Nat := ws.filterMap fun w => rootId (bytesOf w)
+  body.filterMap fun l => match l with
+    | "let" :: j :: "call" :: f :: more =>
+      match idOf j with
+      | some jj => if viewCallB.any (prefixN · (bytesOf f)) then some (jj, roots (f :: more)) else none
+      | none => none
+    | "let" :: j :: "use" :: more =>
+      match idOf j with
+      | some jj =>
+        -- (`views` first: it is short, mostly empty)
+        if views.contains jj && (lastVar vs jj).map (·.2.1) == some 2 then some (jj, roots more) else none
+      | none => none
+    | _ => none
+
+/-- One pass of `__views_of` over the lines: one not yet in the set that
+    names a variable of it adds its own. -/
+def viewsStep (es : List (Nat × List Nat)) (out : List Nat) : List Nat :=
+  es.foldl (fun acc e => if !acc.contains e.1 && e.2.any acc.contains then e.1 :: acc else acc) out
+
+/-- `out` and every variable that may view one of it (`__views_of`): passes
+    until one adds nothing (each adds one at least, of the lines' variables,
+    so `es.length + 1` passes suffice). -/
+def viewsOf (es : List (Nat × List Nat)) : Nat → List Nat → List Nat
+  | 0, out => out
+  | n + 1, out =>
+    let o' := viewsStep es out
+    if o'.length == out.length then out else viewsOf es n o'
+
+/-- The elements a `foreach` lends (`foreach x v`: `x`), in the whole body.
+    The translator changes such an element in place without a borrow of it
+    (`__edit_through`); the subset refuses that change instead (`intrS`). -/
+def eachIds (body : List (List String)) : List Nat :=
+  body.filterMap fun l => match l with
+    | "foreach" :: x :: _ => idOf x
+    | _ => none
 
 /-- What every statement of the function reads: its parameter count, its
     `v` lines (id, kind, flags, type), the program's functions, its
-    summary, and where each
-    variable is named in its body (`mentionsFrom`), and the body. -/
+    summary, where each variable is named in its body (`mentionsFrom`),
+    the body, its raw text that holds a view (`viewVars`), the elements
+    its `foreach`es lend (`eachIds`) and the lines that may add a view
+    (`viewEdges`). -/
 structure Ctx where
   np : Nat
   vars : List (Nat × Nat × Nat × String)
@@ -632,10 +739,9 @@ structure Ctx where
   sum : Summary
   mentions : List (Nat × Nat)
   body : List (List String)
-
-/-- Variable `k`'s last `v` line. -/
-def lastVar (vs : List (Nat × Nat × Nat × String)) (k : Nat) : Option (Nat × Nat × Nat × String) :=
-  vs.foldl (fun acc v => if v.1 == k then some v else acc) none
+  views : List Nat
+  elems : List Nat
+  edges : List (Nat × List Nat)
 
 /-- Variable `k`'s type, or `d` where it has no `v` line (`__vtyd`). -/
 def tyD (vs : List (Nat × Nat × Nat × String)) (k : Nat) (d : String) : String :=
@@ -661,10 +767,28 @@ def Ctx.flags (c : Ctx) (k : Nat) : Nat :=
     | none => 0
   if k < c.np && sinkP c.sum k && !bitB base 1 && !bitB base 2 then base + 4 else base
 
-/-- Is variable `k` a buffer (declared, of a `bufTy` type)? -/
-def Ctx.buf (c : Ctx) (k : Nat) : Bool :=
+/-- Variable `k`'s type as A2's (`__lean_ty` of its `v` line's; none
+    without one). -/
+def Ctx.ty (c : Ctx) (k : Nat) : Option Ty :=
   match lastVar c.vars k with
-  | some (_, _, _, t) => bufTy t
+  | some (_, _, _, t) => tyOf t
+  | none => none
+
+/-- Variable `k`'s A2 type where it is read (`__vlean`): raw text that
+    holds a view (`views`) is a slice. -/
+def vlOf (vs : List (Nat × Nat × Nat × String)) (views : List Nat) (k : Nat) : Option Ty :=
+  match lastVar vs k with
+  | some (_, _, _, t) => if t == "i8*" && views.contains k then some (.slice .int) else tyOf t
+  | none => none
+
+def Ctx.vl (c : Ctx) (k : Nat) : Option Ty := vlOf c.vars c.views k
+
+/-- Is variable `k` declared, of a type of the subset other than a number
+    (a buffer, a `Vec` of views, a slice)? -/
+def Ctx.obj (c : Ctx) (k : Nat) : Bool :=
+  match c.ty k with
+  | some .int => false
+  | some _ => true
   | none => false
 
 /-- Is variable `k` a number (`__int_ty` of its type, `i64` without a `v`
@@ -683,11 +807,11 @@ def wrapPre (pre : List (Nat × Rhs)) (st : Stmt) : Stmt :=
 
 /-- An rvalue of the subset as A2's right-hand side (`__rhs`), bound to
     `dest` (`none`: no variable), with the bindings it needs made first
-    (`pre`). `asg`: the store of an `assign`. A buffer moves (`.var`), or
-    is borrowed by a cursor (`: ~` of a binding or a parameter, `.borrow`);
-    raw text bound from a literal is a copy of its own (`.new .int`); a
-    borrowed parameter assigned to an `inout` one is copied (its length
-    read, then `.new`). Refused as the translator refuses them: an owner
+    (`pre`). `asg`: the store of an `assign`. A buffer or a view moves
+    (`.var`), or is borrowed by a cursor (`: ~` of a binding or a
+    parameter, `.borrow`); raw text bound from a literal is a copy of its
+    own (`.new .int`); a borrowed `Vec` parameter assigned to an `inout`
+    one is copied (its length read, then `.new` of its element type). Refused as the translator refuses them: an owner
     given a borrowed parameter's value, raw text assigned from another
     binding. -/
 def rhsS (c : Ctx) (ws : List String) (dest : Option Nat) (asg : Bool) :
@@ -709,7 +833,7 @@ def rhsS (c : Ctx) (ws : List String) (dest : Option Nat) (asg : Bool) :
       | none => M.fail
       | some y =>
         if c.int y then pure ([], .expr (.var (c.var y)))
-        else if !c.buf y then M.fail
+        else if !c.obj y then M.fail
         else
           let ky := c.kind y
           let fy := c.flags y
@@ -725,9 +849,14 @@ def rhsS (c : Ctx) (ws : List String) (dest : Option Nat) (asg : Bool) :
           else if asg && ky == some 0 && fy6 && kd == some 0 && bitB fd 1 && !ys &&
               (match dest with
                | some d => (lastVar c.vars d).isSome && tyD c.vars y "" == tyD c.vars d ""
-               | none => false) then do
-            let x ← M.fresh
-            pure ([(x, .expr (.len (c.var y)))], .new .int)
+               | none => false) then
+            -- (the parameter's type a Vec's: `.new` of its element type; a
+            -- slice is not copied, `a copy of a … parameter`)
+            match c.ty y with
+            | some (.vec el) => do
+              let x ← M.fresh
+              pure ([(x, .expr (.len (c.var y)))], .new el)
+            | _ => M.fail
           else if asg && ys then M.fail
           else pure ([], .var (c.var y))
   | "scalar" :: n :: ops =>
@@ -786,10 +915,25 @@ def argvarS (c : Ctx) (op : String) : M Nat :=
 /-- An argument the call only reads (`__rd`): a whole variable. -/
 def rdS (c : Ctx) (op : String) : M Nat := M.lift ((vref op).map c.var)
 
-/-- A read of raw text (`__read`): a buffer's length. -/
+/-- A read of raw text (`__read`, `__rd_ty`): a view's length (`.slen`) or
+    an owner's (`.len`). -/
 def readE (c : Ctx) (op : String) : Option Expr :=
   match vref op with
-  | some k => if c.buf k then some (.len (c.var k)) else none
+  | some k => match c.vl k with
+    | some (.slice _) => some (.slen (c.var k))
+    | some (.vec _) => some (.len (c.var k))
+    | _ => none
+  | none => none
+
+/-- What `nurl_println` reads of its argument: as `readE`, and a number's
+    value. -/
+def printE (c : Ctx) (op : String) : Option Expr :=
+  match vref op with
+  | some k => match c.vl k with
+    | some (.slice _) => some (.slen (c.var k))
+    | some (.vec _) => some (.len (c.var k))
+    | some _ => some (.var (c.var k))
+    | none => none
   | none => none
 
 /-- A read of an argument before `st`, into a fresh variable (the reads of
@@ -801,31 +945,57 @@ def readWrap (c : Ctx) (op : String) (st : Stmt) : M Stmt :=
     let e ← M.lift (readE c op)
     pure (.letv tt (.expr e) st)
 
+/-- A change of the elements of the buffer `y` (core variable `k`) through
+    a borrow of it (`__edit_through`): `(.letv b (.borrow y) (.edit true b
+    op))`. The translator changes a `foreach`'s element through itself
+    (`elems`); the subset refuses a change of one instead. -/
+def editS (c : Ctx) (k : Nat) (op : Edit) : M Stmt :=
+  if c.elems.contains k then M.fail
+  else do
+    let b ← M.fresh
+    pure (.letv b (.borrow (c.var k)) (.edit true b op))
+
 /-- A library call of the subset as A2's construct (`__intrinsic_`), into
     `x0` (`none`: no variable), then `rest`: `vec_new` (`.new`), `vec_push`
     (`.push`), `vec_len` and `string_len` (`.len`), `vec_free` and
     `string_free` (`.free`), and of raw text `nurl_str_cat` and
     `string_from` (a fresh buffer, each argument's read first),
-    `nurl_str_len` (its read), `vec_at` (`.at`). The element of a `Vec` is
-    a number. Any
-    other library call is outside the subset; so are the forms the
-    translator lowers by falling through to a call (`let x` of a
-    `vec_push`). -/
+    `nurl_str_len` (its read), `vec_at` (`.at`). Step 5: `string_data` and
+    `slice_from_vec` (a view, `.view`), `slice_len` (`.slen`),
+    `nurl_println` (its read), and the changes through a borrow:
+    `vec_clear` and `vec_truncate` (`.edit … (.trunc i)`), `vec_reserve` and
+    `vec_shrink_to_fit` (a push that may move the buffer and a cut back to
+    its length), `string_push_str` (a push, then the read of the text). The
+    element of a `Vec` is a number, or raw text held in it (`str`, a view:
+    a raw string pushed into it is viewed, `.view`). Any other library call
+    is outside the subset; so are the forms the translator lowers by
+    falling through to a call (`let x` of a `vec_push`). -/
 def intrS (c : Ctx) (f : String) (ops : List String) (x0 : Option Nat) (rest : Stmt) : M Stmt :=
   let fb := bytesOf f
   if prefixN vecNewB fb then
-    match ops with
-    | [] => if intTyB (fb.drop 9) then do
+    match ops, elemTy (fb.drop 9) with
+    | [], some el => do
         let x ← xfS x0
-        pure (.letv x (.new .int) rest)
-      else M.fail
-    | _ => M.fail
+        pure (.letv x (.new el) rest)
+    | _, _ => M.fail
   else if prefixN vecPushB fb then
     match ops, x0 with
     | [o0, o1], none => do
       let v ← argvarS c o0
       let y ← argvarS c o1
-      if intTyB (fb.drop 10) then pure (seqS (.push v y) rest) else M.fail
+      match elemTy (fb.drop 10) with
+      | some .int => pure (seqS (.push v y) rest)
+      | some _ =>
+        -- raw text pushed where it is held in a value: the Vec keeps a
+        -- view of it (owned text is viewed first); no literal
+        if o1 == "c" then M.fail
+        else match (vref o1).bind c.vl with
+          | some (.vec .int) => do
+            let tt ← M.fresh
+            pure (.letv tt (.view y) (seqS (.push v tt) rest))
+          | some _ => pure (seqS (.push v y) rest)
+          | none => M.fail
+      | none => M.fail
     | _, _ => M.fail
   else if prefixN vecLenB fb || fb == stringLenB then
     match ops with
@@ -861,9 +1031,9 @@ def intrS (c : Ctx) (f : String) (ops : List String) (x0 : Option Nat) (rest : S
         pure (.letv x (.expr e) rest)
     | _ => M.fail
   else if prefixN vecAtB fb then
-    -- a bounds-checked read of a number element, lent (`.at`)
+    -- a bounds-checked read of an element, lent (`.at`)
     match ops with
-    | [o0, o1] => if o0 == "c" || !intTyB (fb.drop 8) then M.fail else do
+    | [o0, o1] => if o0 == "c" || (elemTy (fb.drop 8)).isNone then M.fail else do
         let i ← M.lift (operandE c o1)
         match x0 with
         | none => do
@@ -874,6 +1044,82 @@ def intrS (c : Ctx) (f : String) (ops : List String) (x0 : Option Nat) (rest : S
           let y ← rdS c o0
           pure (.letv x (.at y i) rest)
     | _ => M.fail
+  else if fb == stringDataB || prefixN sliceFromVecB fb then
+    -- a view of the text or of the Vec's elements (`.view`); a slice of a
+    -- Vec of numbers only (the translator also slices a Vec of buffers)
+    match ops with
+    | [o0] =>
+      if o0 == "c" || (fb != stringDataB && !intTyB (fb.drop 16)) then M.fail else do
+        let x ← xfS x0
+        let y ← rdS c o0
+        pure (.letv x (.view y) rest)
+    | _ => M.fail
+  else if prefixN sliceLenB fb then
+    match ops with
+    | [o0] => if o0 == "c" then M.fail else do
+        let x ← xfS x0
+        let y ← rdS c o0
+        pure (.letv x (.expr (.slen y)) rest)
+    | _ => M.fail
+  else if fb == printlnB then
+    -- it reads its argument (a literal: nothing)
+    match ops, x0 with
+    | [o0], none => if o0 == "c" then pure rest else do
+        let e ← M.lift (printE c o0)
+        let tt ← M.fresh
+        pure (.letv tt (.expr e) rest)
+    | _, _ => M.fail
+  else if prefixN vecClearB fb || prefixN vecTruncB fb then
+    -- the Vec changed through a borrow: its elements past the new length
+    -- dropped; a `let x` of it is any number
+    let clear := prefixN vecClearB fb
+    match (if clear then (match ops with | [o0] => some (o0, none) | _ => none)
+           else (match ops with | [o0, o1] => some (o0, some o1) | _ => none)) with
+    | some (o0, o1) => if o0 == "c" then M.fail else do
+        let i ← (match o1 with
+          | none => pure (.lit 0)
+          | some w => M.lift (operandE c w))
+        let k ← M.lift (vref o0)
+        let st ← editS c k (.trunc i)
+        let rs := match x0 with
+          | none => rest
+          | some x => .letv x (.expr .any) rest
+        pure (seqS st rs)
+    | none => M.fail
+  else if prefixN vecReserveB fb || prefixN vecShrinkB fb then
+    -- the buffer may move, its length unchanged: a push and a cut back to
+    -- the length it had, through a borrow; of a Vec of numbers
+    let res := prefixN vecReserveB fb
+    match x0, (if res then (match ops with | [o0, o1] => some (o0, some o1) | _ => none)
+               else (match ops with | [o0] => some (o0, none) | _ => none)) with
+    | none, some (o0, o1) =>
+      if o0 == "c" || !intTyB (if res then fb.drop 13 else fb.drop 19) then M.fail else do
+        match o1 with
+        | some w => do
+          let _ ← M.lift (operandE c w)
+          pure ()
+        | none => pure ()
+        let b ← M.fresh
+        let cc ← M.litTemp
+        let k ← M.fresh
+        let y ← rdS c o0
+        pure (seqS (.letv b (.borrow y) (.letv k (.expr (.len b))
+          (.seq (.edit true b (.push cc)) (.edit true b (.trunc (.var k)))))) rest)
+    | _, _ => M.fail
+  else if fb == stringPushStrB then
+    -- the String grows through a borrow, then the text's bytes are read
+    match ops, x0 with
+    | [o0, o1], none => if o0 == "c" then M.fail else do
+        let cc ← M.litTemp
+        let k ← M.lift (vref o0)
+        let st ← editS c k (.push cc)
+        if o1 == "c" then pure (seqS st rest)
+        else do
+          let _ ← rdS c o1
+          let e ← M.lift (readE c o1)
+          let tt ← M.fresh
+          pure (seqS (.seq st (.letv tt (.expr e) .skip)) rest)
+    | _, _ => M.fail
   else M.fail
 
 /-- A call (`__call`, `__intrinsic`): the library's, as its construct, or
@@ -897,7 +1143,7 @@ def retR (c : Ctx) (h : String) : Option Rhs :=
   else match vref h with
     | some k =>
       if c.int k then some (.expr (.var (c.var k)))
-      else if c.buf k then some (.var (c.var k))
+      else if c.obj k then some (.var (c.var k))
       else none
     | none => none
 
@@ -922,13 +1168,13 @@ def go (c : Ctx) : Nat → List Item → Stmt → M Stmt
           match it with
           | .st ("line" :: _) => go c f rest tail
           | .dropAt ("drop" :: h :: _) rem => do
-            -- a number's drop is nothing; a buffer's is its scope's end, the
-            -- same only if no line after it names it, or a view of it
-            -- (`__views_of`)
+            -- a number's drop is nothing; a buffer's or a view's is its
+            -- scope's end, the same only if no line after it names it, or a
+            -- view of it (`__views_of`)
             let k ← M.lift (idOf h)
             if c.int k then go c f rest tail
-            else if c.buf k then
-              let dead := viewsOf c.body (c.body.length + 1) [k]
+            else if c.obj k then
+              let dead := viewsOf c.edges (c.edges.length + 1) [k]
               if c.mentions.any fun m => decide (m.2 < rem) && dead.contains m.1 then M.fail
               else go c f rest tail
             else M.fail
@@ -1002,6 +1248,26 @@ def go (c : Ctx) : Nat → List Item → Stmt → M Stmt
             M.subDepth 1
             let r ← go c f rest tail
             pure (seqS (.block (.loop lb)) r)
+          | .each xw vw b => do
+            -- `foreach x v` over a Vec of numbers: the loop holds a view of
+            -- the Vec for its whole run and lends each element through it
+            -- (`.sat`); the index is stepped before the body, so `continue`
+            -- keeps it; the blocks as a loop's
+            let xv ← M.lift (vref vw)
+            if !(let cs := bytesOf (tyD c.vars xv "")
+                 prefixN vecTyB cs && intTyB (cs.drop 6)) then M.fail
+            let v := c.var xv
+            let x ← M.lift ((idOf xw).map c.var)
+            let i ← M.fresh
+            let wv ← M.fresh
+            M.addDepth 2
+            let inner ← go c f b .skip
+            M.subDepth 2
+            let step : Stmt := .assign i (.expr (.add (.var i) (.lit 1)))
+            let each : Stmt := .letv x (.sat wv (.var i)) (.seq step inner)
+            let lp : Stmt := .loop (.ite (.lt (.var i) (.slen wv)) (.block each) (.exit 0))
+            let r ← go c f rest tail
+            pure (seqS (.block (.letv i (.expr (.lit 0)) (.letv wv (.view v) lp))) r)
           | _ => M.fail)
     M.wrapLits n0 st
 
@@ -1009,17 +1275,18 @@ def go (c : Ctx) : Nat → List Item → Stmt → M Stmt
     or the walk inferred it taken over (and it is not `inout`), `inout`, a
     buffer the function changes through as its summary says (AGORA-994),
     else read only. -/
-def modeOf (sm : Summary) (fn : CoreFn) (j : Nat) : PMode :=
+def modeOf (sm : Summary) (fn : CoreFn) (views : List Nat) (j : Nat) : PMode :=
   let base := match lastVar fn.vars j with
     | some (_, _, fl, _) => fl
     | none => 0
   if bitB base 2 || (sinkP sm j && !bitB base 1) then .sink
   else if bitB base 1 then .inout .replace
-  else if bufTy (tyD fn.vars j "") then
-    match changeOf sm j with
-    | some e => .inout e
-    | none => .inp
-  else .inp
+  else match vlOf fn.vars views j with
+    | some (.vec _) =>
+      match changeOf sm j with
+      | some e => .inout e
+      | none => .inp
+    | _ => .inp
 
 /-- The largest variable id, plus 2; 0 for none. -/
 def topNext (vs : List (Nat × Nat × Nat × String)) : Nat :=
@@ -1060,26 +1327,32 @@ def opsOk (l : List String) : Bool :=
             let nops := l.length - (cp + 1)
             if h == "agg" then decide (n ≤ nops) else n == nops
 
-/-- A `let x call f …` the subset takes: `f`'s result no view of what it
-    is handed (`__borrowed`, `__views_of`'s prefixes), but a number lent
-    out of a Vec (`vec_at__…`). So raw text of the subset is owned
-    (`__view_vars` finds nothing), and what a buffer's `drop` ends is the
-    buffer and the elements read out of it (`viewsOf`). -/
+/-- A `let x call f …` the subset takes: `string_data`, whose result is a
+    view of the text (its summary says so, `ret_unowned=1`); else a call
+    whose summary does not say it lends its result (`__borrowed`), and none
+    named like a view the translator takes it for (`__views_of`'s prefixes)
+    but `slice_from_vec__…` and `vec_at__…`. So the only calls whose result
+    `__view_vars` and `__views_of` take for a view because the summary says
+    so are `string_data`'s, which both take for one by name too. -/
 def letCallOk (tops : List (List String)) (l : List String) : Bool :=
   match l with
   | "let" :: _ :: "call" :: f :: _ =>
-    !borrowedB (sumOf tops f) && !(viewOutB.any (prefixN · (bytesOf f)))
+    let fb := bytesOf f
+    fb == stringDataB ||
+      (!(viewOutB.any (prefixN · fb) && !prefixN sliceFromVecB fb) && !borrowedB (sumOf tops f))
   | _ => true
 
 /-- A function of the subset as A2's `Fn` (`__fn_init`, `__lean`): its
     variables, parameters and result numbers or buffers (`tyOf`). -/
 def fnElab (tops : List (List String)) (prog : List CoreFn) (fn : CoreFn) : Option Fn := do
   if startsB fn.name closureB then none
-  if !(fn.vars.all fun v => (intTy v.2.2.2 || bufTy v.2.2.2) && v.1 ≤ idMax) then none
+  if !(fn.vars.all fun v => (tyOf v.2.2.2).isSome && v.1 ≤ idMax) then none
   let rt ← tyOf fn.ret
-  let own := match rt with
-    | .int => false
-    | _ => true
+  -- (a slice handed back is not in the subset: it views what it is handed)
+  let own ← match rt with
+    | .int => some false
+    | .slice _ => none
+    | _ => some true
   let sm := sumOf tops fn.name
   if sm.val "retdyn" == some [49] then none
   if borrowedB sm then none
@@ -1087,12 +1360,14 @@ def fnElab (tops : List (List String)) (prog : List CoreFn) (fn : CoreFn) : Opti
   if own && (sm.val "ret_alias").isSome then none
   if !(fn.body.all opsOk) then none
   if !(fn.body.all (letCallOk tops)) then none
+  let views := viewVars fn.body (fn.body.length + 1) []
   let params ← (List.range fn.np).mapM fun j =>
-    (lastVar fn.vars j).bind fun (_, _, _, t) => (tyOf t).map (modeOf sm fn j, ·)
+    (vlOf fn.vars views j).map (modeOf sm fn views j, ·)
   let items ← match parseB (fn.body.length + 1) fn.body [] with
     | some (its, .eof, _) => some its
     | _ => none
-  let c : Ctx := ⟨fn.np, fn.vars, prog, sm, mentionsFrom (fn.body.length - 1) fn.body, fn.body⟩
+  let c : Ctx := ⟨fn.np, fn.vars, prog, sm, mentionsFrom (fn.body.length - 1) fn.body, fn.body,
+    views, eachIds fn.body, viewEdges fn.body fn.vars views⟩
   let tail : Stmt := if fn.ret == "void" then .assign fn.np (.expr (.lit 0)) else .skip
   let s0 : St := ⟨max (fn.np + 1) (topNext fn.vars), [], 0⟩
   let (inner, s) ← go c (4 * fn.body.length + 4) items tail s0
@@ -1189,6 +1464,18 @@ A2's `Stmt` has no decidable equality (its run-time forms hold a store),
 so the terms of the subset are compared by `stmtBeq`, which answers
 `false` for every form outside it, and is sound (`stmtBeq_sound`). -/
 
+/-- A2's `Edit` has no decidable equality; the changes of the subset are
+    compared by `editBeq` (sound: `editBeq_sound`). -/
+def editBeq : Edit → Edit → Bool
+  | .push y, .push y' => y == y'
+  | .trunc i, .trunc i' => decide (i = i')
+  | .set i y, .set i' y' => decide (i = i') && y == y'
+  | _, _ => false
+
+theorem editBeq_sound : ∀ a b : Edit, editBeq a b = true → a = b := by
+  intro a b h
+  cases a <;> cases b <;> simp_all [editBeq]
+
 def stmtBeq : Stmt → Stmt → Bool
   | .skip, b => match b with
     | .skip => true
@@ -1222,6 +1509,9 @@ def stmtBeq : Stmt → Stmt → Bool
     | _ => false
   | .free x, b => match b with
     | .free x' => x == x'
+    | _ => false
+  | .edit t x o, b => match b with
+    | .edit t' x' o' => t == t' && x == x' && editBeq o o'
     | _ => false
   | _, _ => false
 
@@ -1263,6 +1553,9 @@ theorem stmtBeq_sound : ∀ a b : Stmt, stmtBeq a b = true → a = b := by
   | free x =>
     intro b h; cases b <;> simp only [stmtBeq, Bool.false_eq_true, beq_iff_eq] at h
     rw [h]
+  | edit t x o =>
+    intro b h; cases b <;> simp only [stmtBeq, Bool.and_eq_true, Bool.false_eq_true, beq_iff_eq] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h; subst h1; subst h2; rw [editBeq_sound _ _ h3]
   | _ => intro b h; simp [stmtBeq] at h
 
 def fnBeq (f g : Fn) : Bool :=
@@ -1474,5 +1767,177 @@ example : (elabIR (irM [["v", "0", "1", "1", "1", "1", "-1", "v", "%Vec__Vec__i6
 example : (elabIR (irM (vsVec ++ [["v", "2", "2", "1", "0", "1", "-1", "", "void"]])
     (bodyVec ++ [["let", "2", "call", "vec_push__i64", "2", "v1", "c"], ["ret", "c"]]) [])).isNone := by
   decide +kernel
+
+
+/-! ### Witnesses (step 5: views, slices and changes through a borrow) -/
+
+/-- A `String` made, viewed (`string_data`, a temporary `v2`), the view
+    bound (`v3`) and read: raw text that holds a view is a slice, read by
+    its length (`.slen`). -/
+def vsStr : IR := [["v", "0", "2", "1", "0", "1", "-1", "", "%String"],
+  ["v", "1", "1", "1", "4096", "1", "-1", "t", "%String"],
+  ["v", "2", "2", "1", "0", "1", "-1", "", "i8*"], ["v", "3", "1", "1", "0", "1", "-1", "v", "i8*"]]
+def bodyStr : IR := [["let", "0", "call", "string_from", "1", "c"], ["let", "1", "use", "v0"], ["drop", "0"],
+  ["let", "2", "call", "string_data", "1", "v1"], ["let", "3", "use", "v2"], ["drop", "2"]]
+
+/-- The translator's term for it (`nurl-cert translate`), written out. -/
+def pView : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 1 (.new .int) (.letv 2 (.var 1) (.letv 3 (.view 2) (.letv 4 (.var 3)
+      (.letv 5 (.expr (.slen 4)) (.assign 0 (.expr .any))))))) (.exit 0)),
+    nvars := 7 }]
+example : elabIR (irM vsStr (bodyStr ++ [["eval", "call", "nurl_str_len", "1", "v3"], ["ret", "c"]]) []) =
+    some (pView, .letcall 0 0 [] .skip) := elabIs_sound _ _ _ (by decide +kernel)
+/-- …and so is `nurl_println` of the view; `string_data` is taken though its
+    summary says it lends its result (`ret_unowned=1`, as nurlc prints it). -/
+example : elabIR (irM vsStr (bodyStr ++ [["eval", "call", "nurl_println", "1", "v3"], ["ret", "c"]])
+    [["sum", "string_data", "1", "ret_unowned=1"]]) = some (pView, .letcall 0 0 [] .skip) :=
+  elabIs_sound _ _ _ (by decide +kernel)
+/-- A `let x` of `nurl_println` is refused: the translator lowers it by
+    falling through to a call, which drops `x` (stricter). -/
+example : (elabIR (irM (vsStr ++ [["v", "4", "2", "1", "0", "1", "-1", "", "void"]])
+    (bodyStr ++ [["let", "4", "call", "nurl_println", "1", "v3"], ["ret", "c"]]) [])).isNone := by
+  decide +kernel
+
+/-- A drop ends the views copied out of a view into a temporary
+    (`__views_of`'s `use` case): the String's temporary `v0` is viewed (`v2`),
+    the view copied into the temporary `v3`, and `v3` read after `v0`'s drop
+    is refused; copied into a binding instead, it is not followed (the
+    translator's rule), and the program is in the subset. -/
+def vsChain (k3 : String) : IR := [["v", "0", "2", "1", "0", "1", "-1", "", "%String"],
+  ["v", "1", "1", "1", "4096", "1", "-1", "t", "%String"], ["v", "2", "2", "1", "0", "1", "-1", "", "i8*"],
+  ["v", "3", k3, "1", "0", "1", "-1", "", "i8*"]]
+def bodyChain : IR := [["let", "0", "call", "string_from", "1", "c"], ["let", "2", "call", "string_data", "1", "v0"],
+  ["let", "3", "use", "v2"], ["let", "1", "use", "v0"], ["drop", "0"],
+  ["eval", "call", "nurl_str_len", "1", "v3"], ["ret", "c"]]
+example : (elabIR (irM (vsChain "2") bodyChain [])).isNone := by decide +kernel
+example : (elabIR (irM (vsChain "1") bodyChain [])).isSome := by decide +kernel
+
+/-- A slice of a Vec of numbers (`.view`) and its length (`.slen`); a
+    `slice_from_vec` whose summary says it lends its result is refused
+    (stricter: the translator takes it), and so is a slice of a Vec of
+    views (the translator refuses it). -/
+def vsSl : IR := vsVec ++ [["v", "2", "2", "1", "0", "1", "-1", "", "%Slice__i64"]]
+def bodySl : IR := bodyVec ++ [["let", "2", "call", "slice_from_vec__i64", "1", "v1"],
+  ["eval", "call", "slice_len__i64", "1", "v2"], ["ret", "c"]]
+def pSlice : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 1 (.new .int) (.letv 2 (.var 1) (.letv 3 (.view 2)
+      (.letv 4 (.expr (.slen 3)) (.assign 0 (.expr .any)))))) (.exit 0)),
+    nvars := 6 }]
+example : elabIR (irM vsSl bodySl []) = some (pSlice, .letcall 0 0 [] .skip) :=
+  elabIs_sound _ _ _ (by decide +kernel)
+example : (elabIR (irM vsSl bodySl [["sum", "slice_from_vec__i64", "1", "rviews=0"]])).isNone := by
+  decide +kernel
+def vsVecS : IR := [["v", "0", "2", "1", "0", "1", "-1", "", "%Vec__str"],
+  ["v", "1", "1", "1", "4097", "1", "-1", "v", "%Vec__str"]]
+def bodyVecS : IR := [["let", "0", "call", "vec_new__str", "0"], ["let", "1", "use", "v0"], ["drop", "0"]]
+example : (elabIR (irM (vsVecS ++ [["v", "2", "2", "1", "0", "1", "-1", "", "%Slice__str"]])
+    (bodyVecS ++ [["let", "2", "call", "slice_from_vec__str", "1", "v1"], ["ret", "c"]]) [])).isNone := by
+  decide +kernel
+
+/-- Raw text pushed into a `Vec` of raw strings is viewed first (the Vec
+    holds a view of it); a literal is refused, as the translator refuses it. -/
+def vsNames : IR := vsVecS ++ [["v", "2", "1", "1", "0", "1", "-1", "a", "i8*"]]
+def pNames : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 1 (.new (.slice .int)) (.letv 2 (.var 1) (.letv 3 (.new .int)
+      (.letv 4 (.view 3) (.seq (.push 2 4) (.assign 0 (.expr .any))))))) (.exit 0)),
+    nvars := 6 }]
+example : elabIR (irM vsNames (bodyVecS ++ [["let", "2", "use", "c"],
+    ["eval", "call", "vec_push__str", "2", "v1", "v2"], ["ret", "c"]]) []) = some (pNames, .letcall 0 0 [] .skip) :=
+  elabIs_sound _ _ _ (by decide +kernel)
+example : (elabIR (irM vsNames (bodyVecS ++ [["let", "2", "use", "c"],
+    ["eval", "call", "vec_push__str", "2", "v1", "c"], ["ret", "c"]]) [])).isNone := by decide +kernel
+
+/-- `foreach x v` over a Vec of numbers: a view of the Vec held for the
+    loop, each element lent through it (`.sat`), the index stepped first. -/
+def vsEach : IR := vsVec ++ [["v", "2", "1", "1", "0", "1", "-1", "x", "i64"]]
+def bodyEach (over : String) (inner : IR) : IR :=
+  bodyVec ++ [["foreach", "2", over], ["scope"]] ++ inner ++ [["end"], ["end"], ["ret", "c"]]
+def pEach : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 1 (.new .int) (.letv 2 (.var 1) (.seq (.block (.letv 4 (.expr (.lit 0))
+      (.letv 5 (.view 2) (.loop (.ite (.lt (.var 4) (.slen 5)) (.block (.letv 3 (.sat 5 (.var 4))
+        (.seq (.assign 4 (.expr (.add (.var 4) (.lit 1)))) (.letv 6 (.expr (.add .any (.lt (.add (.lit 0)
+          (.var 3)) (.lit 0)))) .skip)))) (.exit 0))))))
+      (.assign 0 (.expr .any))))) (.exit 0)),
+    nvars := 8 }]
+example : elabIR (irM vsEach (bodyEach "v1" [["eval", "scalar", "1", "v2"]]) []) =
+    some (pEach, .letcall 0 0 [] .skip) := elabIs_sound _ _ _ (by decide +kernel)
+/-- Refused as the translator refuses them: a `foreach` over a Vec of views,
+    and over a `String`. -/
+example : (elabIR (irM (vsVecS ++ [["v", "2", "1", "1", "0", "1", "-1", "x", "i8*"]])
+    (bodyVecS ++ [["foreach", "2", "v1"], ["scope"], ["end"], ["end"], ["ret", "c"]]) [])).isNone := by
+  decide +kernel
+example : (elabIR (irM [["v", "0", "2", "1", "0", "1", "-1", "", "%String"],
+    ["v", "1", "1", "1", "4097", "1", "-1", "s", "%String"], ["v", "2", "1", "1", "0", "1", "-1", "x", "i64"]]
+    [["let", "0", "call", "string_from", "1", "c"], ["let", "1", "use", "v0"], ["drop", "0"],
+     ["foreach", "2", "v1"], ["scope"], ["end"], ["end"], ["ret", "c"]] [])).isNone := by decide +kernel
+/-- A change of the loop's element in place is refused (stricter: the
+    translator changes it through itself, `__edit_through`); a change of
+    the Vec is a change through a borrow of it. -/
+example : (elabIR (irM vsEach (bodyEach "v1" [["eval", "call", "vec_clear__i64", "1", "v2"]]) [])).isNone := by
+  decide +kernel
+example : (elabIR (irM vsEach (bodyEach "v1" [["eval", "call", "vec_clear__i64", "1", "v1"]]) [])).isSome := by
+  decide +kernel
+
+/-- `vec_reserve`: a push through a borrow (its untracked number a temporary
+    of its own) and a cut back to the length read before it. -/
+def pReserve : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 1 (.new .int) (.letv 2 (.var 1) (.letv 4 (.expr .any)
+      (.seq (.letv 3 (.borrow 2) (.letv 5 (.expr (.len 3))
+        (.seq (.edit true 3 (.push 4)) (.edit true 3 (.trunc (.var 5))))))
+        (.assign 0 (.expr .any)))))) (.exit 0)),
+    nvars := 7 }]
+example : elabIR (irM vsVec (bodyVec ++ [["eval", "call", "vec_reserve__i64", "2", "v1", "c"], ["ret", "c"]])
+    []) = some (pReserve, .letcall 0 0 [] .skip) := elabIs_sound _ _ _ (by decide +kernel)
+/-- …a `let x` of it is refused (stricter: the translator falls through to a
+    call that drops `x`), and so is one of a Vec of views (the translator
+    refuses it). -/
+example : (elabIR (irM (vsVec ++ [["v", "2", "2", "1", "0", "1", "-1", "", "void"]])
+    (bodyVec ++ [["let", "2", "call", "vec_reserve__i64", "2", "v1", "c"], ["ret", "c"]]) [])).isNone := by
+  decide +kernel
+example : (elabIR (irM vsVecS (bodyVecS ++ [["eval", "call", "vec_reserve__str", "2", "v1", "c"], ["ret", "c"]])
+    [])).isNone := by decide +kernel
+
+/-- `vec_clear` and `vec_truncate` of the counts the translator lowers; a
+    `vec_clear` of two operands falls through to a call of a function the
+    program does not have, and is refused. -/
+example : (elabIR (irM vsVec (bodyVec ++ [["eval", "call", "vec_clear__i64", "1", "v1"], ["ret", "c"]])
+    [])).isSome := by decide +kernel
+example : (elabIR (irM vsVec (bodyVec ++ [["eval", "call", "vec_truncate__i64", "2", "v1", "c"], ["ret", "c"]])
+    [])).isSome := by decide +kernel
+example : (elabIR (irM vsVec (bodyVec ++ [["eval", "call", "vec_clear__i64", "2", "v1", "c"], ["ret", "c"]])
+    [])).isNone := by decide +kernel
+
+/-- `string_push_str` of text (here the String itself) reads its length
+    after the push; of a number it is refused, as the translator refuses it. -/
+def vsPs : IR := [["v", "0", "2", "1", "0", "1", "-1", "", "%String"],
+  ["v", "1", "1", "1", "4097", "1", "-1", "s", "%String"], ["v", "2", "1", "1", "1", "1", "-1", "n", "i64"]]
+def bodyPs : IR := [["let", "0", "call", "string_from", "1", "c"], ["let", "1", "use", "v0"], ["drop", "0"],
+  ["let", "2", "use", "c"]]
+example : (elabIR (irM vsPs (bodyPs ++ [["eval", "call", "string_push_str", "2", "v1", "v1"], ["ret", "c"]])
+    [])).isSome := by decide +kernel
+example : (elabIR (irM vsPs (bodyPs ++ [["eval", "call", "string_push_str", "2", "v1", "v2"], ["ret", "c"]])
+    [])).isNone := by decide +kernel
+
+/-- A slice parameter is in the subset; a slice handed back is not
+    (stricter: the translator takes it as an owned result). -/
+def fnSl (ret : String) (body : IR) : IR := [["fn", "f", ret, "1", "1", "a.nu", "0", ""],
+  ["v", "0", "0", "0", "0", "1", "-1", "s", "%Slice__i64"], ["scope"]] ++ body ++ [["end"], ["endfn"]]
+example : (elabIR (irM [] [["ret", "c"]] (fnSl "i64" [["eval", "call", "slice_len__i64", "1", "v0"],
+    ["ret", "c"]]))).isSome := by decide +kernel
+example : (elabIR (irM [] [["ret", "c"]] (fnSl "%Slice__i64" [["ret", "v0"]]))).isNone := by decide +kernel
+
+/-- A borrowed parameter assigned to an `inout` one is copied when it is a
+    Vec (here of raw strings: `.new (.slice .int)`); a slice is not, as the
+    translator refuses it. -/
+def fnCopy (t : String) : IR := [["fn", "f", "void", "2", "1", "a.nu", "0", ""],
+  ["v", "0", "0", "0", "0", "1", "-1", "a", t], ["v", "1", "0", "0", "2", "1", "-1", "b", t],
+  ["scope"], ["assign", "v1", "use", "v0"], ["end"], ["endfn"]]
+example : (elabIR (irM [] [["ret", "c"]] (fnCopy "%Vec__str"))).isSome := by decide +kernel
+example : (elabIR (irM [] [["ret", "c"]] (fnCopy "%Slice__i64"))).isNone := by decide +kernel
 
 end C.Elab

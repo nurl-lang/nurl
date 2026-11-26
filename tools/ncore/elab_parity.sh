@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# elab_parity.sh: the Lean translation of the subset of numbers and buffers
-# of numbers (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps 2 and 4)
+# elab_parity.sh: the Lean translation of the subset of numbers, buffers of
+# numbers and views (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps
+# 2, 4 and 5)
 # against the NURL translator (`nurl-cert translate`,
 # packages/nurl-cert/src/tolean.nu), over every certify program, every hole
 # probe, and the programs of tools/ncore/elab/ (written for this test: each
@@ -25,8 +26,8 @@
 #               elabIR's functions in the translator's syntax
 #        LAX    the translator refuses the program
 #   Every other program is `none` (outside the subset).
-#   3. The words leave out a library function's statement lines
-#      (words.nu). elabIR also runs on every line of each core IR
+#   3. The words leave out a library function whose records Lean's reader
+#      reads (words.nu). elabIR also runs on every line of each core IR
 #      (`elab_parity_full.py`), and its answer must be the same on both
 #      (`progBeq`, `stmtBeq`), for every program.
 # The target: no DIFF, no LAX (every program elabIR answers for matches),
@@ -62,7 +63,13 @@ EXPECT_CERTIFY="cursor_over_a_vec int_recursion_early_return joins_each_freeing_
     owner_read_after_its_move_in_the_round_before_refused owners_rotated_in_a_loop
     raw_string_given_to_a_sink raw_string_read_after_its_sink_refused raw_strings_literal_and_fresh
     temporary_dropped_in_an_if_arm use_after_move_refused vec_element_read_after_its_move_refused
-    vec_elements_read_between_pushes vec_push_len while_loop_summing"
+    vec_elements_read_between_pushes vec_push_len while_loop_summing
+    view_taken_after_the_pushes view_kept_across_a_realloc_refused
+    view_kept_across_pushes_in_a_loop_refused view_kept_across_a_clear_refused
+    view_kept_across_a_reserve_refused string_copied_from_a_view_of_a_freed_string_refused
+    string_pushed_its_own_view_refused vec_cleared_then_pushed vec_reserved_then_pushed
+    foreach_summing_a_vec vec_pushed_while_iterated_refused raw_strings_held_in_a_vec
+    raw_string_held_in_a_vec_past_its_source_refused"
 
 # (the list is copied aside first: it may be the work directory's own
 # progs.txt from an earlier run)
@@ -118,6 +125,7 @@ def e : Expr → String
   | .lt a b => s!"(.lt {e a} {e b})"
   | .any => ".any"
   | .len x => s!"(.len {x})"
+  | .slen x => s!"(.slen {x})"
   | _ => "?expr"
 def r : Rhs → String
   | .expr x => s!".expr {e x}"
@@ -125,7 +133,13 @@ def r : Rhs → String
   | .var y => s!".var {y}"
   | .borrow y => s!".borrow {y}"
   | .at y i => s!".at {y} {e i}"
+  | .view y => s!".view {y}"
+  | .sat y i => s!".sat {y} {e i}"
   | _ => "?rhs"
+def ed : Edit → String
+  | .push y => s!"(.push {y})"
+  | .trunc i => s!"(.trunc {e i})"
+  | .set i y => s!"(.set {e i} {y})"
 def s : Stmt → String
   | .skip => ".skip"
   | .seq a b => s!"(.seq {s a} {s b})"
@@ -138,6 +152,7 @@ def s : Stmt → String
   | .loop a => s!"(.loop {s a})"
   | .push x y => s!"(.push {x} {y})"
   | .free x => s!"(.free {x})"
+  | .edit t x o => s!"(.edit {t} {x} {ed o})"
   | _ => "?stmt"
 def fn (f : Fn) : String :=
   s!"params := {repr f.params}, resTy := {repr f.resTy}, resOwn := {f.resOwn}, body := {s f.body}, nvars := {f.nvars}"
