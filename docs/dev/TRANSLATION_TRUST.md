@@ -236,12 +236,88 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   options, structs, the library calls, closures), each with its rows of
   the table above; then the certificate's claims stated about `elabIR ir`.
 
+## Route (b), step 3: the bundle's term checked by the kernel (AGORA-1029)
+
+- For a program in the scalar subset, a certificate bundle no longer
+  trusts the translator (`tolean.nu`). One more bundle file
+  (docs/dev/CERTIFICATE.md §2), `Elab.lean`: Program.core as words
+  (`nurl-cert words`, `noncomputable def Cert.ir`) and
+  `theorem Cert.elab : C.Elab.elabIR ir = some (P, entry)`, by
+  `elabIs_sound` and `decide +kernel`. It is a pure function of
+  Program.core.
+- The claims stay about `P` and `entry`, Program.lean's term. With
+  `Cert.elab` that term is `elabIR`'s of the words: the claims are about
+  "the program `elabIR` makes of this core IR", as the design above has
+  it, without a second form of the claims.
+- **What is out of the trusted path**, for those programs: the
+  translator, and with it every encoding the subset uses (scalars as
+  `.int`, untracked numbers as `.any`, calls, loops, `break`, `continue`,
+  returns). They are now `C.Elab.elabIR`'s definitions, which the kernel
+  runs.
+- **What is still trusted**, the `translation` ledger row, reworded for
+  such a bundle:
+  - `nurlc --emit-core`: that the core IR is the source's;
+  - the split into words (`words.nu`). `verify` makes Elab.lean again
+    from the hashed Program.core and compares it byte for byte. Every word
+    is a string literal (`"` and `\` escaped, bytes below 32 as `\x..`).
+    A core IR that is not well-formed UTF-8 has no words, since Lean reads
+    such a byte as U+FFFD;
+  - that `elabIR`'s rules give a core IR its meaning. They are
+    definitions in formal/, reviewed, not proved against a semantics of
+    the core IR, which does not exist yet.
+- **Which programs.** Lean decides. certify asks it for every program
+  whose translated term can be `elabIR`'s at all: a term holding a
+  constructor `elabIR` never builds, or `true`, cannot equal its term
+  (`elabIs` compares constructor by constructor), so for it Lean is not
+  asked. That skip is exact: it is read off `elabIR`'s codomain
+  (`ELAB_CTORS` in packages/nurl-cert/src/claims.nu; formal/C/Elab.lean
+  says above `elabIR` that a new constructor goes into that list too), not
+  off its rules. The bundle keeps Elab.lean when the checker accepts the
+  program and Lean proves `Cert.elab` on the standard axioms; otherwise
+  it is deleted, and the bundle is as before. Of the 62 certify programs,
+  3 get Elab.lean: `while_loop_summing`, `int_recursion_early_return` and
+  `loop_with_continue_and_break`. The selftest's sweep requires exactly
+  these 3, so a stale constructor list fails CI rather than silently
+  dropping the stronger bundle.
+- The manifest records the case by `hashes.elab_lean`, and the
+  `translation` row's text follows it. The schema stays `nurl-cert/1`: a
+  bundle without it, an older one included, verifies with the
+  translator's row. A bundle downgraded honestly (Elab.lean removed, its
+  hash dropped, the row the translator's again) verifies too. That is
+  expected: it claims less, and its ledger says so.
+- **Tested** (`packages/nurl-cert/tests/nurl-cert_test.sh`, part 2b):
+  another scalar program's Program.lean swapped into a subset bundle,
+  with its hash updated, now fails a plain `verify`, on `Cert.elab` alone.
+  Before, only `verify --rebuild` caught it. So do Elab.lean deleted with
+  the manifest kept, and its words or its theorem edited. Part 2c holds
+  the words to string literals: quotes, backslashes, `-/`, `/-`, a
+  would-be `axiom`, control characters and non-ASCII read back as their
+  bytes, and five byte sequences that are not UTF-8 have no words.
+- **Cost.** Measured over the 62 certify programs, one at a time, best of 3,
+  before and after run in turn on the same x86-64 host: certify takes
+  79.2 s against 78.6 s before (+0.8 %, within the runs' spread of
+  ±1.2 s). Three things keep it there:
+  - the skip above: the 33 accepted programs outside the subset and every
+    refused one get no Elab.lean and no Lean run of it;
+  - one file, one Lean process: the words and the theorem are elaborated
+    together (a separate words module cost another start-up, ≈ 0.25 s,
+    and an olean written and read);
+  - Elab.lean is checked by a second Lean process beside Claims.lean,
+    against the same Program.olean, so the two overlap.
+  For the 3 programs in the subset the check costs 0.6 s of Lean, most of
+  it hidden behind the claims' check. Elaborating the words costs ≈ 1 ms
+  per core IR line (the list literal itself: other spellings are no
+  faster; `noncomputable` saves the code generator's 0.25 s on 600
+  lines). Without the skip, certify took 72 % longer: most programs'
+  core IR carries hundreds of lines of the library's functions.
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
-rules over words. Then:
-- the certificate states its claims about `elab ir`;
-- `verify` checks the words against `Program.core`;
+rules over words. Done: the claims rest on `elabIR` for the scalar
+subset, and `verify` checks the words against `Program.core` (step 3).
+Then:
+- the subset widened rule by rule;
 - the per-encoding rows above replace `translation`;
 - kernel time is measured on the corpus;
 - `elab`'s parity with the NURL translator is shown over the sweep.

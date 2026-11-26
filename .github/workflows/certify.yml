@@ -3,8 +3,10 @@ name: certify
 # Memory-safety certificates of programs (AGORA-1019, docs/dev/CERTIFICATE.md):
 # nurl-cert (packages/nurl-cert, NURL) certifies every program of
 # tools/ncore/certify/ through nurlc --emit-core, the translation and the
-# kernel, re-verifies each bundle, and its selftest tampers with a bundle in
-# each of the ways verify must catch. Runs when a piece of that chain changes.
+# kernel (for a program in C.Elab's subset, the kernel also builds the term:
+# Elab.lean, which needs C.Elab), re-verifies each bundle, and its selftest
+# tampers with a bundle in each of the ways verify must catch. Runs when a
+# piece of that chain changes.
 
 on:
   push:

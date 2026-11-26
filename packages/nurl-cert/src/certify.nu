@@ -5,6 +5,10 @@
 //     Program.lean    the program as a term of formal/A2 (P, entry)
 //     Claims.lean     the claims, stated and proved (only when the checker
 //                     accepts; see claims.nu)
+//     Elab.lean       Program.core as words (words.nu), and the proof that
+//                     Program.lean's term is the one the kernel builds from
+//                     them (C.Elab.elabIR): only when the checker accepts
+//                     and Lean proves Cert.elab
 //     manifest.json   statuses, coverage, hashes, versions, trust ledger
 //
 // Fail closed: a program the translation does not cover is `unsupported`,
@@ -18,6 +22,7 @@ $ `shape.nu`
 $ `lean.nu`
 $ `manifest.nu`
 $ `tolean.nu`
+$ `words.nu`
 $ `stdlib/std/random.nu`
 
 : s NURLCERT_VERSION ( pkg_version )
@@ -270,7 +275,9 @@ $ `stdlib/std/random.nu`
 
 // ── The ledger ───────────────────────────────────────────────────────
 
-@ cert_ledger s prof ( Vec String ) unsafe_rows b threads → Json {
+// `elab`: the bundle has Elab.lean, so the term is the kernel's
+// (`Cert.elab`) and the translation row names only what is left of it.
+@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab → Json {
     // the claims a shared row backs: M.race too, for a threaded program
     : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
     : s muc ? threads `M.unsafe M.safe M.leak M.race` `M.unsafe M.safe M.leak`
@@ -286,9 +293,15 @@ $ `stdlib/std/random.nu`
     ( json_arr_push L ( mj_row `claim-definitions` defs
     `a claim means what these definitions say; formal/CLAIM.md is their review document`
     `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` mc ) )
-    ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
-    `nothing yet proves that P is the program the source describes (AGORA-1020 moves it inside the kernel's sight)`
-    `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted, tested by tests/translate_test.sh and tools/ncore/tolean_parity.sh)` mc ) )
+    ? elab {
+        ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term, the part the kernel does not check: nurlc --emit-core, and the core IR as words (packages/nurl-cert/src/words.nu); the term itself is checked by the kernel (Elab.lean, theorem Cert.elab: C.Elab.elabIR builds P and entry from the words)`
+        `nothing proves that the core IR is the source's, nor that C.Elab.elabIR's rules (formal/C/Elab.lean) give a core IR its meaning; verify makes Elab.lean, words and all, again from Program.core and compares it byte for byte`
+        `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/words.nu, formal/C/Elab.lean` `nurlc (untrusted, tested by the hole corpus) and nurl-cert's words (re-made by verify); the term: the Lean kernel` mc ) )
+    } {
+        ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
+        `nothing yet proves that P is the program the source describes (AGORA-1020 moves it inside the kernel's sight)`
+        `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted, tested by tests/translate_test.sh and tools/ncore/tolean_parity.sh)` mc ) )
+    }
     ( json_arr_push L ( mj_row `library-summaries` `the standard library as the term has it: its calls are A2 primitives and declared summaries`
     `the library's unsafe base follows formal/B's models by inspection, not by proof (AGORA-1014 ties each to its theorem)`
     `packages/nurl-cert/src/tolean.nu, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` mc ) )
@@ -355,6 +368,7 @@ $ `stdlib/std/random.nu`
     // survive next to a manifest that says the program is now refused.
     ?? ( file_delete ( string_data ( nc_join out `Claims.lean` ) ) ) { T _ → {} F _ → {} }
     ?? ( file_delete ( string_data ( nc_join out `manifest.json` ) ) ) { T _ → {} F _ → {} }
+    ?? ( file_delete ( string_data ( nc_join out `Elab.lean` ) ) ) { T _ → {} F _ → {} }
 
     // nurlc runs from the standard library's root: the core IR then names
     // the library's files `stdlib/…`, which is how the translation tells
@@ -434,10 +448,11 @@ $ `stdlib/std/random.nu`
     : Translated tr ( cert_translate ( string_data core_path ) )
     : String prog_path ( nc_join out `Program.lean` )
     : String claims_path ( nc_join out `Claims.lean` )
+    : String elab_path ( nc_join out `Elab.lean` )
     : ~ i nv 0
     : ~ b threads F
     ? . tr ok {
-        : ShapeRes sh ( cert_shape ( string_data . tr lean ) )
+        : ShapeRes sh ( cert_shape . tr lean )
         ? . sh ok {
             = nv . sh nv
             = threads . sh threads
@@ -461,16 +476,28 @@ $ `stdlib/std/random.nu`
     : ( Vec ( Vec String ) ) axioms ( vec_new [( Vec String )] )
     : ( Vec String ) statuses ( vec_new [String] )
     : i nclaims ( cert_claim_count threads )
+    : ~ b elab F
     ? ( nc_is verdict `accepted` ) {
         : String claims ( cert_claims_lean prof nv threads )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
+        // C.Elab: does the kernel build this very term from the core IR's
+        // words? Lean decides, beside the claims' check, for every term
+        // that can be elabIR's at all (`cert_elab_candidate`: one with a
+        // constructor elabIR never builds cannot, so Lean is not asked). A
+        // core IR that is not UTF-8 has no words.
+        : ~ b try_elab F
+        ? ( cert_elab_candidate ( string_data . tr lean ) ) {
+            ?? ( cert_elab_lean . r1 out ) {
+                T el → { = try_elab ( nc_write ( string_data elab_path ) ( string_data el ) ) }
+                F → {}
+            }
+        } {}
         : String work ( nc_join out `.build` )
         // A fresh directory: an .olean the bundle brought must not stand in
         // for the one compiled from its Program.lean.
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
-        : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data formal ) out ( string_data work ) )
-        ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
+        : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data formal ) out ( string_data work ) try_elab )
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
             = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)` `the verified checker refuses the program (C.certOK2B is false)` )
@@ -482,6 +509,12 @@ $ `stdlib/std/random.nu`
                 ( nurl_eprint ( string_data . lr log ) )
             } {}
         }
+        // The bundle keeps Elab.lean only for a program the checker accepts
+        // and a run that proved Cert.elab on the standard axioms; otherwise
+        // it is as before, its term the translator's (the translation row).
+        = elab & & try_elab ( nc_is verdict `accepted` ) ( cert_elab_proved lr )
+        ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
+        ? ! elab { ?? ( file_delete ( string_data elab_path ) ) { T _ → {} F _ → {} } } {}
         : ~ i k 0
         ~ < k nclaims {
             ?? ( cert_lean_axioms . lr log ( cert_claim_lean k ) ) {
@@ -609,6 +642,9 @@ $ `stdlib/std/random.nu`
             F → {}
         }
     } {}
+    ? elab {
+        ?? ( nc_sha256_file ( string_data elab_path ) ) { T h → ( mj_str hs `elab_lean` ( string_data h ) ) F → {} }
+    } {}
     ? > ( string_len . o binary ) 0 {
         : Json bo ( json_obj_new )
         ( mj_str bo `path` ( string_data . o binary ) )
@@ -637,7 +673,7 @@ $ `stdlib/std/random.nu`
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )
@@ -662,6 +698,7 @@ $ `stdlib/std/random.nu`
             }
             = z + z 1
         }
+        ( nurl_println ? elab `  term: Cert.elab (the kernel built it from the core IR's words)` `  term: the translator's (the translation ledger row)` )
         ^ ? all 0 1
     } {}
     ? ( nc_is verdict `refused` ) { ^ 3 } {}

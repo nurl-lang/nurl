@@ -1,6 +1,6 @@
 // lean.nu — Lean as nurl-cert runs it: the checked tree of formal/, its
 // hash, and one run of the kernel over a bundle's Program.lean and
-// Claims.lean.
+// Claims.lean (and, for a program in C.Elab's subset, Elab.lean).
 
 $ `util.nu`
 $ `claims.nu`
@@ -91,13 +91,35 @@ $ `claims.nu`
 : LeanRun {
     b ran
     String log
+    // `elab`: Elab.lean checked too, beside Claims.lean, and its log
+    b elab_ran
+    String elab_log
+}
+
+// `lake env lean <file>`, started in the background (inside formal/, with
+// the environment as it is, LEAN_PATH included), its output into `log`.
+// (Through `sh`, so that the output goes to a file: a pipe nobody reads
+// could fill and stop it.)
+@ __lt_spawn s lake s file s log → ?ProcChild {
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `-c` )
+    ( vec_push [s] args `exec "$0" env lean "$1" > "$2" 2>&1` )
+    ( vec_push [s] args lake )
+    ( vec_push [s] args file )
+    ( vec_push [s] args log )
+    ^ ?? ( process_spawn `sh` args ) {
+        T c → @ ?ProcChild { T c }
+        F _ → @ ?ProcChild { F }
+    }
 }
 
 // Compile `bundle/Program.lean` to an olean under `work`, then check
 // `bundle/Claims.lean` against it, both inside formal/ (`lake env`, so
-// that `import C.Cert` is formal/'s). Every path is absolute; the working
-// directory is formal/ for the run and restored after.
-@ cert_lean_check s lake s formal s bundle s work → LeanRun {
+// that `import C.Cert` is formal/'s). With `elab`, `bundle/Elab.lean` is
+// checked against the same olean at the same time, in a second Lean
+// process. Every path is absolute; the working directory is formal/ for
+// the run and restored after.
+@ cert_lean_check s lake s formal s bundle s work b elab → LeanRun {
     : String log ( string_new )
     : String prog ( nc_join bundle `Program.lean` )
     : String claims ( nc_join bundle `Claims.lean` )
@@ -110,7 +132,7 @@ $ `claims.nu`
         F _ → {
             ( string_push_str log `cannot enter the formal tree ` )
             ( string_push_str log formal )
-            ^ @ LeanRun { F log }
+            ^ @ LeanRun { F log F ( string_new ) }
         }
     }
     : ( Vec String ) a1 ( vec_new [String] )
@@ -123,23 +145,50 @@ $ `claims.nu`
     : Run r1 ( nc_run lake a1 )
     ( string_push_str log ( string_data . r1 out ) )
     ( string_push_str log ( string_data . r1 err ) )
-    ? | ! . r1 started != . r1 code 0 {
-        ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
-        ^ @ LeanRun { F log }
+    : ~ b ran & . r1 started == . r1 code 0
+    : ~ b eran F
+    : ~ String elog ( string_new )
+    ? ran {
+        ?? ( env_set `LEAN_PATH` work ) { T _ → {} F _ → {} }
+        : String elab_file ( nc_join bundle `Elab.lean` )
+        : String elab_logf ( nc_join work `elab.log` )
+        : ~ ? ProcChild ec @ ?ProcChild { F }
+        ? elab { = ec ( __lt_spawn lake ( string_data elab_file ) ( string_data elab_logf ) ) } {}
+        : ( Vec String ) a2 ( vec_new [String] )
+        ( vec_push [String] a2 ( string_from `env` ) )
+        ( vec_push [String] a2 ( string_from `lean` ) )
+        ( vec_push [String] a2 ( string_clone claims ) )
+        : Run r2 ( nc_run lake a2 )
+        ?? ( env_unset `LEAN_PATH` ) { T _ → {} F _ → {} }
+        ( string_push_str log ( string_data . r2 out ) )
+        ( string_push_str log ( string_data . r2 err ) )
+        // A run counts only when Lean finished: one killed before it printed
+        // the axioms reports nothing to read.
+        = ran & . r2 started == . r2 code 0
+        // Elab.lean's run, likewise: only an exit 0 counts.
+        ?? ec {
+            T c → {
+                : i code ( proc_wait c )
+                = eran == code 0
+                = elog ?? ( nc_read ( string_data elab_logf ) ) { T x → x F → ( string_new ) }
+            }
+            F → {
+                ? elab { = elog ( string_from `could not start Lean on Elab.lean` ) } {}
+            }
+        }
     } {}
-    ?? ( env_set `LEAN_PATH` work ) { T _ → {} F _ → {} }
-    : ( Vec String ) a2 ( vec_new [String] )
-    ( vec_push [String] a2 ( string_from `env` ) )
-    ( vec_push [String] a2 ( string_from `lean` ) )
-    ( vec_push [String] a2 ( string_clone claims ) )
-    : Run r2 ( nc_run lake a2 )
-    ?? ( env_unset `LEAN_PATH` ) { T _ → {} F _ → {} }
     ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
-    ( string_push_str log ( string_data . r2 out ) )
-    ( string_push_str log ( string_data . r2 err ) )
-    // A run counts only when Lean finished: one killed before it printed
-    // the axioms reports nothing to read.
-    ^ @ LeanRun { & . r2 started == . r2 code 0 log }
+    ^ @ LeanRun { ran log eran elog }
+}
+
+// Lean proved `Cert.elab` on the standard axioms alone: the run exited 0,
+// reported no error, and `#print axioms` lists no other axiom.
+@ cert_elab_proved LeanRun lr → b {
+    ? | ! . lr elab_ran ( cert_lean_has_error . lr elab_log ) { ^ F } {}
+    ^ ?? ( cert_lean_axioms . lr elab_log `Cert.elab` ) {
+        T ax → ( cert_axioms_std ( cert_axiom_list ax ) )
+        F → F
+    }
 }
 
 // ── Reading the run ──────────────────────────────────────────────────
@@ -196,6 +245,20 @@ $ `claims.nu`
         = k + k 1
     }
     ^ out
+}
+
+// Every axiom is one of the three standard ones.
+@ cert_axioms_std ( Vec String ) axioms → b {
+    : i n ( vec_len [String] axioms )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] axioms k ) {
+            T a → { ? ! ( cert_std_axiom ( string_data a ) ) { ^ F } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ T
 }
 
 // A claim's status from its axioms: `proved` when it rests on the three
