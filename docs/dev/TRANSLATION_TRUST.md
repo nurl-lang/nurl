@@ -847,8 +847,10 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   loaded by the verdict sweep). With the keywords as numbers `elabIR`
   takes 3.03 s there.
 - **The `sum` lines no other word names are left out** (`words.nu`). A
-  `sum` line whose name is none of the words of the kept lines but the
-  `sum` lines is not printed. `elabIR` looks a summary up only by a
+  `sum` line outside every function (Lean's reader reads only those as
+  summaries) whose name is none of the words of the kept lines but those
+  `sum` lines is not printed; one inside a function is a statement of its
+  body, which `elabIR` refuses, and is kept (selftest 2e). `elabIR` looks a summary up only by a
   function's own name, a callee's name, or the function a `let … call f`
   calls, each a word of a kept line, and a name's summary is its last
   `sum` line, which stays. A `sum` line with no name is kept (`topOk`

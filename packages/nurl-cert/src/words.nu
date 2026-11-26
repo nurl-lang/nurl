@@ -41,11 +41,14 @@
 // compares the two over the corpus; the selftest over IRs the reader
 // refuses).
 //
-// A `sum` line is left out when its name (its second word) is none of the
-// words of the lines kept but the `sum` lines (0.3.1). `elabIR` looks a
-// summary up only by a function's own name, a callee's name or the
-// function a `let … call f` calls, each a word of a kept line that is not
-// a `sum` line, and a name's summary is its last `sum` line, which stays.
+// A `sum` line outside every function (where Lean's reader reads it as a
+// summary; inside one it is a statement of the body, which `elabIR`
+// refuses, and is kept) is left out when its name (its second word) is
+// none of the words of the lines kept but those `sum` lines (0.3.1).
+// `elabIR` looks a summary up only by a function's own name, a callee's
+// name or the function a `let … call f` calls, each a word of a kept line
+// that is not such a `sum` line, and a name's summary is its last `sum`
+// line, which stays.
 // A `sum` line with no name is kept (`topOk` refuses it, as the reader
 // does). So `elabIR` answers the same (tools/ncore/elab_parity.sh checks it
 // over the corpus; translate_test 1c checks the rule against a Python
@@ -211,26 +214,32 @@ $ `util.nu`
     ^ & >= s0 0 ( __wd_is t s0 ( vec_at [i] w0 1 ) w )
 }
 
-// A line kept for the words: its start and end.
-@ __wd_keep ( Vec i ) kept i a i z → v {
+// A line kept for the words: its start and end, and whether it is outside
+// every function (`top`: where Lean's reader reads a `sum` line as a
+// summary; inside a function one is a statement of its body).
+@ __wd_keep ( Vec i ) kept i a i z b top → v {
     ( vec_push [i] kept a )
     ( vec_push [i] kept z )
+    ( vec_push [i] kept ? top 1 0 )
 }
 
-// The words of the line t[a, z) as printed, each put in `seen`.
+// The words of the line t[a, z) as printed (split as in `__wd_line`, in
+// one pass), each put in `seen`.
 @ __wd_see ( Slice u ) t i a i z b header ( HashMap String i ) seen → v {
-    : ~ i j 0
-    : ~ b more T
-    ~ more {
-        : ( Vec i ) w ( vec_new [i] )
-        ( __wd_word t a z header j w )
-        : i s ( vec_at [i] w 0 )
-        ? < s 0 { = more F } {
-            : String k ( string_new )
-            ( string_push_window k t s - ( vec_at [i] w 1 ) s )
-            : ?i _o ( map_set [String i] seen k 1 \ String x → i { ^ ( hash_string ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
-            = j + j 1
+    : ~ i k a
+    ~ <= k z {
+        : ~ i e k
+        ? header {
+            ~ & < e z != ( slice_byte t e ) 9 { = e + e 1 }
+        } {
+            ~ & & < e z != ( slice_byte t e ) 32 != ( slice_byte t e ) 9 { = e + e 1 }
         }
+        ? | header > e k {
+            : String w ( string_new )
+            ( string_push_window w t k - e k )
+            : ?i _o ( map_set [String i] seen w 1 \ String x → i { ^ ( hash_string ( string_data x ) ) } \ String x String y → b { ^ ( eq_string ( string_data x ) ( string_data y ) ) } )
+        } {}
+        = k + e 1
     }
 }
 
@@ -255,7 +264,7 @@ $ `util.nu`
         : i q ( __wd_eol t p n )
         ? ! ( __wd_blank t p q ) {
             : b h ( __wd_header t p q )
-            ? | | ( __wd_first t p q h `fn` ) ( __wd_first t p q h `v` ) ( __wd_first t p q h `endfn` ) { ( __wd_keep kept p q ) } {}
+            ? | | ( __wd_first t p q h `fn` ) ( __wd_first t p q h `v` ) ( __wd_first t p q h `endfn` ) { ( __wd_keep kept p q F ) } {}
         } {}
         = p + q 1
     }
@@ -275,6 +284,9 @@ $ `util.nu`
     : ~ b in_lib F
     : ~ b lib_ok F
     : ~ i lib_a 0
+    // how many functions are open, as Lean's reader counts them: a line
+    // read at depth 0 is outside every function
+    : ~ i depth 0
     : ( Vec i ) kept ( vec_new [i] )
     : ~ i a 0
     ~ < a n {
@@ -283,6 +295,8 @@ $ `util.nu`
             : b header ( __wd_header t a z )
             : b is_fn ( __wd_first t a z header `fn` )
             : b is_end ( __wd_first t a z header `endfn` )
+            : b top == depth 0
+            ? is_fn { = depth + depth 1 } { ? & is_end > depth 0 { = depth - depth 1 } {} }
             : ~ b keep T
             ? & in_lib is_fn {
                 // a function opened inside the library's: the reader refuses
@@ -317,16 +331,18 @@ $ `util.nu`
                     ? is_end { = in_fn F } {}
                 }
             }
-            ? keep { ( __wd_keep kept a z ) } {}
+            ? keep { ( __wd_keep kept a z top ) } {}
         } {}
         = a + z 1
     }
     // a library function left open: the reader refuses
     ? in_lib { ( __wd_records t lib_a n kept ) } {}
-    // The words of every kept line but the `sum` lines: the only names
-    // `elabIR` looks a summary up by (a function's own, its callees', a
-    // `let`'s called one). A `sum` line whose name is none of them is left
-    // out; one with no name is kept (`topOk` refuses it).
+    // The words of every kept line but the top-level `sum` lines: the only
+    // names `elabIR` looks a summary up by (a function's own, its callees',
+    // a `let`'s called one). A top-level `sum` line whose name is none of
+    // them is left out; one with no name is kept (`topOk` refuses it), and
+    // so is a `sum` line inside a function (a statement of its body, which
+    // the reader refuses).
     : ( HashMap String i ) seen ( map_new [String i] )
     : i nk ( vec_len [i] kept )
     : ~ i r 0
@@ -334,8 +350,8 @@ $ `util.nu`
         : i ka ( vec_at [i] kept r )
         : i kz ( vec_at [i] kept + r 1 )
         : b h ( __wd_header t ka kz )
-        ? ! ( __wd_first t ka kz h `sum` ) { ( __wd_see t ka kz h seen ) } {}
-        = r + r 2
+        ? ! & == ( vec_at [i] kept + r 2 ) 1 ( __wd_first t ka kz h `sum` ) { ( __wd_see t ka kz h seen ) } {}
+        = r + r 3
     }
     = r 0
     ~ < r nk {
@@ -343,14 +359,14 @@ $ `util.nu`
         : i kz ( vec_at [i] kept + r 1 )
         : b h ( __wd_header t ka kz )
         : ~ b out T
-        ? ( __wd_first t ka kz h `sum` ) {
+        ? & == ( vec_at [i] kept + r 2 ) 1 ( __wd_first t ka kz h `sum` ) {
             : ( Vec i ) w1 ( vec_new [i] )
             ( __wd_word t ka kz h 1 w1 )
             : i s1 ( vec_at [i] w1 0 )
             ? & >= s1 0 ! ( __wd_seen t s1 ( vec_at [i] w1 1 ) seen ) { = out F } {}
         } {}
         ? out { ( __wd_line t ka kz h o first ) } {}
-        = r + r 2
+        = r + r 3
     }
     ( string_push_str o `]\n` )
     ^ o

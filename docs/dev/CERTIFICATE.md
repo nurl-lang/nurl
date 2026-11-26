@@ -199,11 +199,12 @@ prog.cert/
     as numbers"). A 0.3.0 bundle with Elab.lean does not verify with
     0.3.1 (`verify` makes Elab.lean again, and it is another file now):
     certify the program again.
-  - A `sum` line is left out of the words when its name is none of the
-    words of the other lines kept (0.3.1): `elabIR` looks a summary up only
-    by a function's name, a callee's name or the function a `let … call f`
-    calls, all of them words of those lines. A `sum` line with no name is
-    kept (the reader refuses it).
+  - A `sum` line outside every function is left out of the words when its
+    name is none of the words of the other lines kept (0.3.1): `elabIR`
+    looks a summary up only by a function's name, a callee's name or the
+    function a `let … call f` calls, all of them words of those lines. A
+    `sum` line with no name is kept (the reader refuses it), and so is one
+    inside a function (a statement of its body, which `elabIR` refuses).
   - A library function (its file starts with `stdlib/`) is left out of
     the words whole, when Lean's reader (`C.Elab.readFns`) would accept
     its records: its `fn` line's parameter count and each of its `v`

@@ -499,6 +499,21 @@ EOF2
         ok "every word is a number Lean reads back as its bytes (non-UTF-8 bytes included)"
     else bad "every word is a number Lean reads back as its bytes (lean rc $lrc)"; printf '%s\n%s\n' "$want" "$have" | head -5 | cut -c1-300 | sed 's/^/        /'; fi
 else bad "nurl-cert words reads the crafted core IR"; cat "$TMP/x.err"; fi
+# A long word (2000 bytes: its number has ~4800 decimal digits) reaches the
+# parity test's JSON whole, from the words and from every line alike.
+printf 'eval %s\n' "$(head -c 2000 /dev/zero | tr '\0' 'x')" > "$TMP/long.core"
+if "$C" words "$TMP/long.core" > "$TMP/long.words" 2> /dev/null \
+    && python3 "$ROOT/tools/ncore/elab_parity_json.py" "$TMP/long.words" > "$TMP/long.json" \
+    && python3 "$ROOT/tools/ncore/elab_parity_full.py" "$TMP/long.core" > "$TMP/long.full" \
+    && python3 - "$TMP/long.json" "$TMP/long.full" <<'EOF2'
+import json, sys
+hasattr(sys, "set_int_max_str_digits") and sys.set_int_max_str_digits(0)
+a, b = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+w = b"x" * 2000
+sys.exit(0 if a == b == [[256 ** 4 + int.from_bytes(b"eval"[::-1], "big"), 256 ** 2000 + int.from_bytes(w, "big")]] else 1)
+EOF2
+then ok "a 2000-byte word reaches the parity JSON whole"
+else bad "a 2000-byte word reaches the parity JSON whole"; fi
 # The words are made from the text up to its first NUL: a core IR with one
 # has no words (`ret c`, NUL, 0xff).
 printf 'ret c\000\377\n' > "$TMP/y.core"
@@ -545,6 +560,36 @@ nl=$(printf '%s\n' "$have" | awk 'NF == 4 && $2 == $3 && $3 == $4' | wc -l)
 if [ "$lrc" = 0 ] && [ "$nl" = 11 ] && [ "$(printf '%s\n' "$have" | wc -l)" = 11 ]; then
     ok "the reader accepts the words of each library case as it accepts its every line (11 cases)"
 else bad "the reader accepts the words of each library case as it accepts its every line (lean rc $lrc)"; printf '%s\n' "$have" | head -20 | sed 's/^/        /'; fi
+
+echo "== 2e. a sum line is left out of the words only outside every function"
+# A top-level `sum` line no other word names is left out (elabIR looks a
+# summary up only by a function's, a callee's or a let-called function's
+# name); one inside a function is a statement of its body, kept, so that
+# elabIR refuses the words as it refuses every line. Each case: elabIR
+# answers on the words as on every line, the answer the case expects, and
+# the line is left out (or kept) as the case says.
+sum_case() {  # name, want (true/false), out (left out: true/false), then the core IR's lines
+    local n="$1" want="$2" out="$3"; shift 3
+    printf '%s\n' "$@" > "$TMP/s_$n.core"
+    if "$C" words "$TMP/s_$n.core" > "$TMP/s_$n.words" 2> /dev/null; then
+        full=$(python3 "$ROOT/tools/ncore/elab_parity_full.py" "$TMP/s_$n.core")
+        { echo "namespace S_$n"; cat "$TMP/s_$n.words"; echo "def full : C.Elab.IR := $full"
+          echo "#eval IO.println s!\"$n {(C.Elab.elabIR ir).isSome} {(C.Elab.elabIR full).isSome} $want\""; echo "end S_$n"; } >> "$TMP/s.lean"
+        if grep -q "$(python3 -c 'print("0x1" + b"unused"[::-1].hex())')" "$TMP/s_$n.words"; then o=false; else o=true; fi
+        [ "$o" = "$out" ] && ok "sum case $n: the line is $( [ "$out" = true ] && echo left out || echo kept )" \
+            || bad "sum case $n: the line is $( [ "$out" = true ] && echo left out || echo kept )"
+    else bad "nurl-cert words reads the sum case $n"; fi
+}
+echo "import C.Elab" > "$TMP/s.lean"
+sum_case top_unused true true "${MAIN[@]}" "sum${T}unused${T}0"
+sum_case top_before_main true true "sum${T}unused${T}0" "${MAIN[@]}"
+sum_case in_main_stmt false false "${MAIN[0]}" "sum unused 0" "ret c" "endfn"
+sum_case in_main_header false false "${MAIN[0]}" "sum${T}unused${T}0" "ret c" "endfn"
+have=$(cd "$ROOT/formal" && lake env lean "$TMP/s.lean" 2>&1); lrc=$?
+nl=$(printf '%s\n' "$have" | awk 'NF == 4 && $2 == $3 && $3 == $4' | wc -l)
+if [ "$lrc" = 0 ] && [ "$nl" = 4 ] && [ "$(printf '%s\n' "$have" | wc -l)" = 4 ]; then
+    ok "elabIR answers on the words of each sum case as on its every line (4 cases)"
+else bad "elabIR answers on the words of each sum case as on its every line (lean rc $lrc)"; printf '%s\n' "$have" | head -20 | sed 's/^/        /'; fi
 
 echo "== 3. the fast profile"
 "$C" certify "$P/prog.nu" "${CA[@]}" --profile fast --out "$P/fast.cert" > "$TMP/f.out" 2>&1

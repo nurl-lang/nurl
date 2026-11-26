@@ -13,6 +13,12 @@ kernel stage reads."""
 import json
 import sys
 
+# A word is a number of 8 bits a byte: a 2000-byte word has ~4800 decimal
+# digits, past CPython's default limit (4300) for writing one in decimal,
+# which json.dump does.
+if hasattr(sys, "set_int_max_str_digits"):
+    sys.set_int_max_str_digits(0)
+
 HEAD = "def ir : C.Elab.IR := "
 WORD = "nat_lit 0x1"
 HEX = "0123456789abcdef"

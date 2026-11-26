@@ -10,6 +10,12 @@ import json
 import re
 import sys
 
+# A word is a number of 8 bits a byte: a 2000-byte word has ~4800 decimal
+# digits, past CPython's default limit (4300) for writing one in decimal,
+# which json.dump does.
+if hasattr(sys, "set_int_max_str_digits"):
+    sys.set_int_max_str_digits(0)
+
 
 def num(w):
     return 256 ** len(w) + int.from_bytes(w[::-1], "big")
