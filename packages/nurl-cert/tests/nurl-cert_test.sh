@@ -17,6 +17,9 @@
 #     no claim above `open`, and it verifies as such. Exactly the programs
 #     in C.Elab's subset get Elab.lean (the kernel builds their term,
 #     Cert.elab); the rest none.
+#  1b. The one Lean file certify and verify check agrees with the module
+#     way (Program.olean, then Claims.lean and Elab.lean) on three bundles;
+#     a candidate whose Elab.lean part fails is accepted without Elab.lean.
 #  2. Tampering: a fresh bundle verifies, and `verify` fails, naming the
 #     check, on each of: one source byte changed; a claim's status edited
 #     in the manifest; a theorem's statement weakened in Claims.lean;
@@ -98,16 +101,113 @@ nprog=$(ls tools/ncore/certify/*.nu | wc -l)
 # Elab.lean fails here: so does a stale constructor list in claims.nu
 # (ELAB_CTORS), which would skip Lean on it. One that gains it fails too,
 # until it is added here and there.
+# (the accepted ones among EXPECT_CERTIFY: a refused program gets no Elab.lean)
 have_elab=$(sed -n 's/^ok \(.*\) accepted (elab)$/\1/p' "$TMP/progs.txt" | sort | tr '\n' ' ')
-want_elab="int_recursion_early_return loop_with_continue_and_break while_loop_summing "
-if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 3 certify programs in the subset have Elab.lean (Cert.elab)"
-else bad "exactly the 3 certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
-if grep -qx "ok vec_push_len accepted (translator)" "$TMP/progs.txt"; then ok "vec_push_len (outside the subset): no Elab.lean, and it verifies"
-else bad "vec_push_len (outside the subset): no Elab.lean, and it verifies"; fi
+want_elab=$(printf '%s\n' cursor_over_a_vec int_recursion_early_return joins_each_freeing_a_different_vec \
+    loop_with_continue_and_break moved_on_one_branch_only owner_moved_only_on_an_early_return_from_a_loop \
+    owners_rotated_in_a_loop raw_string_given_to_a_sink raw_strings_literal_and_fresh \
+    temporary_dropped_in_an_if_arm vec_elements_read_between_pushes vec_push_len while_loop_summing \
+    | sort | tr '\n' ' ')
+if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 13 accepted certify programs in the subset have Elab.lean (Cert.elab)"
+else bad "exactly the 13 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
+if grep -qx "ok struct_fields_read accepted (translator)" "$TMP/progs.txt"; then ok "struct_fields_read (outside the subset): no Elab.lean, and it verifies"
+else bad "struct_fields_read (outside the subset): no Elab.lean, and it verifies"; fi
+
+echo "== 1b. one Lean file, and the module way"
+# certify and verify check a bundle in one Lean file (Program.lean's
+# definitions in a section, then Claims.lean's and Elab.lean's bodies). The
+# module way (Program.lean compiled to its olean, then Claims.lean and
+# Elab.lean against it) must say the same: the verdict, each claim's
+# axioms, and Cert.elab.
+for n in vec_push_len thread_sends_on_a_channel_main_receives struct_fields_read; do
+    B="$TMP/progs/$n/$n.cert"; W="$TMP/mod/$n"; mkdir -p "$W"
+    ( cd "$ROOT/formal" && lake env lean --root="$B" -o "$W/Program.olean" "$B/Program.lean" > "$W/p.log" 2>&1 \
+        && LEAN_PATH="$W" lake env lean "$B/Claims.lean" > "$W/c.log" 2>&1 \
+        && { [ ! -e "$B/Elab.lean" ] || LEAN_PATH="$W" lake env lean "$B/Elab.lean" > "$W/e.log" 2>&1; } ); mrc=$?
+    if [ "$mrc" = 0 ] && python3 - "$B" "$W" <<'EOF2'
+import json, os, re, sys
+b, w = sys.argv[1:]
+m = json.load(open(os.path.join(b, "manifest.json")))
+log = open(os.path.join(w, "c.log")).read()
+def axioms(text, name):
+    x = re.search(r"^'%s' (depends on axioms: \[(.*)\]|does not depend on any axioms)" % re.escape(name), text, re.M)
+    return None if x is None else ([] if x.group(2) is None else x.group(2).split(", "))
+lean = [c for c in m["claims"] if c["lean"]]   # (M.unsafe is the ledger's, not Lean's)
+ok = len(lean) >= 2 and all(c["status"] == "proved" and axioms(log, c["lean"]) == c["axioms"] for c in lean)
+has_elab = os.path.exists(os.path.join(b, "Elab.lean"))
+if has_elab:
+    ok = ok and "elab_lean" in m["hashes"] and axioms(open(os.path.join(w, "e.log")).read(), "Cert.elab") == ["propext", "Quot.sound"]
+else:
+    ok = ok and "elab_lean" not in m["hashes"]
+sys.exit(0 if ok else 1)
+EOF2
+    then ok "$n: the module way agrees with the combined check (verdict, each claim's axioms, Cert.elab)"
+    else bad "$n: the module way agrees with the combined check (lean rc $mrc)"; cat "$W"/*.log | head -5; fi
+done
+# A candidate (every constructor of its term is one elabIR builds) that
+# elabIR refuses (a Vec of Strings): the Elab.lean part of the one file
+# fails, and that only means no Elab.lean. The program is accepted, its
+# term the translator's, and the bundle verifies.
+P1="$TMP/c1"; mkdir -p "$P1"
+printf '$ `stdlib/core/vec.nu`\n\n@ main → i {\n    : ~ ( Vec String ) v ( vec_new [String] )\n    ^ ( vec_len [String] v )\n}\n' > "$P1/vs.nu"
+"$C" certify "$P1/vs.nu" "${CA[@]}" > "$P1/out" 2>&1; rc=$?
+ctors=$(sed -n 's/^: s ELAB_CTORS `\(.*\)`$/\1/p' packages/nurl-cert/src/claims.nu)
+cand=$(python3 - "$P1/vs.cert/Program.lean" "$ctors" <<'EOF2'
+import re, sys
+t = "".join(l for l in open(sys.argv[1]) if not l.startswith(("import ", "open ")))
+used = set(re.findall(r"(?<![A-Za-z0-9_])\.([A-Za-z_][A-Za-z0-9_]*)", t))
+print("yes" if used and used <= set(sys.argv[2].split()) else "no")
+EOF2
+)
+if [ "$rc" = 0 ] && [ "$cand" = yes ] && [ -n "$ctors" ] && grep -q "M.safe proved" "$P1/out" && grep -q "M.leak proved" "$P1/out" \
+    && grep -q "term: the translator's" "$P1/out" && [ ! -e "$P1/vs.cert/Elab.lean" ] \
+    && "$C" verify "$P1/vs.cert" --formal "$ROOT/formal" > /dev/null 2>&1; then
+    ok "a candidate whose Elab.lean part fails: accepted, no Elab.lean, verifies"
+else bad "a candidate whose Elab.lean part fails: accepted, no Elab.lean, verifies (rc $rc, candidate $cand)"; cat "$P1/out" | head -5; fi
+
+# Lean's messages are placed by their own line in the one file (Program.lean
+# and Claims.lean before the Elab.lean part's first line, Elab.lean from it),
+# not by where they come in the output. (a) certify: each refused program
+# in the subset had an Elab.lean part the kernel proves next to the
+# claims' refusal, and is refused. (b) verify: a refused program's term
+# in a bundle with Elab.lean (the claims and Elab.lean both fail) does not
+# verify, and fails on the claims. (c) An error in the Elab.lean part alone
+# only drops Elab.lean: the candidate above, and part 2b's swapped term.
+nref=0; badref=""
+for n in moved_on_one_branch_then_read_refused owner_moved_in_a_loop_without_returning_refused \
+    owner_read_after_its_move_in_the_round_before_refused raw_string_read_after_its_sink_refused \
+    use_after_move_refused vec_element_read_after_its_move_refused; do
+    pl="$TMP/progs/$n/$n.cert/Program.lean"
+    c=$(python3 - "$pl" "$ctors" <<'EOF2'
+import re, sys
+t = "".join(l for l in open(sys.argv[1]) if not l.startswith(("import ", "open ")))
+used = set(re.findall(r"(?<![A-Za-z0-9_])\.([A-Za-z_][A-Za-z0-9_]*)", t))
+print("yes" if used and used <= set(sys.argv[2].split()) else "no")
+EOF2
+)
+    if [ "$c" = yes ] && grep -qx "ok $n refused" "$TMP/progs.txt"; then nref=$((nref + 1)); else badref="$badref $n"; fi
+done
+[ "$nref" = 6 ] && ok "the 6 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
+    || bad "the refused programs in the subset are refused:$badref"
+R="$TMP/rv"; rm -rf "$R"; cp -r "$TMP/progs/vec_push_len/vec_push_len.cert" "$R"
+cp "$TMP/progs/use_after_move_refused/use_after_move_refused.cert/Program.lean" "$R/Program.lean"
+python3 - "$R/manifest.json" "$R/Program.lean" <<'EOF2'
+import hashlib, json, sys
+p = sys.argv[1]; m = json.load(open(p))
+m["hashes"]["program_lean"] = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF2
+out=$("$C" verify "$R" --formal "$ROOT/formal" 2>&1); vrc=$?
+if [ "$vrc" != 0 ] && printf '%s\n' "$out" | grep -q "FAIL  Lean checks Program.lean and Claims.lean" \
+    && ! printf '%s\n' "$out" | grep -q "ok    M.safe"; then
+    ok "a refused program's term in a bundle with Elab.lean: verify fails on the claims"
+else bad "a refused program's term in a bundle with Elab.lean: verify fails on the claims (rc $vrc)"; printf '%s\n' "$out" | sed 's/^/        /' | head -12; fi
 
 echo "== 2. tampering"
+# (a program outside C.Elab's subset: its bundle's term is the translator's,
+# and its ledger row the one a downgraded bundle must have, part 2b)
 P="$TMP/t"; mkdir -p "$P"
-cp tools/ncore/certify/vec_push_len.nu "$P/prog.nu"
+cp tools/ncore/certify/struct_fields_read.nu "$P/prog.nu"
 "$ROOT/nurl.sh" "$P/prog.nu" "$P/prog" > /dev/null 2>&1 || bad "the program builds"
 cp "$P/prog" "$P/other"; printf 'x' >> "$P/other"
 "$C" certify "$P/prog.nu" "${CA[@]}" --binary "$P/prog" > /dev/null 2>&1 || bad "certify the tamper program"
@@ -374,7 +474,7 @@ else ok "a core IR with a NUL and a byte that is not UTF-8 after it has no words
 echo "== 3. the fast profile"
 "$C" certify "$P/prog.nu" "${CA[@]}" --profile fast --out "$P/fast.cert" > "$TMP/f.out" 2>&1
 if grep -q "M.safe validated" "$TMP/f.out" && grep -q "native_decide" "$P/fast.cert/manifest.json" \
-    && grep -q '"validated": 1' "$P/fast.cert/manifest.json" && ! grep -q '"status": "proved"' "$P/fast.cert/manifest.json" \
+    && grep -q '"validated": [1-9]' "$P/fast.cert/manifest.json" && ! grep -q '"status": "proved"' "$P/fast.cert/manifest.json" \
     && "$C" verify "$P/fast.cert" --formal "$ROOT/formal" > /dev/null 2>&1; then ok "fast: validated (claims and coverage), its axiom listed, verifies"
 else bad "fast: validated, its axiom listed, verifies"; cat "$TMP/f.out"; fi
 

@@ -1,6 +1,21 @@
 # Changelog
 
-## [0.2.0] — unreleased
+## [0.3.0] — unreleased
+
+### Added
+
+- More bundles get `Elab.lean` (AGORA-1029 step 4): `C.Elab.elabIR` now covers buffers of numbers too, raw text (`i8*`), `String`s and `Vec`s of numbers. Their moves, cursors, `drop`s and returns are covered, and so are `inout`, `sink` and read-only buffer parameters and the library calls `vec_new`, `vec_push`, `vec_len`, `vec_at` (a number element), `vec_free`, `string_from`, `string_len`, `string_free`, `nurl_str_cat` and `nurl_str_len`. Of the 62 certify programs, 19 are in the subset (3 before), and the 13 the checker accepts get `Cert.elab` (3 before). For those programs the translator is out of the trusted path.
+  - The skip before Lean (`ELAB_CTORS`) takes the new constructors (`.push .free .new .borrow .at .len .vec .drop .realloc .dropIn`) and no longer skips a term for a `true`: `resOwn := true` is a Vec handed back.
+
+### Changed
+
+- **`nurl-cert words` leaves out the statement lines of the standard library's functions** (their `fn`, `v` and `endfn` lines stay). Neither the translator nor `C.Elab.elabIR` reads those lines, and `tools/ncore/elab_parity.sh` checks that `elabIR` answers the same either way. `Elab.lean` shrinks (`vec_push_len`: 581 lines of words to 157), and so does its check.
+- **Breaking:** a 0.2.0 bundle that holds `Elab.lean` and whose core IR has functions of the standard library does not verify with 0.3.0: `verify` makes `Elab.lean` again from `Program.core`, and it is another file now. Migration: certify the program again. A bundle without `Elab.lean` verifies as before.
+- **One Lean process per program.** certify and verify check a bundle in one Lean file, made in the work directory: Program.lean's definitions inside a `section`, then Claims.lean's body and Elab.lean's, with only the lines checked to be their exact imports left out. The bundle's three modules are unchanged and still check the module way. The selftest compares the two ways on three bundles. An error in the Elab.lean part means only that there is no Elab.lean. No `Program.olean` passes from one Lean run to the next any more, and there is no second, concurrent Lean process.
+- A refused `Cert.elab` (words whose term is not Program.lean's) fails in under a second: `C.Elab.elabIs` is irreducible to the elaborator, so `decide +kernel` no longer re-reduces it to explain the failure. That re-reduction had taken 111 s and 28 GB before the OOM killer stopped it.
+- certify is 2 % faster over the 62 certify programs (82.1 s against 83.9 s). Peak memory per program is about the same outside the subset, and +78 to +110 MiB in it (docs/dev/TRANSLATION_TRUST.md, step 4).
+
+## [0.2.0] — 2026-11-26
 
 ### Added
 

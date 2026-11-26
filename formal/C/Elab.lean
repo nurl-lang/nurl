@@ -1,14 +1,15 @@
 import C.A2Prog
 
 /-!
-# The core IR as words, read in the kernel (AGORA-1029, steps 1 and 2)
+# The core IR as words, read in the kernel (AGORA-1029, steps 1, 2 and 4)
 
 docs/dev/TRANSLATION_TRUST.md route (b): a certificate holds nurlc's core IR
 as plain Lean data, one entry per line and each line its words (header
 lines `fn`, `v`, `ty` and `sum` split at tabs, statements at spaces), and
 Lean builds the calculus term from it, so the translation is no longer a
 trusted step. This file is the data and its reader (step 1), and the term
-of a program of the scalar subset built from it (step 2, `elabIR`).
+of a program of the subset built from it (`elabIR`: numbers, step 2;
+buffers of numbers, step 4).
 
 Everything here reduces in the kernel (`decide +kernel`): numbers are read
 by structural recursion over a word's bytes, since Lean's own
@@ -121,17 +122,26 @@ example : fnsOf [["fn", "broken"]] = none := by decide +kernel
 example : fnsOf [["fn", "f", "i64", "0", "1", "a.nu", "0"],
     ["v", "0", "4", "0", "0", "1", "-1", "", "i64"], ["endfn"]] = none := by decide +kernel
 
-/-! ## Step 2: the term of a scalar program (AGORA-1029)
+/-! ## Steps 2 and 4: the term of a program of numbers and buffers (AGORA-1029)
 
 `elabIR ir` (`elab` is a keyword of Lean) builds the A2 program and its
-entry statement from the words of a core IR, for the **scalar subset**:
-every function of the program (the ones whose file is not the standard
-library's, as the translator selects them) has only variables, parameters and a result of a number type, and
-its statements are among `scope`/`if`/`else`/`loop`/`loopcond`/`end`,
-`line`, `drop`, `break`, `continue`, `let k use|none|scalar …`,
-`let k call f …`, `eval scalar|use|none …`, `eval call f …`,
-`assign vK use|none|scalar …` and `ret c|-|vK`, where every call is of a
-function of the program. Anything else is `none` (fail closed).
+entry statement from the words of a core IR, for the **subset**: every
+function of the program (the ones whose file is not the standard
+library's, as the translator selects them) has only variables, parameters
+and a result of a number type (step 2), or a buffer of numbers (step 4,
+`bufTy`: raw text `i8*`, a `String`, a `Vec` of a number type; A2's
+`.vec .int`), and its statements are among
+`scope`/`if`/`else`/`loop`/`loopcond`/`end`, `line`, `drop`, `break`,
+`continue`, `let k use|none|scalar …`, `let k call f …`,
+`eval scalar|use|none …`, `eval call f …`, `assign vK use|none|scalar …`
+and `ret c|-|vK`, where every call is of a function of the program or one
+of the library calls `intrS` lowers (`vec_new`, `vec_push`, `vec_len`,
+`vec_at`, `vec_free`, `string_from`, `string_len`, `string_free`,
+`nurl_str_cat`, `nurl_str_len`). A buffer moves (`.var`), is borrowed by a
+cursor (`.borrow`), is copied into an `inout` parameter, and its `drop` is
+the end of its scope. No variable of the subset holds a view but a number
+element read out of a Vec (`letCallOk`, `viewsOf`). Anything else is `none`
+(fail closed).
 
 It is `packages/nurl-cert/src/tolean.nu`'s translation of that subset,
 rule for rule, meant to make exactly the term it prints:
@@ -144,9 +154,14 @@ loop its body before its condition.
 Where the translator reads a core IR nurlc does not print as if it were
 well formed, `elabIR` refuses it (stricter, never laxer): a count or an id
 that is not plain digits, two functions of one name, a function of the
-program named as a library call the translator makes a construct of. It does not read the IR's `ty`, `virt` and `sum` lines past
-what the subset needs (a `d` drop flag: the program has a destructor; a
-`sum` line's keys).
+program named as a library call the translator makes a construct of, a
+`Vec` of anything but numbers, a `let x` of a library call the translator
+lowers by falling through to a call (`vec_push`, `vec_free`), a call whose
+result may be a view. The checks the translator makes on what it
+translates are made here too, the ones on code it then passes over
+included (a buffer named after its `drop`, `__views_of`). It does not read
+the IR's `ty`, `virt` and `sum` lines past what the subset needs (a `d`
+drop flag: the program has a destructor; a `sum` line's keys).
 
 Everything is total and reduces in the kernel: recursion is structural
 (over a fuel bound by the body's length where a list is rebuilt), and
@@ -190,6 +205,34 @@ def intTy (t : String) : Bool :=
   t == "i64" || t == "i1" || t == "i32" || t == "i16" || t == "i8" || t == "void" ||
   t == "u64" || t == "u32" || t == "u16" || t == "u8" || t == "f64" || t == "f32" ||
   t == "double" || t == "float"
+
+/-- The number types as bytes, for a type inside a name (`%Vec__i64`,
+    `vec_push__i64`). -/
+def intNamesB : List (List Nat) := [
+  [105, 54, 52], [105, 49], [105, 51, 50], [105, 49, 54], [105, 56], [118, 111, 105, 100],
+  [117, 54, 52], [117, 51, 50], [117, 49, 54], [117, 56], [102, 54, 52], [102, 51, 50],
+  [100, 111, 117, 98, 108, 101], [102, 108, 111, 97, 116]]
+
+def intTyB (cs : List Nat) : Bool := intNamesB.any (· == cs)
+
+example : intNamesB = ["i64", "i1", "i32", "i16", "i8", "void", "u64", "u32", "u16", "u8",
+    "f64", "f32", "double", "float"].map bytesOf := by decide +kernel
+
+def vecTyB : List Nat := [37, 86, 101, 99, 95, 95]
+example : vecTyB = bytesOf "%Vec__" := by decide +kernel
+
+/-- A buffer of numbers (`__lean_ty`'s `(.vec .int)`): raw text bound from a
+    literal or a fresh string (`i8*`; the subset holds no view of one, see
+    `letCallOk`), a `String`, a `Vec` of a number type. -/
+def bufTy (t : String) : Bool :=
+  t == "i8*" || t == "%String" ||
+  (let cs := bytesOf t
+   prefixN vecTyB cs && intTyB (cs.drop 6))
+
+/-- A type of the subset as A2's (`__lean_ty`): a number, or a buffer of
+    numbers. -/
+def tyOf (t : String) : Option Ty :=
+  if intTy t then some .int else if bufTy t then some (.vec .int) else none
 
 /-- Standard-library calls the translator makes A2 constructs of
     (`__intrinsic_`): a function of the program of such a name, or with
@@ -241,6 +284,42 @@ def intrinsicName (f : String) : Bool :=
   let cs := bytesOf f
   intrinsicExact.any (· == cs) || intrinsicPrefix.any (prefixN · cs)
 
+/-- The library calls of the subset (`__intrinsic_`), by name or prefix. -/
+def strCatB : List Nat := [110, 117, 114, 108, 95, 115, 116, 114, 95, 99, 97, 116]
+def strLenB : List Nat := [110, 117, 114, 108, 95, 115, 116, 114, 95, 108, 101, 110]
+def stringFromB : List Nat := [115, 116, 114, 105, 110, 103, 95, 102, 114, 111, 109]
+def stringLenB : List Nat := [115, 116, 114, 105, 110, 103, 95, 108, 101, 110]
+def stringFreeB : List Nat := [115, 116, 114, 105, 110, 103, 95, 102, 114, 101, 101]
+def vecNewB : List Nat := [118, 101, 99, 95, 110, 101, 119, 95, 95]
+def vecPushB : List Nat := [118, 101, 99, 95, 112, 117, 115, 104, 95, 95]
+def vecLenB : List Nat := [118, 101, 99, 95, 108, 101, 110, 95, 95]
+def vecFreeB : List Nat := [118, 101, 99, 95, 102, 114, 101, 101, 95, 95]
+def vecAtB : List Nat := [118, 101, 99, 95, 97, 116, 95, 95]
+example : [strCatB, strLenB, stringFromB, stringLenB, stringFreeB, vecNewB, vecPushB, vecLenB,
+    vecFreeB, vecAtB] = ["nurl_str_cat", "nurl_str_len", "string_from", "string_len", "string_free",
+    "vec_new__", "vec_push__", "vec_len__", "vec_free__", "vec_at__"].map bytesOf := by decide +kernel
+
+/-- Each is a name `intrinsicName` takes, so no function of the program is
+    named like one: a call is the library's or the program's, never both. -/
+example : [strCatB, strLenB, stringFromB, stringLenB, stringFreeB].all (intrinsicExact.contains ·) ∧
+    [vecNewB, vecPushB, vecLenB, vecFreeB, vecAtB].all (intrinsicPrefix.contains ·) := by decide +kernel
+
+/-- The calls whose result the translator takes for a view of an argument
+    (`__views_of`, `__view_vars`): `string_data…`, `slice_from_vec__…`,
+    `vec_at__…`, `slice_at__…` (prefixes). -/
+def viewCallB : List (List Nat) := [
+  [115, 116, 114, 105, 110, 103, 95, 100, 97, 116, 97],
+  [115, 108, 105, 99, 101, 95, 102, 114, 111, 109, 95, 118, 101, 99, 95, 95],
+  [118, 101, 99, 95, 97, 116, 95, 95],
+  [115, 108, 105, 99, 101, 95, 97, 116, 95, 95]]
+example : viewCallB = ["string_data", "slice_from_vec__", "vec_at__", "slice_at__"].map bytesOf := by
+  decide +kernel
+
+/-- Of those, the ones outside the subset: all but `vec_at__…`, whose
+    result is a number lent out of the Vec (`.at`). -/
+def viewOutB : List (List Nat) := viewCallB.filter (· != [118, 101, 99, 95, 97, 116, 95, 95])
+example : viewOutB = ["string_data", "slice_from_vec__", "slice_at__"].map bytesOf := by decide +kernel
+
 def indexOf (xs : List String) (x : String) : Option Nat :=
   match xs with
   | [] => none
@@ -278,11 +357,21 @@ def sumKVs (tops : List (List String)) (f : String) : List String :=
     | "sum" :: name :: rest => if name == f then rest.drop 1 else acc
     | _ => acc) []
 
-/-- The value of `key` in function `f`'s summary (its last pair). -/
-def sumVal (tops : List (List String)) (f key : String) : Option (List Nat) :=
-  (sumKVs tops f).foldl (fun acc kv => match splitKV (bytesOf kv) [] with
-    | some (k, v) => if k == bytesOf key then some v else acc
-    | none => acc) none
+/-- A function's summary: the pairs of its last `sum` line, each key and
+    value as bytes (a pair without `=` passed over, as the reader passes it
+    over), read once per function and looked up by key. -/
+abbrev Summary := List (List Nat × List Nat)
+
+def sumOf (tops : List (List String)) (f : String) : Summary :=
+  (sumKVs tops f).filterMap fun kv => splitKV (bytesOf kv) []
+
+/-- The value of `key` in a summary (its last pair). -/
+def Summary.val (sm : Summary) (key : String) : Option (List Nat) :=
+  let kb := bytesOf key
+  sm.foldl (fun acc p => if p.1 == kb then some p.2 else acc) none
+
+/-- The value of `key` in function `f`'s summary. -/
+def sumVal (tops : List (List String)) (f key : String) : Option (List Nat) := (sumOf tops f).val key
 
 /-- ASCII whitespace, as the reader splits a summary's words. -/
 def isWs (c : Nat) : Bool :=
@@ -306,28 +395,57 @@ def numIn (v : Option (List Nat)) (j : Nat) : Bool :=
 
 /-- The parameters the walk inferred consumed (`sink=`) or kept (`keeps=`):
     the callee owns them (`__flags`). -/
-def sinkP (tops : List (List String)) (f : String) (j : Nat) : Bool :=
-  numIn (sumVal tops f "sink") j || numIn (sumVal tops f "keeps") j
+def sinkP (sm : Summary) (j : Nat) : Bool :=
+  numIn (sm.val "sink") j || numIn (sm.val "keeps") j
 
 /-- Does `f` hand back a value that views what it was handed
     (`__borrowed`)? -/
-def borrowedB (tops : List (List String)) (f : String) : Bool :=
-  match sumVal tops f "ret_owned" with
+def borrowedB (sm : Summary) : Bool :=
+  match sm.val "ret_owned" with
   | some _ => false
   | none =>
-    if sumVal tops f "ret_unowned" == some [49] then true      -- "1"
-    else match sumVal tops f "rviews" with
+    if sm.val "ret_unowned" == some [49] then true      -- "1"
+    else match sm.val "rviews" with
       | none => false
       | some v => !(v == [58] || v == [])                     -- ":"
+
+/-- A word that is the decimal text of `j` (`__ns j`: no leading zero). -/
+def decIs (w : List Nat) (j : Nat) : Bool :=
+  match w with
+  | [] => false
+  | [48] => j == 0
+  | 48 :: _ => false
+  | _ => digitsN w 0 == some j
+
+/-- Is the word `j` among the words of `key` in `f`'s summary
+    (`__sum_has_word`: the words compared as text)? -/
+def sumHasWord (sm : Summary) (key : String) (j : Nat) : Bool :=
+  match sm.val key with
+  | none => false
+  | some cs => (wordsOf cs []).any (decIs · j)
+
+/-- What `f` does to its parameter `j` through the handle, from the walk's
+    summary (`__summary_change`): A2's bound of it, or nothing. -/
+def changeOf (sm : Summary) (j : Nat) : Option Eff :=
+  let d := sumHasWord sm "drops" j
+  let r := sumHasWord sm "reallocs" j
+  let ir := sumHasWord sm "ireallocs" j
+  let mu := sumHasWord sm "mutates" j
+  if d || mu || (r && ir) then some .drop
+  else if r then some .realloc
+  else if ir then some .dropIn
+  else none
 
 /-! ### A function's statements, as a tree -/
 
 /-- A statement of a body with its blocks closed: a simple statement (its
-    words), a `ret` that ends its list (`retnx`: the translator's), and
-    the blocks of the subset. -/
+    words), a `ret` that ends its list (`retnx`: the translator's), a
+    `drop` with the number of the body's lines after it (`rem`: where it
+    stands, for `mentions`), and the blocks of the subset. -/
 inductive Item where
   | st (ws : List String)
   | retnx (ws : List String)
+  | dropAt (ws : List String) (rem : Nat)
   | scope (b : List Item)
   | ite (c : String) (a b : List Item)
   | loop (cond : List Item) (c : String) (body : List Item)
@@ -350,6 +468,7 @@ def parseB : Nat → List (List String) → List Item → Option (List Item × C
     | "end" :: _ => some (acc.reverse, .fin, ls)
     | "else" :: _ => some (acc.reverse, .els, ls)
     | "loopcond" :: c :: _ => some (acc.reverse, .lc c, ls)
+    | "drop" :: _ => parseB f ls (.dropAt l ls.length :: acc)
     | "scope" :: _ =>
       match parseB f ls [] with
       | some (b, .fin, ls') => parseB f ls' (.scope b :: acc)
@@ -378,7 +497,7 @@ def parseB : Nat → List (List String) → List Item → Option (List Item × C
 /-- A `line` or a `drop`. -/
 def isLD : Item → Bool
   | .st ("line" :: _) => true
-  | .st ("drop" :: _) => true
+  | .dropAt _ _ => true
   | _ => false
 
 /-- A list whose last statement but `line`s and `drop`s is a `ret`: the
@@ -444,12 +563,75 @@ def seqS (a b : Stmt) : Stmt :=
   | .skip => a
   | _ => .seq a b
 
+/-! ### Where a variable is named -/
+
+/-- The pieces of a word between its `/`s (a place `v3/a`: `v3`, `a`). -/
+def slashPieces : List Nat → List Nat → List (List Nat)
+  | [], cur => [cur.reverse]
+  | ch :: r, cur => if ch == 47 then cur.reverse :: slashPieces r [] else slashPieces r (ch :: cur)
+
+/-- A piece that is the text `v<k>` (`__is_v`: `k`'s decimal, no leading
+    zero): `k`. -/
+def vIdOf : List Nat → Option Nat
+  | 118 :: ds => match ds with
+    | [] => none
+    | [48] => some 0
+    | 48 :: _ => none
+    | _ => digitsN ds 0
+  | _ => none
+
+/-- The variables a line names: every piece of every word (the
+    translator's token scan after a `drop`). -/
+def lineIds (l : List String) : List Nat :=
+  l.foldr (fun w acc => (slashPieces (bytesOf w) []).filterMap vIdOf ++ acc) []
+
+/-- Each variable a line of the body names, with the number of the body's
+    lines after that line (`n` for the first). -/
+def mentionsFrom : Nat → List (List String) → List (Nat × Nat)
+  | _, [] => []
+  | n, l :: ls => (lineIds l).map (·, n) ++ mentionsFrom (n - 1) ls
+
+/-- The root of a place (`v3/a`: `v3`) as a variable. -/
+def rootId (w : List Nat) : Option Nat := vIdOf (w.takeWhile (· != 47))
+
+/-- One pass of `__views_of`: a `let j call f …` whose `f` hands back a
+    view of what it is handed (`viewCallB`), one of whose words from `f` on
+    names a variable of `out` by its root, adds `j`. (The translator adds
+    a `let j use` copy of a raw-text view too; the subset has none,
+    `letCallOk`.) -/
+def viewsStep (body : List (List String)) (out : List Nat) : List Nat :=
+  body.foldl (fun acc l => match l with
+    | "let" :: j :: "call" :: f :: more =>
+      match idOf j with
+      | some jj =>
+        if !acc.contains jj && viewCallB.any (prefixN · (bytesOf f)) &&
+            (f :: more).any (fun w => match rootId (bytesOf w) with
+              | some q => acc.contains q
+              | none => false)
+        then jj :: acc else acc
+      | none => acc
+    | _ => acc) out
+
+/-- `out` and every variable that may view one of it (`__views_of`): passes
+    until one adds nothing (each adds one at least, so `body.length + 1`
+    passes suffice). -/
+def viewsOf (body : List (List String)) : Nat → List Nat → List Nat
+  | 0, out => out
+  | n + 1, out =>
+    let o' := viewsStep body out
+    if o'.length == out.length then out else viewsOf body n o'
+
 /-- What every statement of the function reads: its parameter count, its
-    `v` lines (id, kind, flags, type), and the program's functions. -/
+    `v` lines (id, kind, flags, type), the program's functions, its
+    summary, and where each
+    variable is named in its body (`mentionsFrom`), and the body. -/
 structure Ctx where
   np : Nat
   vars : List (Nat × Nat × Nat × String)
   prog : List CoreFn
+  sum : Summary
+  mentions : List (Nat × Nat)
+  body : List (List String)
 
 /-- Variable `k`'s last `v` line. -/
 def lastVar (vs : List (Nat × Nat × Nat × String)) (k : Nat) : Option (Nat × Nat × Nat × String) :=
@@ -465,46 +647,117 @@ def tyD (vs : List (Nat × Nat × Nat × String)) (k : Nat) (d : String) : Strin
     rest (`__var`). -/
 def Ctx.var (c : Ctx) (k : Nat) : Nat := if k < c.np then k else k + 1
 
+/-- Bit `k` of a flag word. -/
+def bitB (n k : Nat) : Bool := n / 2 ^ k % 2 == 1
+
+/-- Variable `k`'s kind (`__vkind`; none without a `v` line). -/
+def Ctx.kind (c : Ctx) (k : Nat) : Option Nat := (lastVar c.vars k).map (·.2.1)
+
+/-- Variable `k`'s flags (`__vflags`): its `v` line's, with `sink` (4) for
+    a parameter the walk inferred taken over and not `inout` (2). -/
+def Ctx.flags (c : Ctx) (k : Nat) : Nat :=
+  let base := match lastVar c.vars k with
+    | some (_, _, fl, _) => fl
+    | none => 0
+  if k < c.np && sinkP c.sum k && !bitB base 1 && !bitB base 2 then base + 4 else base
+
+/-- Is variable `k` a buffer (declared, of a `bufTy` type)? -/
+def Ctx.buf (c : Ctx) (k : Nat) : Bool :=
+  match lastVar c.vars k with
+  | some (_, _, _, t) => bufTy t
+  | none => false
+
+/-- Is variable `k` a number (`__int_ty` of its type, `i64` without a `v`
+    line)? -/
+def Ctx.int (c : Ctx) (k : Nat) : Bool := intTy (tyD c.vars k "i64")
+
 /-- An operand (`__operand`): an untracked number (`c`) is any number. -/
 def operandE (c : Ctx) (w : String) : Option Expr :=
   if w == "c" then some .any
   else (vref w).map fun k => .var (c.var k)
 
+/-- `.letv` of each binding of `pre` around `st`, the first outermost
+    (`__wrap`). -/
+def wrapPre (pre : List (Nat × Rhs)) (st : Stmt) : Stmt :=
+  pre.foldr (fun b acc => .letv b.1 b.2 acc) st
+
 /-- An rvalue of the subset as A2's right-hand side (`__rhs`), bound to
-    `dest` (`none`: no variable). -/
-def rhsS (c : Ctx) (ws : List String) (dest : Option Nat) : Option Rhs :=
+    `dest` (`none`: no variable), with the bindings it needs made first
+    (`pre`). `asg`: the store of an `assign`. A buffer moves (`.var`), or
+    is borrowed by a cursor (`: ~` of a binding or a parameter, `.borrow`);
+    raw text bound from a literal is a copy of its own (`.new .int`); a
+    borrowed parameter assigned to an `inout` one is copied (its length
+    read, then `.new`). Refused as the translator refuses them: an owner
+    given a borrowed parameter's value, raw text assigned from another
+    binding. -/
+def rhsS (c : Ctx) (ws : List String) (dest : Option Nat) (asg : Bool) :
+    M (List (Nat × Rhs) × Rhs) :=
   match ws with
   | "none" :: _ =>
     match dest with
-    | some d => if intTy (tyD c.vars d "i64") then some (.expr .any) else none
-    | none => some (.expr .any)
+    | some d => if intTy (tyD c.vars d "i64") then pure ([], .expr .any) else M.fail
+    | none => pure ([], .expr .any)
   | "use" :: w :: _ =>
-    if w == "c" then some (.expr .any)
+    if w == "c" then
+      match dest with
+      | some d =>
+        -- a literal into raw text: its own copy of the text
+        if (lastVar c.vars d).map (·.2.2.2) == some "i8*" then pure ([], .new .int)
+        else pure ([], .expr .any)
+      | none => pure ([], .expr .any)
     else match vref w with
-      | some k => if intTy (tyD c.vars k "i64") then some (.expr (.var (c.var k))) else none
-      | none => none
+      | none => M.fail
+      | some y =>
+        if c.int y then pure ([], .expr (.var (c.var y)))
+        else if !c.buf y then M.fail
+        else
+          let ky := c.kind y
+          let fy := c.flags y
+          let kd := dest.bind c.kind
+          let fd := match dest with
+            | some d => c.flags d
+            | none => 0
+          let ys := tyD c.vars y "" == "i8*"
+          let fy6 := !bitB fy 1 && !bitB fy 2
+          if !asg && dest.isSome && kd == some 1 && bitB fd 0 && (ky == some 0 || ky == some 1) then
+            pure ([], .borrow (c.var y))
+          else if asg && ky == some 0 && fy6 && !ys && kd != some 0 then M.fail
+          else if asg && ky == some 0 && fy6 && kd == some 0 && bitB fd 1 && !ys &&
+              (match dest with
+               | some d => (lastVar c.vars d).isSome && tyD c.vars y "" == tyD c.vars d ""
+               | none => false) then do
+            let x ← M.fresh
+            pure ([(x, .expr (.len (c.var y)))], .new .int)
+          else if asg && ys then M.fail
+          else pure ([], .var (c.var y))
   | "scalar" :: n :: ops =>
-    if natOf n != some ops.length then none
+    if natOf n != some ops.length then M.fail
     else match ops.mapM (operandE c) with
-      | none => none
-      | some [] => some (.expr .any)
-      | some es => some (.expr (.add .any (.lt (es.foldl .add (.lit 0)) (.lit 0))))
-  | _ => none
+      | none => M.fail
+      | some [] => pure ([], .expr .any)
+      | some es => pure ([], .expr (.add .any (.lt (es.foldl .add (.lit 0)) (.lit 0))))
+  | _ => M.fail
 
 /-- A call's arguments (`__call`): an untracked number is a temporary of
-    its own, bound around the call. -/
-def argsS (c : Ctx) (callee : CoreFn) : Nat → List String → M (List Nat)
+    its own, bound around the call; one handed to a raw-string parameter
+    is text, a buffer of the call's own (AGORA-994: `true`). -/
+def argsS (c : Ctx) (callee : CoreFn) : Nat → List String → M (List (Nat × Bool))
   | _, [] => pure []
   | j, op :: ops => do
     let a ← (if op == "c" then
-               (if tyD callee.vars j "" == "i8*" then M.fail else M.litTemp)
-             else M.lift ((vref op).map c.var))
+               (if tyD callee.vars j "" == "i8*" then do
+                  let x ← M.fresh
+                  pure (x, true)
+                else do
+                  let x ← M.litTemp
+                  pure (x, false))
+             else M.lift ((vref op).map fun k => (c.var k, false)))
     let as ← argsS c callee (j + 1) ops
     pure (a :: as)
 
 /-- `call f n args…` of a function of the program: its index, and the
     arguments. -/
-def callS (c : Ctx) : List String → M (Nat × List Nat)
+def callS (c : Ctx) : List String → M (Nat × List (Nat × Bool))
   | fname :: n :: args => do
     if natOf n != some args.length then M.fail
     if intrinsicName fname then M.fail
@@ -514,12 +767,138 @@ def callS (c : Ctx) : List String → M (Nat × List Nat)
     pure (fi, as)
   | _ => M.fail
 
-/-- `ret h` as the store of the result (`__stmts_`'s `ret`). -/
-def retE (c : Ctx) (h : String) : Option Expr :=
-  if h == "-" then some (.lit 0)
-  else if h == "c" then some .any
+/-- The call `x := f(args)` then `body`, the text arguments' buffers bound
+    around it, the first outermost. -/
+def letcallS (x fi : Nat) (as : List (Nat × Bool)) (body : Stmt) : Stmt :=
+  as.foldr (fun a acc => if a.2 then .letv a.1 (.new .int) acc else acc)
+    (.letcall x fi (as.map (·.1)) body)
+
+/-- The call's own variable (`__xf`): `x`, or a fresh one. -/
+def xfS : Option Nat → M Nat
+  | some x => pure x
+  | none => M.fresh
+
+/-- An argument the call takes (`__argvar`): an untracked number is a
+    temporary of its own; else a whole variable. -/
+def argvarS (c : Ctx) (op : String) : M Nat :=
+  if op == "c" then M.litTemp else M.lift ((vref op).map c.var)
+
+/-- An argument the call only reads (`__rd`): a whole variable. -/
+def rdS (c : Ctx) (op : String) : M Nat := M.lift ((vref op).map c.var)
+
+/-- A read of raw text (`__read`): a buffer's length. -/
+def readE (c : Ctx) (op : String) : Option Expr :=
+  match vref op with
+  | some k => if c.buf k then some (.len (c.var k)) else none
+  | none => none
+
+/-- A read of an argument before `st`, into a fresh variable (the reads of
+    `nurl_str_cat` and `string_from`); none for an untracked number. -/
+def readWrap (c : Ctx) (op : String) (st : Stmt) : M Stmt :=
+  if op == "c" then pure st
+  else do
+    let tt ← M.fresh
+    let e ← M.lift (readE c op)
+    pure (.letv tt (.expr e) st)
+
+/-- A library call of the subset as A2's construct (`__intrinsic_`), into
+    `x0` (`none`: no variable), then `rest`: `vec_new` (`.new`), `vec_push`
+    (`.push`), `vec_len` and `string_len` (`.len`), `vec_free` and
+    `string_free` (`.free`), and of raw text `nurl_str_cat` and
+    `string_from` (a fresh buffer, each argument's read first),
+    `nurl_str_len` (its read), `vec_at` (`.at`). The element of a `Vec` is
+    a number. Any
+    other library call is outside the subset; so are the forms the
+    translator lowers by falling through to a call (`let x` of a
+    `vec_push`). -/
+def intrS (c : Ctx) (f : String) (ops : List String) (x0 : Option Nat) (rest : Stmt) : M Stmt :=
+  let fb := bytesOf f
+  if prefixN vecNewB fb then
+    match ops with
+    | [] => if intTyB (fb.drop 9) then do
+        let x ← xfS x0
+        pure (.letv x (.new .int) rest)
+      else M.fail
+    | _ => M.fail
+  else if prefixN vecPushB fb then
+    match ops, x0 with
+    | [o0, o1], none => do
+      let v ← argvarS c o0
+      let y ← argvarS c o1
+      if intTyB (fb.drop 10) then pure (seqS (.push v y) rest) else M.fail
+    | _, _ => M.fail
+  else if prefixN vecLenB fb || fb == stringLenB then
+    match ops with
+    | [o0] => if o0 == "c" then M.fail else do
+        let x ← xfS x0
+        let y ← rdS c o0
+        pure (.letv x (.expr (.len y)) rest)
+    | _ => M.fail
+  else if prefixN vecFreeB fb || fb == stringFreeB then
+    match ops, x0 with
+    | [o0], none => if o0 == "c" then M.fail else do
+        let y ← rdS c o0
+        pure (seqS (.free y) rest)
+    | _, _ => M.fail
+  else if fb == strCatB then
+    match ops with
+    | [o0, o1] => do
+      let x ← xfS x0
+      let st ← readWrap c o0 (.letv x (.new .int) rest)
+      readWrap c o1 st
+    | _ => M.fail
+  else if fb == stringFromB then
+    match ops with
+    | [o0] => do
+      let x ← xfS x0
+      readWrap c o0 (.letv x (.new .int) rest)
+    | _ => M.fail
+  else if fb == strLenB then
+    match ops with
+    | [o0] => if o0 == "c" then M.fail else do
+        let x ← xfS x0
+        let e ← M.lift (readE c o0)
+        pure (.letv x (.expr e) rest)
+    | _ => M.fail
+  else if prefixN vecAtB fb then
+    -- a bounds-checked read of a number element, lent (`.at`)
+    match ops with
+    | [o0, o1] => if o0 == "c" || !intTyB (fb.drop 8) then M.fail else do
+        let i ← M.lift (operandE c o1)
+        match x0 with
+        | none => do
+          let tt ← M.fresh
+          let y ← rdS c o0
+          pure (seqS (.letv tt (.at y i) .skip) rest)
+        | some x => do
+          let y ← rdS c o0
+          pure (.letv x (.at y i) rest)
+    | _ => M.fail
+  else M.fail
+
+/-- A call (`__call`, `__intrinsic`): the library's, as its construct, or
+    a function of the program's, into `x0` (`none`: a fresh variable). -/
+def callAny (c : Ctx) (ws : List String) (x0 : Option Nat) (rest : Stmt) : M Stmt :=
+  match ws with
+  | fname :: n :: args =>
+    if natOf n != some args.length then M.fail
+    else if intrinsicName fname then intrS c fname args x0 rest
+    else do
+      let (fi, as) ← callS c ws
+      let x ← xfS x0
+      pure (letcallS x fi as rest)
+  | _ => M.fail
+
+/-- `ret h` as the store of the result (`__stmts_`'s `ret`): a number is
+    read, a buffer moves out. -/
+def retR (c : Ctx) (h : String) : Option Rhs :=
+  if h == "-" then some (.expr (.lit 0))
+  else if h == "c" then some (.expr .any)
   else match vref h with
-    | some k => if intTy (tyD c.vars k "i64") then some (.var (c.var k)) else none
+    | some k =>
+      if c.int k then some (.expr (.var (c.var k)))
+      else if c.buf k then some (.var (c.var k))
+      else none
     | none => none
 
 /-- The statements `items` as one A2 statement ending in `tail`
@@ -542,9 +921,17 @@ def go (c : Ctx) : Nat → List Item → Stmt → M Stmt
         | none =>
           match it with
           | .st ("line" :: _) => go c f rest tail
-          | .st ("drop" :: h :: _) => do
+          | .dropAt ("drop" :: h :: _) rem => do
+            -- a number's drop is nothing; a buffer's is its scope's end, the
+            -- same only if no line after it names it, or a view of it
+            -- (`__views_of`)
             let k ← M.lift (idOf h)
-            if intTy (tyD c.vars k "i64") then go c f rest tail else M.fail
+            if c.int k then go c f rest tail
+            else if c.buf k then
+              let dead := viewsOf c.body (c.body.length + 1) [k]
+              if c.mentions.any fun m => decide (m.2 < rem) && dead.contains m.1 then M.fail
+              else go c f rest tail
+            else M.fail
           | .st ("break" :: _) => do
             let r ← go c f rest tail
             pure (seqS (.exit 1) r)
@@ -552,50 +939,45 @@ def go (c : Ctx) : Nat → List Item → Stmt → M Stmt
             let r ← go c f rest tail
             pure (seqS (.exit 0) r)
           | .st ("ret" :: h :: _) => do
-            let e ← M.lift (retE c h)
+            let e ← M.lift (retR c h)
             let d ← M.depth
             let r ← go c f rest tail
-            pure (seqS (.seq (.assign c.np (.expr e)) (.exit d)) r)
+            pure (seqS (.seq (.assign c.np e) (.exit d)) r)
           | .retnx (_ :: h :: _) => do
-            let e ← M.lift (retE c h)
+            let e ← M.lift (retR c h)
             let r ← go c f rest tail
-            pure (seqS (.assign c.np (.expr e)) r)
+            pure (seqS (.assign c.np e) r)
           | .st ("let" :: h1 :: h2 :: more) => do
             let k ← M.lift (idOf h1)
             let atOnce := !(h2 == "call" || h2 == "closure" || h2 == "callind")
             match (if atOnce then retAt h1 (rest.dropWhile isLD) else none) with
             | some after => do
               -- `let x r` whose value is returned at once: the result takes `r`
-              let rv ← M.lift (rhsS c (h2 :: more) (some k))
+              let (pre, rv) ← rhsS c (h2 :: more) (some k) false
               let d ← M.depth
               let r ← go c f after tail
-              pure (seqS (.seq (.assign c.np rv) (.exit d)) r)
+              pure (seqS (wrapPre pre (.seq (.assign c.np rv) (.exit d))) r)
             | none => do
               let r ← go c f rest tail
-              if h2 == "call" then do
-                let (fi, args) ← callS c more
-                pure (.letcall (c.var k) fi args r)
+              if h2 == "call" then callAny c more (some (c.var k)) r
               else do
-                let rv ← M.lift (rhsS c (h2 :: more) (some k))
-                pure (.letv (c.var k) rv r)
+                let (pre, rv) ← rhsS c (h2 :: more) (some k) false
+                pure (wrapPre pre (.letv (c.var k) rv r))
           | .st ("eval" :: h1 :: more) => do
             let r ← go c f rest tail
-            if h1 == "call" then do
-              let (fi, args) ← callS c more
-              let x ← M.fresh
-              pure (.letcall x fi args r)
+            if h1 == "call" then callAny c more none r
             else if h1 == "callind" then M.fail
             else do
               let x ← M.fresh
-              let rv ← M.lift (rhsS c (h1 :: more) none)
-              pure (.letv x rv r)
+              let (pre, rv) ← rhsS c (h1 :: more) none false
+              pure (wrapPre pre (.letv x rv r))
           | .st ("assign" :: h1 :: more) => do
             let y ← M.lift (vref h1)
             if (lastVar c.vars y).map (·.2.2.2) == some "void" then go c f rest tail
             else do
-              let rv ← M.lift (rhsS c more (some y))
+              let (pre, rv) ← rhsS c more (some y) true
               let r ← go c f rest tail
-              pure (seqS (.assign (c.var y) rv) r)
+              pure (seqS (wrapPre pre (.assign (c.var y) rv)) r)
           | .scope b => do
             let x ← go c f b .skip
             let y ← go c f rest tail
@@ -623,18 +1005,20 @@ def go (c : Ctx) : Nat → List Item → Stmt → M Stmt
           | _ => M.fail)
     M.wrapLits n0 st
 
-/-- Bit `k` of a flag word. -/
-def bitB (n k : Nat) : Bool := n / 2 ^ k % 2 == 1
-
 /-- Parameter `j`'s mode (`__mode`, `__vflags`): `sink` if the flags say so
-    or the walk inferred it taken over (and it is not `inout`), `inout`,
+    or the walk inferred it taken over (and it is not `inout`), `inout`, a
+    buffer the function changes through as its summary says (AGORA-994),
     else read only. -/
-def modeOf (tops : List (List String)) (fn : CoreFn) (j : Nat) : PMode :=
+def modeOf (sm : Summary) (fn : CoreFn) (j : Nat) : PMode :=
   let base := match lastVar fn.vars j with
     | some (_, _, fl, _) => fl
     | none => 0
-  if bitB base 2 || (sinkP tops fn.name j && !bitB base 1) then .sink
+  if bitB base 2 || (sinkP sm j && !bitB base 1) then .sink
   else if bitB base 1 then .inout .replace
+  else if bufTy (tyD fn.vars j "") then
+    match changeOf sm j with
+    | some e => .inout e
+    | none => .inp
   else .inp
 
 /-- The largest variable id, plus 2; 0 for none. -/
@@ -676,25 +1060,44 @@ def opsOk (l : List String) : Bool :=
             let nops := l.length - (cp + 1)
             if h == "agg" then decide (n ≤ nops) else n == nops
 
-/-- A function of the subset as A2's `Fn` (`__fn_init`, `__lean`). -/
+/-- A `let x call f …` the subset takes: `f`'s result no view of what it
+    is handed (`__borrowed`, `__views_of`'s prefixes), but a number lent
+    out of a Vec (`vec_at__…`). So raw text of the subset is owned
+    (`__view_vars` finds nothing), and what a buffer's `drop` ends is the
+    buffer and the elements read out of it (`viewsOf`). -/
+def letCallOk (tops : List (List String)) (l : List String) : Bool :=
+  match l with
+  | "let" :: _ :: "call" :: f :: _ =>
+    !borrowedB (sumOf tops f) && !(viewOutB.any (prefixN · (bytesOf f)))
+  | _ => true
+
+/-- A function of the subset as A2's `Fn` (`__fn_init`, `__lean`): its
+    variables, parameters and result numbers or buffers (`tyOf`). -/
 def fnElab (tops : List (List String)) (prog : List CoreFn) (fn : CoreFn) : Option Fn := do
   if startsB fn.name closureB then none
-  if !(fn.vars.all fun v => intTy v.2.2.2 && v.1 ≤ idMax) then none
-  if !(intTy fn.ret) then none
-  if sumVal tops fn.name "retdyn" == some [49] then none
-  if borrowedB tops fn.name then none
+  if !(fn.vars.all fun v => (intTy v.2.2.2 || bufTy v.2.2.2) && v.1 ≤ idMax) then none
+  let rt ← tyOf fn.ret
+  let own := match rt with
+    | .int => false
+    | _ => true
+  let sm := sumOf tops fn.name
+  if sm.val "retdyn" == some [49] then none
+  if borrowedB sm then none
+  -- an owned result aliasing a parameter (`ret_alias`) is not translated
+  if own && (sm.val "ret_alias").isSome then none
   if !(fn.body.all opsOk) then none
+  if !(fn.body.all (letCallOk tops)) then none
   let params ← (List.range fn.np).mapM fun j =>
-    (lastVar fn.vars j).map fun _ => (modeOf tops fn j, Ty.int)
+    (lastVar fn.vars j).bind fun (_, _, _, t) => (tyOf t).map (modeOf sm fn j, ·)
   let items ← match parseB (fn.body.length + 1) fn.body [] with
     | some (its, .eof, _) => some its
     | _ => none
-  let c : Ctx := ⟨fn.np, fn.vars, prog⟩
+  let c : Ctx := ⟨fn.np, fn.vars, prog, sm, mentionsFrom (fn.body.length - 1) fn.body, fn.body⟩
   let tail : Stmt := if fn.ret == "void" then .assign fn.np (.expr (.lit 0)) else .skip
   let s0 : St := ⟨max (fn.np + 1) (topNext fn.vars), [], 0⟩
   let (inner, s) ← go c (4 * fn.body.length + 4) items tail s0
   if !s.lits.isEmpty then none
-  pure { params := params, resTy := .int, resOwn := false, lends := [], rholds := [],
+  pure { params := params, resTy := rt, resOwn := own, lends := [], rholds := [],
          outHolds := [], body := .block inner, nvars := s.next + 1 }
 
 /-- Drop exactly `n` elements, or fail if there are fewer. -/
@@ -814,6 +1217,12 @@ def stmtBeq : Stmt → Stmt → Bool
   | .loop a, b => match b with
     | .loop b' => stmtBeq a b'
     | _ => false
+  | .push x y, b => match b with
+    | .push x' y' => x == x' && y == y'
+    | _ => false
+  | .free x, b => match b with
+    | .free x' => x == x'
+    | _ => false
   | _, _ => false
 
 theorem stmtBeq_sound : ∀ a b : Stmt, stmtBeq a b = true → a = b := by
@@ -848,6 +1257,12 @@ theorem stmtBeq_sound : ∀ a b : Stmt, stmtBeq a b = true → a = b := by
   | loop a ih =>
     intro b h; cases b <;> simp only [stmtBeq, Bool.false_eq_true] at h
     rw [ih _ h]
+  | push x y =>
+    intro b h; cases b <;> simp only [stmtBeq, Bool.and_eq_true, Bool.false_eq_true, beq_iff_eq] at h
+    obtain ⟨h1, h2⟩ := h; subst h1; subst h2; rfl
+  | free x =>
+    intro b h; cases b <;> simp only [stmtBeq, Bool.false_eq_true, beq_iff_eq] at h
+    rw [h]
   | _ => intro b h; simp [stmtBeq] at h
 
 def fnBeq (f g : Fn) : Bool :=
@@ -875,8 +1290,15 @@ theorem progBeq_sound : ∀ P Q : Prog, progBeq P Q = true → P = Q
   | [], _ :: _, h => by simp [progBeq] at h
   | _ :: _, [], h => by simp [progBeq] at h
 
-/-- Does `elab` make exactly the program `P` and the entry `e`? -/
-def elabIs (ir : IR) (P : Prog) (e : Stmt) : Bool :=
+/-- Does `elab` make exactly the program `P` and the entry `e`?
+
+    Irreducible for the elaborator, not for the kernel: `decide +kernel`
+    has the kernel decide it, and when the kernel refuses (a term that is
+    not `elabIR`'s), Lean explains the failure by reducing the instance
+    again in the elaborator, which on a real core IR takes minutes and
+    tens of GB. Irreducible, that stops at once and leaves the kernel's
+    error. -/
+@[irreducible] def elabIs (ir : IR) (P : Prog) (e : Stmt) : Bool :=
   match elabIR ir with
   | some (Q, e') => progBeq Q P && stmtBeq e' e
   | none => false
@@ -922,10 +1344,10 @@ def pWhile : Prog := [
 theorem elab_while : elabIR irWhile = some (pWhile, .letcall 0 0 [] .skip) :=
   elabIs_sound _ _ _ (by decide +kernel)
 
-/-- Outside the subset, `none`: a `Vec` variable; a call of a library
-    function; a statement block left open. -/
+/-- Outside the subset, `none`: a `Vec` of strings; a call of a library
+    function outside it; a statement block left open. -/
 example : (elabIR [["fn", "main", "i64", "0", "1", "a.nu", "0", ""],
-    ["v", "0", "1", "1", "1", "2", "-1", "v", "%Vec__i64"],
+    ["v", "0", "1", "1", "1", "2", "-1", "v", "%Vec__String"],
     ["scope"], ["ret", "c"], ["end"], ["endfn"]]).isNone := by decide +kernel
 example : (elabIR [["fn", "main", "i64", "0", "1", "a.nu", "0", ""],
     ["scope"], ["eval", "call", "nurl_println_int", "1", "c"], ["ret", "c"], ["end"], ["endfn"]]).isNone := by
@@ -954,6 +1376,103 @@ example : (elabIR (irRet [["let", "0", "none"], ["assign", "v0", "scalar", "1", 
   decide +kernel
 example : (elabIR (irRet [] [] ++
     [["ty", "%X", "1", "0-----", "", "A", "0", "F", "2", "a", "i64", "b", "i64", "V", "0"]])).isSome := by
+  decide +kernel
+
+/-! ### Witnesses (step 4: buffers) -/
+
+/-- A `main` of variables `vs` and statements `body`, then the lines
+    `extra` (other functions, `sum` lines). -/
+def irM (vs body extra : IR) : IR :=
+  [["fn", "main", "i64", "0", "1", "a.nu", "0", ""]] ++ vs ++ [["scope"]] ++ body ++
+    [["end"], ["endfn"]] ++ extra
+
+/-- A Vec made, moved into its binding and its temporary dropped (`v0`, a
+    temporary; `v1`, a `: ~` binding). -/
+def vsVec : IR := [["v", "0", "2", "1", "0", "1", "-1", "", "%Vec__i64"],
+  ["v", "1", "1", "1", "4097", "1", "-1", "v", "%Vec__i64"]]
+def bodyVec : IR := [["let", "0", "call", "vec_new__i64", "0"], ["let", "1", "use", "v0"], ["drop", "0"]]
+
+/-- The kernel's term for it: the push's untracked number a temporary of its
+    own (bound around it), the length read into a fresh one. -/
+def pPush : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 1 (.new .int) (.letv 2 (.var 1) (.letv 4 (.expr .any)
+      (.seq (.push 2 4) (.letv 3 (.expr (.len 2)) (.assign 0 (.expr .any))))))) (.exit 0)),
+    nvars := 6 }]
+example : elabIR (irM vsVec (bodyVec ++ [["eval", "call", "vec_push__i64", "2", "v1", "c"],
+    ["eval", "call", "vec_len__i64", "1", "v1"], ["ret", "c"]]) []) = some (pPush, .letcall 0 0 [] .skip) :=
+  elabIs_sound _ _ _ (by decide +kernel)
+
+/-- A buffer's `drop` is the end of its scope only if no line after it names
+    it (`__views_of`): the temporary read after its drop is refused, its
+    binding read there is not. -/
+example : (elabIR (irM vsVec (bodyVec ++ [["eval", "call", "vec_len__i64", "1", "v0"], ["ret", "c"]])
+    [])).isNone := by decide +kernel
+example : (elabIR (irM vsVec (bodyVec ++ [["eval", "call", "vec_len__i64", "1", "v1"], ["ret", "c"]])
+    [])).isSome := by decide +kernel
+/-- …every word of every line after it counts, cut at its `/`s (here a
+    `line` the translation passes over), and only the text `v<k>`. -/
+example : (elabIR (irM vsVec (bodyVec ++ [["line", "x/v0/y"], ["ret", "c"]]) [])).isNone := by
+  decide +kernel
+example : (elabIR (irM vsVec (bodyVec ++ [["line", "x/v00/v01/w0"], ["ret", "c"]]) [])).isSome := by
+  decide +kernel
+
+/-- A call whose result may view an argument (its summary: `ret_unowned=1`)
+    is refused (`letCallOk`), its owned neighbour (`ret_owned`) is not; so
+    is a call of a function named like one the translator takes for a view
+    (`slice_at__…`), even of the program's own. -/
+def bodyLen : IR := bodyVec ++ [["let", "2", "call", "vec_len__i64", "1", "v1"], ["ret", "c"]]
+def vsLen : IR := vsVec ++ [["v", "2", "2", "1", "0", "1", "-1", "", "i64"]]
+example : (elabIR (irM vsLen bodyLen [["sum", "vec_len__i64", "1", "ret_unowned=1"]])).isNone := by
+  decide +kernel
+example : (elabIR (irM vsLen bodyLen [["sum", "vec_len__i64", "1", "ret_unowned=1", "ret_owned=1"]])).isSome := by
+  decide +kernel
+def fnRead (name : String) : IR := [["fn", name, "i64", "1", "1", "a.nu", "0", ""],
+  ["v", "0", "0", "0", "0", "1", "-1", "v", "%Vec__i64"], ["scope"], ["ret", "c"], ["end"], ["endfn"]]
+example : (elabIR (irM vsLen (bodyVec ++ [["let", "2", "call", "slice_at__x", "1", "v1"], ["ret", "c"]])
+    (fnRead "slice_at__x"))).isNone := by decide +kernel
+example : (elabIR (irM vsLen (bodyVec ++ [["let", "2", "call", "slice_atx", "1", "v1"], ["ret", "c"]])
+    (fnRead "slice_atx"))).isSome := by decide +kernel
+
+/-- A buffer's drop ends the elements read out of it too (`vec_at`,
+    `__views_of`): the element of the temporary read after the temporary's
+    drop is refused, the element of its binding is not. -/
+example : (elabIR (irM vsLen [["let", "0", "call", "vec_new__i64", "0"],
+    ["let", "2", "call", "vec_at__i64", "2", "v0", "c"], ["let", "1", "use", "v0"], ["drop", "0"],
+    ["eval", "scalar", "1", "v2"], ["ret", "c"]] [])).isNone := by decide +kernel
+example : (elabIR (irM vsLen (bodyVec ++ [["let", "2", "call", "vec_at__i64", "2", "v1", "c"],
+    ["drop", "0"], ["eval", "scalar", "1", "v2"], ["ret", "c"]]) [])).isSome := by decide +kernel
+
+/-- An owned result aliasing a parameter (`ret_alias`) is refused; without
+    the key the Vec handed back is the result, owned. -/
+def fnMake (extra : IR) : IR := [["fn", "make", "%Vec__i64", "0", "1", "a.nu", "0", ""]] ++ vsVec ++
+  [["scope"]] ++ bodyVec ++ [["ret", "v1"], ["end"], ["endfn"]] ++ extra
+example : (elabIR (irM [] [["ret", "c"]] (fnMake [["sum", "make", "0", "ret_alias=0"]]))).isNone := by
+  decide +kernel
+example : (elabIR (irM [] [["ret", "c"]] (fnMake []))).isSome := by decide +kernel
+
+/-- Stores the translator refuses: a borrowed parameter's value given to an
+    owner (a `sink` one's is not); raw text assigned from another binding (a
+    `String` is not). -/
+def fnStore (pflags : String) : IR := [["fn", "f", "void", "1", "1", "a.nu", "0", ""],
+  ["v", "0", "0", "0", pflags, "1", "-1", "a", "%Vec__i64"],
+  ["v", "1", "1", "1", "1", "1", "-1", "b", "%Vec__i64"],
+  ["scope"], ["let", "1", "call", "vec_new__i64", "0"], ["assign", "v1", "use", "v0"], ["end"], ["endfn"]]
+example : (elabIR (irM [] [["ret", "c"]] (fnStore "0"))).isNone := by decide +kernel
+example : (elabIR (irM [] [["ret", "c"]] (fnStore "4"))).isSome := by decide +kernel
+def vsText (t : String) : IR := [["v", "0", "1", "1", "1", "1", "-1", "a", t],
+  ["v", "1", "1", "1", "1", "1", "-1", "b", t]]
+def bodyText : IR := [["let", "0", "use", "c"], ["let", "1", "use", "c"], ["assign", "v1", "use", "v0"],
+  ["ret", "c"]]
+example : (elabIR (irM (vsText "i8*") bodyText [])).isNone := by decide +kernel
+example : (elabIR (irM (vsText "%String") bodyText [])).isSome := by decide +kernel
+
+/-- Outside the subset: a `Vec` of `Vec`s, and a `let` of a `vec_push` (the
+    translator lowers it by falling through to a call). -/
+example : (elabIR (irM [["v", "0", "1", "1", "1", "1", "-1", "v", "%Vec__Vec__i64"]] [["ret", "c"]]
+    [])).isNone := by decide +kernel
+example : (elabIR (irM (vsVec ++ [["v", "2", "2", "1", "0", "1", "-1", "", "void"]])
+    (bodyVec ++ [["let", "2", "call", "vec_push__i64", "2", "v1", "c"], ["ret", "c"]]) [])).isNone := by
   decide +kernel
 
 end C.Elab

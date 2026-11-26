@@ -4,6 +4,7 @@
 
 $ `util.nu`
 $ `claims.nu`
+$ `stdlib/ext/json.nu`
 
 // ── formal/'s tree ───────────────────────────────────────────────────
 //
@@ -91,41 +92,204 @@ $ `claims.nu`
 : LeanRun {
     b ran
     String log
-    // `elab`: Elab.lean checked too, beside Claims.lean, and its log
+    // `elab`: Elab.lean checked too, and its part of the output
     b elab_ran
     String elab_log
 }
 
-// `lake env lean <file>`, started in the background (inside formal/, with
-// the environment as it is, LEAN_PATH included), its output into `log`.
-// (Through `sh`, so that the output goes to a file: a pipe nobody reads
-// could fill and stop it.)
-@ __lt_spawn s lake s file s log → ?ProcChild {
-    : ( Vec s ) args ( vec_new [s] )
-    ( vec_push [s] args `-c` )
-    ( vec_push [s] args `exec "$0" env lean "$1" > "$2" 2>&1` )
-    ( vec_push [s] args lake )
-    ( vec_push [s] args file )
-    ( vec_push [s] args log )
-    ^ ?? ( process_spawn `sh` args ) {
-        T c → @ ?ProcChild { T c }
-        F _ → @ ?ProcChild { F }
-    }
+// A blank line, or a comment line (`--`).
+@ __lt_quiet String l → b {
+    ^ | == 0 ( string_len ( string_trim l ) ) ( string_starts_with l `--` )
 }
 
-// Compile `bundle/Program.lean` to an olean under `work`, then check
-// `bundle/Claims.lean` against it, both inside formal/ (`lake env`, so
-// that `import C.Cert` is formal/'s). With `elab`, `bundle/Elab.lean` is
-// checked against the same olean at the same time, in a second Lean
-// process. Every path is absolute; the working directory is formal/ for
-// the run and restored after.
+// `text` without its import lines, which must be exactly `want`, in order,
+// one after the other, with nothing but blank and comment lines before them
+// and no other line of the text starting `import `; none otherwise.
+@ __lt_unimport String text ( Vec String ) want → ?String {
+    : ( Vec String ) ls ( nc_lines ( string_data text ) )
+    : String o ( string_with_cap + ( string_len text ) 1 )
+    : i n ( vec_len [String] ls )
+    : i nw ( vec_len [String] want )
+    : ~ i seen 0
+    : ~ b before T
+    : ~ i k 0
+    ~ < k n {
+        : String l ( string_clone ( vec_at [String] ls k ) )
+        ? ( string_starts_with l `import ` ) {
+            ? | ! before >= seen nw { ^ @ ?String { F } } {}
+            ? ! ( string_eq l ( vec_at [String] want seen ) ) { ^ @ ?String { F } } {}
+            = seen + seen 1
+        } {
+            ? > seen 0 { = before F } {
+                ? ! ( __lt_quiet l ) { = before F } {}
+            }
+            ( string_push_str o ( string_data l ) )
+            ( string_push_char o 10 )
+        }
+        = k + k 1
+    }
+    ? != seen nw { ^ @ ?String { F } } {}
+    ^ @ ?String { T o }
+}
+
+@ __lt_v1 s a → ( Vec String ) {
+    : ( Vec String ) v ( vec_new [String] )
+    ( vec_push [String] v ( string_from a ) )
+    ^ v
+}
+
+@ __lt_v2 s a s b → ( Vec String ) {
+    : ( Vec String ) v ( __lt_v1 a )
+    ( vec_push [String] v ( string_from b ) )
+    ^ v
+}
+
+// One Lean file that checks the bundle's three modules as Lean would check
+// them one by one (`lake`, the module way: Program.lean, then Claims.lean
+// and Elab.lean against its olean):
+//   import C.Cert                  (Program.lean's first line)
+//   import C.Cert3                 (a threaded Claims.lean's own import)
+//   import C.Elab                  (Elab.lean's own import)
+//   section
+//   open A2 C                      (Program.lean's second line)
+//   <the rest of Program.lean>
+//   end
+//   <Claims.lean, its imports left out>
+//   <Elab.lean, its imports left out>     (from line `estart` on)
+// It means what the modules mean: Program.lean's grammar (shape.nu) allows
+// no option, notation, instance, namespace or attribute, so its definitions
+// read the same inline as imported; the `section` ends its `open` before
+// the claims, as the end of its module does; Claims.lean and Elab.lean are
+// the templates byte for byte (certify writes them, verify compares them
+// before Lean runs). Only lines checked to be exactly the expected ones are
+// left out; anything else is none (`why`). No `.olean` passes from one
+// process to the next any more.
+@ __lt_combined String prog String claims ? String elab inout String why inout i estart → ?String {
+    : s head `import C.Cert\nopen A2 C\n`
+    ? ! ( string_starts_with prog head ) {
+        = why ( string_from `Program.lean does not start with its two lines 'import C.Cert' and 'open A2 C'` )
+        ^ @ ?String { F }
+    } {}
+    : String pbody ( string_substr prog ( nurl_str_len head ) - ( string_len prog ) ( nurl_str_len head ) )
+    : ~ b threads F
+    : ~ String cbody ( string_new )
+    ?? ( __lt_unimport claims ( __lt_v1 `import Program` ) ) {
+        T c → { = cbody c }
+        F → {
+            ?? ( __lt_unimport claims ( __lt_v2 `import C.Cert3` `import Program` ) ) {
+                T c → {
+                    = cbody c
+                    = threads T
+                }
+                F → {
+                    = why ( string_from `Claims.lean's imports are not the template's` )
+                    ^ @ ?String { F }
+                }
+            }
+        }
+    }
+    : ~ String ebody ( string_new )
+    : ~ b has_elab F
+    ?? elab {
+        T e → {
+            ?? ( __lt_unimport e ( __lt_v2 `import Program` `import C.Elab` ) ) {
+                T x → {
+                    = ebody x
+                    = has_elab T
+                }
+                F → {
+                    = why ( string_from `Elab.lean's imports are not the template's` )
+                    ^ @ ?String { F }
+                }
+            }
+        }
+        F → {}
+    }
+    : String o ( string_with_cap + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) 256 )
+    ( string_push_str o `import C.Cert\n` )
+    ? threads { ( string_push_str o `import C.Cert3\n` ) } {}
+    ? has_elab { ( string_push_str o `import C.Elab\n` ) } {}
+    ( string_push_str o `section\nopen A2 C\n` )
+    ( string_push_str o ( string_data pbody ) )
+    ( string_push_str o `\nend\n\n` )
+    ( string_push_str o ( string_data cbody ) )
+    ? has_elab {
+        ( string_push_str o `\n` )
+        // (the line the Elab.lean part starts at: the lines so far, plus one)
+        : ( Slice u ) t ( slice_of_str ( string_data o ) )
+        : i n ( slice_len [u] t )
+        : ~ i nl 0
+        : ~ i k 0
+        ~ < k n { ? == ( slice_byte t k ) 10 { = nl + nl 1 } {} = k + k 1 }
+        = estart + nl 1
+        ( string_push_str o ( string_data ebody ) )
+    } {}
+    ^ @ ?String { T o }
+}
+
+// One of Lean's messages (`lean --json`: one object a line) as the text
+// the readers below take: an error or a warning as `<file>:<line>:<col>:
+// <severity>: <text>`, the rest (`#print axioms`) as its text.
+@ __lt_msg_text s file i line i col s sev s data → String {
+    : String o ( string_new )
+    ? | ( nc_is_s sev `error` ) ( nc_is_s sev `warning` ) {
+        ( string_push_str o file )
+        ( string_push_str o `:` )
+        ( string_push_int o line )
+        ( string_push_str o `:` )
+        ( string_push_int o col )
+        ( string_push_str o `: ` )
+        ( string_push_str o sev )
+        ( string_push_str o `: ` )
+    } {}
+    ( string_push_str o data )
+    ( string_push_char o 10 )
+    ^ o
+}
+
+@ nc_is_s s a s b → b { ^ != 0 ( nurl_str_eq a b ) }
+
+// Check `bundle/Program.lean` and `bundle/Claims.lean` (and with `elab`,
+// `bundle/Elab.lean`) in one Lean process: the file `__lt_combined` makes,
+// in `work`, run by `lake env lean --json` inside formal/ (so that `import
+// C.Cert` is formal/'s). Each message is the claims' (`log`) or Elab.lean's
+// (`elab_log`) by its own position, not by where it comes in the output: a
+// message of the file from the Elab.lean part's first line on is Elab.lean's,
+// any other the claims'. Fail closed: output that cannot be placed (a line
+// that is not one of Lean's messages, a message of another file or without
+// a line, anything on stderr) is the claims', as an error. The claims' run
+// finished when Lean exited 0, or exited 1 for errors of the Elab.lean part
+// alone (they only mean that Cert.elab is not proved); Elab.lean's counts
+// only on an exit 0.
 @ cert_lean_check s lake s formal s bundle s work b elab → LeanRun {
-    : String log ( string_new )
+    : ~ String log ( string_new )
     : String prog ( nc_join bundle `Program.lean` )
     : String claims ( nc_join bundle `Claims.lean` )
-    : String olean ( nc_join work `Program.olean` )
-    : String root_arg ( string_from `--root=` )
-    ( string_push_str root_arg bundle )
+    : String all ( nc_join work `All.lean` )
+    : String ptext ?? ( nc_read ( string_data prog ) ) { T x → x F → ( string_new ) }
+    : String ctext ?? ( nc_read ( string_data claims ) ) { T x → x F → ( string_new ) }
+    : ~ ? String etext @ ?String { F }
+    ? elab {
+        ?? ( nc_read ( string_data ( nc_join bundle `Elab.lean` ) ) ) {
+            T x → { = etext @ ?String { T x } }
+            F → {}
+        }
+    } {}
+    : ~ String why ( string_new )
+    : ~ String text ( string_new )
+    : ~ i estart 0
+    ?? ( __lt_combined ptext ctext etext why estart ) {
+        T t → { = text t }
+        F → {
+            ( string_push_str log ( string_data why ) )
+            ^ @ LeanRun { F log F ( string_new ) }
+        }
+    }
+    ? ! ( nc_write ( string_data all ) ( string_data text ) ) {
+        ( string_push_str log `cannot write the combined Lean file ` )
+        ( string_push_str log ( string_data all ) )
+        ^ @ LeanRun { F log F ( string_new ) }
+    } {}
     : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
     ?? ( env_chdir formal ) {
         T _ → {}
@@ -138,47 +302,62 @@ $ `claims.nu`
     : ( Vec String ) a1 ( vec_new [String] )
     ( vec_push [String] a1 ( string_from `env` ) )
     ( vec_push [String] a1 ( string_from `lean` ) )
-    ( vec_push [String] a1 root_arg )
-    ( vec_push [String] a1 ( string_from `-o` ) )
-    ( vec_push [String] a1 ( string_clone olean ) )
-    ( vec_push [String] a1 ( string_clone prog ) )
-    : Run r1 ( nc_run lake a1 )
-    ( string_push_str log ( string_data . r1 out ) )
-    ( string_push_str log ( string_data . r1 err ) )
-    : ~ b ran & . r1 started == . r1 code 0
-    : ~ b eran F
-    : ~ String elog ( string_new )
-    ? ran {
-        ?? ( env_set `LEAN_PATH` work ) { T _ → {} F _ → {} }
-        : String elab_file ( nc_join bundle `Elab.lean` )
-        : String elab_logf ( nc_join work `elab.log` )
-        : ~ ? ProcChild ec @ ?ProcChild { F }
-        ? elab { = ec ( __lt_spawn lake ( string_data elab_file ) ( string_data elab_logf ) ) } {}
-        : ( Vec String ) a2 ( vec_new [String] )
-        ( vec_push [String] a2 ( string_from `env` ) )
-        ( vec_push [String] a2 ( string_from `lean` ) )
-        ( vec_push [String] a2 ( string_clone claims ) )
-        : Run r2 ( nc_run lake a2 )
-        ?? ( env_unset `LEAN_PATH` ) { T _ → {} F _ → {} }
-        ( string_push_str log ( string_data . r2 out ) )
-        ( string_push_str log ( string_data . r2 err ) )
-        // A run counts only when Lean finished: one killed before it printed
-        // the axioms reports nothing to read.
-        = ran & . r2 started == . r2 code 0
-        // Elab.lean's run, likewise: only an exit 0 counts.
-        ?? ec {
-            T c → {
-                : i code ( proc_wait c )
-                = eran == code 0
-                = elog ?? ( nc_read ( string_data elab_logf ) ) { T x → x F → ( string_new ) }
-            }
-            F → {
-                ? elab { = elog ( string_from `could not start Lean on Elab.lean` ) } {}
-            }
-        }
-    } {}
+    ( vec_push [String] a1 ( string_from `--json` ) )
+    ( vec_push [String] a1 ( string_clone all ) )
+    : Run r ( nc_run lake a1 )
     ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
-    ^ @ LeanRun { ran log eran elog }
+    : b has_elab ?? etext { T _ → T F → F }
+    : ~ String elog ( string_new )
+    : ( Vec String ) ls ( nc_lines ( string_data . r out ) )
+    : i n ( vec_len [String] ls )
+    : ~ i k 0
+    ~ < k n {
+        : String l ( string_clone ( vec_at [String] ls k ) )
+        ? > ( string_len ( string_trim l ) ) 0 {
+            : ~ b placed F
+            ?? ( json_parse ( string_data l ) ) {
+                T j → {
+                    : String file ?? ( json_get j `fileName` ) { T v → ( string_from ( json_as_str v ) ) F → ( string_new ) }
+                    : String sev ?? ( json_get j `severity` ) { T v → ( string_from ( json_as_str v ) ) F → ( string_new ) }
+                    : String data ?? ( json_get j `data` ) { T v → ( string_from ( json_as_str v ) ) F → ( string_new ) }
+                    : ?i line ?? ( json_get j `pos.line` ) { T v → ( json_num_as_i v ) F → @ ?i { F 0 } }
+                    : i col ?? ( json_get j `pos.column` ) { T v → ( json_as_int v ) F → 0 }
+                    ?? line {
+                        T ln → {
+                            ? & ( string_eq file all ) | ( nc_is_s ( string_data sev ) `error` ) | ( nc_is_s ( string_data sev ) `warning` ) ( nc_is_s ( string_data sev ) `information` ) {
+                                : String mt ( __lt_msg_text ( string_data file ) ln col ( string_data sev ) ( string_data data ) )
+                                ? & has_elab >= ln estart {
+                                    ( string_push_str elog ( string_data mt ) )
+                                } {
+                                    ( string_push_str log ( string_data mt ) )
+                                }
+                                = placed T
+                            } {}
+                        }
+                        F → {}
+                    }
+                }
+                F _ → {}
+            }
+            ? ! placed {
+                // (fail closed: the claims', as an error)
+                ( string_push_str log ( string_data all ) )
+                ( string_push_str log `:0:0: error: Lean output nurl-cert cannot place: ` )
+                ( string_push_str log ( string_data l ) )
+                ( string_push_char log 10 )
+            } {}
+        } {}
+        = k + k 1
+    }
+    ? > ( string_len ( string_trim . r err ) ) 0 {
+        ( string_push_str log ( string_data all ) )
+        ( string_push_str log `:0:0: error: Lean wrote to stderr: ` )
+        ( string_push_str log ( string_data . r err ) )
+        ( string_push_char log 10 )
+    } {}
+    : b ok0 & . r started == . r code 0
+    : b elab_failed & & & & has_elab . r started == . r code 1 ( cert_lean_has_error elog ) ! ( cert_lean_has_error log )
+    ^ @ LeanRun { | ok0 elab_failed log & ok0 has_elab elog }
 }
 
 // Lean proved `Cert.elab` on the standard axioms alone: the run exited 0,

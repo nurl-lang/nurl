@@ -205,7 +205,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   prints for `while_loop_summing`, written out.
 - `tools/ncore/elab_parity.sh` compares `elabIR` with `nurl-cert
   translate` over every certify program, every hole probe and the 18
-  scalar programs of `tools/ncore/elab_scalar/` (written for it: calls,
+  scalar programs of `tools/ncore/elab/` (written for it: calls,
   `inout` and `sink` parameters, `void` functions, nested loops, `break`,
   `continue`, returns from inside loops and arms). A parity test, not a
   proof. Of 4527 programs nurlc makes a core IR of 4322; tolean.nu
@@ -311,13 +311,204 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   lines). Without the skip, certify took 72 % longer: most programs'
   core IR carries hundreds of lines of the library's functions.
 
+## Route (b), step 4: buffers of numbers (AGORA-1029)
+
+- `elabIR` covers the **Vec family** too: a variable, parameter or result
+  may be a buffer of numbers, A2's `.vec .int`. That is raw text (`i8*`,
+  owned: bound from a literal or a fresh string), a `String`, or a `Vec`
+  of a number type (`bufTy`). The constructors it builds, beyond step 2's,
+  are `.push .free` (Stmt), `.new .var .borrow .at` (Rhs), `.len` (Expr),
+  `.vec` (Ty), `.drop .realloc .dropIn` (a parameter's `inout` bound) and
+  `resOwn := true`. They are tolean.nu's rules for what it does with
+  buffers:
+  - a `use` of a buffer moves it (`.var`), or is a cursor's borrow
+    (`.borrow`: a `: ~` binding of a binding or a parameter). A literal
+    bound to raw text is a copy of its own (`.new .int`). A borrowed
+    parameter assigned to an `inout` one is copied (its length read into a
+    fresh variable, then `.new`);
+  - the library calls `vec_new`, `vec_push`, `vec_len`, `vec_at` (a number
+    element, `.at`), `vec_free` and `string_free` (`.free`), `string_from`,
+    `string_len`, `nurl_str_cat` and `nurl_str_len`, in the translator's
+    order of fresh numbers (`intrS`). A raw-text literal handed to a
+    program function's `i8*` parameter is a buffer of the call's own;
+  - a buffer's `ret` moves it into the result slot. A buffer parameter
+    that is neither `sink` nor `inout` is `inout` at the bound the walk's
+    summary gives (`drops`, `reallocs`, `ireallocs`, `mutates`), as
+    `__mode` has it;
+  - a buffer's `drop` is the end of its scope, as in the translator,
+    which takes that to be so only if no line after the drop names the
+    buffer or a variable that views it (`__views_of`). `elabIR` makes the
+    same check, over the same lines (every word of every later line of
+    the body, cut at its `/`s, the lines the translation passes over
+    included), with the same closure of views (`viewsOf`: an element read
+    out of the Vec by a `let … call vec_at…`).
+- **Fail closed.** Each check the translator makes on these constructs is
+  made too, with a kernel witness of its refusal and of its well-formed
+  neighbour (formal/C/Elab.lean, "step 4"): an owner given a borrowed
+  parameter's value, raw text assigned from another binding, an owned
+  result aliasing a parameter (`ret_alias`), a buffer or an element of it
+  named after its `drop`. Where the translator reads more than the subset
+  needs, `elabIR` refuses instead (stricter, never laxer):
+  - a `Vec` of anything but numbers;
+  - a `let` of a call whose result may be a view (its summary says
+    `ret_unowned=1` or names `rviews`; `string_data…`, `slice_from_vec__…`,
+    `slice_at__…`). So raw text in the subset is owned (`__view_vars` finds
+    nothing), and the only views are `vec_at`'s number elements;
+  - a field as an argument (`v3/a`), and a `let x` of a call the
+    translator lowers by falling through to a call (`vec_push`,
+    `vec_free`).
+- **Which programs.** Over tools/ncore/certify, 19 programs are in the
+  subset (3 at step 3): all 15 whose translated term uses, beyond step
+  2's constructors, only `.new .push .len .vec`, and 4 more:
+  `joins_each_freeing_a_different_vec` (`.free`), `cursor_over_a_vec`
+  (`.borrow`), and the two that read an element (`.at`). All 19 match,
+  each also by `decide +kernel`. 13 of them are accepted by the checker and get
+  Elab.lean (the selftest requires exactly these 13); the 6 `*_refused`
+  ones have no Claims.lean, so no Elab.lean.
+- **Parity** (`tools/ncore/elab_parity.sh`, the fixtures now in
+  `tools/ncore/elab/`: the 18 scalar ones and 13 new ones written for this
+  step, among them a loop pushing to a Vec, a Vec lent read-only, `inout`,
+  moved into a `sink`, returned, dropped on an early return, freed on a
+  branch, two Vecs swapped, a Vec parameter changed through its handle, a
+  borrowed Vec parameter copied into an `inout` one, strings made and
+  measured, a literal handed to a raw-string parameter, elements read by
+  index): of 4540 programs nurlc makes a core IR of 4335. tolean.nu
+  translates 260 of those, and `elabIR` answers a term for 51 (the 19
+  certify programs, the 31 fixtures, one hole probe), every one exactly
+  tolean.nu's term (each also by `decide +kernel`). It answers `none` for
+  the other 4284, and a term for no program tolean.nu refuses. 166 s in
+  all with 12 jobs.
+- **Kernel time**, `decide +kernel` of `elabIs ir P entry` (the file with
+  the theorem minus the file without it, best of 5 each), on the 16
+  certify programs new to the subset: 0.56–0.91 s for 15 of them
+  (`use_after_move_refused` 0.56 s, `vec_push_len` 0.61 s, the raw-string
+  ones 0.81–0.87 s, `owner_moved_in_a_loop_without_returning_refused`
+  0.91 s), and 4.24 s for `joins_each_freeing_a_different_vec` (one
+  function of 300 lines, 22 Vecs, 906 lines of IR).
+- **The words leave out the library's statement lines.** A function
+  whose file starts with `stdlib/` keeps its `fn`, `v` and `endfn` lines
+  in the words; its other lines are left out (`words.nu`). This is sound,
+  read off both programs that read a core IR:
+  - the translator's reader (coreir.nu, `core_read`) keeps a statement
+    line inside a function as text (`body`, `words`, `wstart`) and checks
+    nothing of it; its records are `fn`, `v`, `endfn` and, outside a
+    function, `sum`, `ty` and `virt`;
+  - the translator (tolean.nu) reads a function's lines only through
+    `__cf m p`, a function of `prog` (`__nl`, `__nw`, `__wd` and every
+    rule above them, `__wellformed`, `__moved_caps`, `__spawn_scan`,
+    `__view_vars`, `__views_of`, `__changes`, `__lean`). `__flags` reads
+    `prog`'s variables only, and `__emit`, the one loop over every
+    function, reads each one's `name` and `file`. `prog` is the
+    functions whose file does not start with `stdlib/` (`__emit`, "not
+    bodies to check: their code is phase B's");
+  - `elabIR` drops those functions by the same test (`startsB f.file
+    stdlibB`, on the sixth word of the `fn` line, which is coreir.nu's
+    column 5), and reads nothing of a function it drops but its
+    variables' records, which the reader checks and the words keep. A line
+    is left out by Lean's own reading of it (`readFns`: a first word `fn`
+    opens a function, `endfn` closes it), so exactly the lines `readFns`
+    would put in a library function's `body` go. A library function is
+    never taken for an empty function of the program: its `fn` line,
+    and so its file, stays.
+  - Checked, not assumed. `tools/ncore/elab_parity.sh` runs `elabIR` on
+    the words and on every line (`elab_parity_full.py`) for every
+    program, and requires the two results equal (`progBeq`, `stmtBeq`):
+    the same on all 4335 core IRs. translate_test 1c compares the words
+    with an independent Python reading of the rule. 15 mutants (5
+    programs, 3 library statement lines each, made ill-formed) leave the
+    translator's term, the words and `elabIR`'s answer unchanged. The
+    controls change them: a program statement edited changes the term
+    and the words, and a library `v` line of kind 7 makes the translator
+    stop and `elabIR` answer `none`.
+  - `vec_push_len`'s words: 581 lines → 157. `raw_strings_literal_and_fresh`'s:
+    1141 → 284.
+- **One Lean process per program.** certify and verify check a bundle in
+  one Lean file made in the work directory, one `lake env lean`: the
+  imports (`C.Cert`, a threaded program's `C.Cert3`, `C.Elab` with an
+  Elab.lean), then Program.lean's definitions inside `section` / `open A2
+  C` / `end`, then Claims.lean's body and Elab.lean's body
+  (`cert_lean_check`, packages/nurl-cert/src/lean.nu). The bundle keeps
+  its three modules, which a person checks the module way.
+  docs/dev/CERTIFICATE.md ("How Lean checks a bundle") says why the file
+  means what they mean, and how each of Lean's messages is placed by its
+  own line (`lean --json`). The selftest
+  checks three bundles both ways (verdict, each claim's axioms,
+  Cert.elab). Gone with it: the second, concurrent Lean process and the
+  stop of it on a refusal, the `Program.olean` handed from one run to the
+  next, and the environment dump of an earlier try (one `lake` a check
+  is the point now).
+- **A refused Cert.elab is cheap.** When the kernel refuses `elabIs ir P
+  entry` (words whose term is not Program.lean's: a tampered bundle, or a
+  bug of `elabIR`), `decide +kernel` explains the failure by reducing the
+  instance again in the elaborator. On a real core IR that reduction took
+  111 s and 28 GB before the OOM killer stopped it. That happened in the
+  module way too: before this step, the selftest's swapped-term bundle
+  was refused only because its Elab.lean process was killed. `elabIs` is
+  now `@[irreducible]`. The kernel ignores that, so the proof is
+  unchanged, and the elaborator stops at once: the same bundle is refused
+  in 0.74 s, with a 460-byte message. (A `maxRecDepth` on the theorem was
+  tried first. It also bounds the kernel's own recursion, so
+  `joins_each_freeing_a_different_vec` needs more than 64, and a depth
+  of 384 lets the explosion through.)
+- **Certify time** over the 62 certify programs, one at a time, best of
+  3, before and after run in turn on the same x86-64 host: 82.1 s
+  against 83.9 s before (−2.1 %). Most programs take 0.3–0.4 s less: one
+  Lean process, not a compile and then a check. The 9 accepted programs
+  new to the subset take +0.4 to +0.8 s, and their refused neighbours
+  about +0.5 s: their Elab.lean part now runs after the claims instead
+  of beside them. `joins_each_freeing_a_different_vec` takes +4.6 s (16.6
+  → 21.2 s): its 5 s Elab.lean part no longer hides behind its 16 s
+  claims' check, and `-DElab.async=true` does not run the two side by
+  side (20.9 s). Along the way: 101.5 s with the full words and a second
+  process, 95.6 s with the stop on refusal, 88.5 s with the library's
+  statement lines left out and one lake run.
+- **Peak memory** (the summed RSS of certify's process tree, sampled
+  every 5 ms), against the same baseline:
+  - a program outside the subset: +7 MiB on average (44 programs within
+    ±50 MiB);
+  - a program in the subset: +78 to +110 MiB (`C.Elab` and the words in
+    the one process);
+  - the 3 scalar ones: 618–648 MiB less (they had two processes);
+  - the largest peak: +18 MiB (`joins…`, 2566 → 2584 MiB);
+  - the sum of the 62 peaks: −0.7 %.
+- **Where the time goes now**, best of 5:
+
+  | | vec_push_len | raw_strings… |
+  |---|---|---|
+  | words (lines) | 157 | 284 |
+  | Lean's start and `import C.Elab` (an empty file) | 0.30 s | 0.30 s |
+  | elaborating the words literal | 0.24 s | 0.41 s |
+  | kernel: reading the functions (`fnsOf`) | 0.09 s | 0.14 s |
+  | kernel: the top-level lines (`topLines`) | 0.05 s | 0.04 s |
+  | kernel: one summary lookup by name | 0.08 s | 0.13 s |
+  | kernel: `elabIs`, in all | 0.47 s | 0.58 s |
+
+  (Before the elision: 0.56 / 1.13 s of literal, 0.55 / 0.81 s of kernel.)
+  What is left in the kernel is mostly the summary lookups by name, two
+  or three a program. Each compares the name with every `sum` line's, at
+  the kernel's cost per character of a string literal.
+- **Tried, not kept:**
+  - names as numbers: each name's bytes as a `Nat` (base 257, a byte plus
+    one a digit; injective, proved), every lookup a `Nat` comparison. No
+    gain, because making the keys decodes every name once, which costs
+    what the comparisons did: 0.63 / 0.90 s for `elabIs` against 0.61 /
+    0.80 s. On 200 distinct 20-character strings the kernel spends ≈ 6 ms
+    on a literal at first touch and ≈ 0.7 ms a character; repeated
+    literals (`let`, `v1`) are decoded once;
+  - the literal's syntax: a typed list per line, `::` chains,
+    `@List.cons String …` with explicit types, the linters off. All
+    0.39–0.49 s against 0.46 s on the 581 lines: the cost is the term
+    elaborator's, ≈ 0.2 ms a list node, whatever the spelling (a flat list
+    of the 2163 words, 0.42 s; `Nat` leaves, 1.01 s).
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
-rules over words. Done: the claims rest on `elabIR` for the scalar
-subset, and `verify` checks the words against `Program.core` (step 3).
-Then:
-- the subset widened rule by rule;
+rules over words. Done: the claims rest on `elabIR` for the subset of
+numbers (steps 2 and 3) and buffers of numbers (step 4), and `verify`
+checks the words against `Program.core`. Then:
+- the subset widened rule by rule (views and slices, `string_data` and
+  `slice_from_vec`; options; structs; closures; threads);
 - the per-encoding rows above replace `translation`;
 - kernel time is measured on the corpus;
 - `elab`'s parity with the NURL translator is shown over the sweep.

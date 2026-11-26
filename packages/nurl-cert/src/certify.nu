@@ -481,7 +481,7 @@ $ `stdlib/std/random.nu`
         : String claims ( cert_claims_lean prof nv threads )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
         // C.Elab: does the kernel build this very term from the core IR's
-        // words? Lean decides, beside the claims' check, for every term
+        // words? Lean decides, in the claims' run, for every term
         // that can be elabIR's at all (`cert_elab_candidate`: one with a
         // constructor elabIR never builds cannot, so Lean is not asked). A
         // core IR that is not UTF-8 has no words.
@@ -493,8 +493,8 @@ $ `stdlib/std/random.nu`
             }
         } {}
         : String work ( nc_join out `.build` )
-        // A fresh directory: an .olean the bundle brought must not stand in
-        // for the one compiled from its Program.lean.
+        // A fresh directory for the one Lean file the check runs
+        // (`cert_lean_check`: the bundle's modules, combined).
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
         : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data formal ) out ( string_data work ) try_elab )

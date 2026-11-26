@@ -2,7 +2,8 @@
 
 Status: **S1 and M4 of the certified-programs work** (AGORA-1019; M4,
 the translator in NURL and threaded programs, AGORA-1020; the term checked
-by the kernel for the scalar subset, AGORA-1029 step 3; part of
+by the kernel for the subset of numbers and buffers of numbers,
+AGORA-1029 steps 3 and 4; part of
 AGORA-1010; spec in the agora notes `spec.program-cert`, `.2`, `.3`).
 Schema **`nurl-cert/1`**, described here and in
 [`certificate.schema.json`](certificate.schema.json).
@@ -162,8 +163,9 @@ prog.cert/
   compares the bundle's copy byte for byte. A statement weakened, a proof
   replaced by `sorry`, or an axiom added is a difference.
 - **Elab.lean** takes the translator out of the trusted path, for the
-  programs `C.Elab.elabIR` covers (the scalar subset,
-  `docs/dev/TRANSLATION_TRUST.md`, route (b)). It is a pure function of
+  programs `C.Elab.elabIR` covers (numbers, and buffers of numbers:
+  raw text, `String`s and `Vec`s of numbers; `docs/dev/TRANSLATION_TRUST.md`,
+  route (b), steps 2 and 4). It is a pure function of
   Program.core (`cert_elab_lean`, `packages/nurl-cert/src/claims.nu`):
 
   ```lean
@@ -184,18 +186,72 @@ prog.cert/
     below 32 is `\x..`, a byte above 127 is written as it is. Lean reads
     well-formed UTF-8 back as the same bytes; a core IR that is not
     well-formed UTF-8 has no words, and its bundle no Elab.lean.
+  - The statement lines of a library function (its file starts with
+    `stdlib/`) are left out of the words; its `fn`, `v` and `endfn`
+    lines stay. The translator reads only the program's own functions'
+    bodies, and `elabIR` drops the library's by the same test, so it
+    answers the same on the words as on every line
+    (`tools/ncore/elab_parity.sh` compares the two over the corpus).
+    This came with nurl-cert 0.3.0: a 0.2.0 bundle with Elab.lean whose
+    core IR has library functions does not verify with it (`verify`
+    makes Elab.lean again, and it is another file now). Certify the
+    program again.
   - certify writes it for a translated term that can be `elabIR`'s at
-    all, and has Lean check it beside Claims.lean, in a second process.
+    all, and Lean checks it in the same run as Claims.lean (below).
     A term with a constructor `elabIR` never builds (the list
-    `ELAB_CTORS` in claims.nu, read off formal/C/Elab.lean), or with
-    `true`, cannot equal `elabIR`'s, so Lean is not asked: that skip is
-    exact. For every other term Lean decides.
+    `ELAB_CTORS` in claims.nu, read off formal/C/Elab.lean) cannot equal
+    `elabIR`'s, so Lean is not asked: that skip is exact. For every other
+    term Lean decides.
   - The bundle keeps Elab.lean when the checker accepts the program, Lean
     exits 0, and `Cert.elab` rests on the standard axioms only. Otherwise
     it is deleted, and the bundle is as before, its term the translator's.
   - With it, `M.safe` and `M.leak` are about the term the kernel built
     from Program.core's words. What is left of the `translation` row is
     nurlc's core IR and the split into words.
+- **How Lean checks a bundle.** The bundle holds the three modules, which
+  a person can check with lake the module way: Program.lean compiled to
+  its olean, then Claims.lean and Elab.lean against it. certify and
+  verify check them in one Lean process instead, one file made in the
+  work directory (`cert_lean_check`, packages/nurl-cert/src/lean.nu):
+  `import C.Cert` (and `import C.Cert3` for a threaded Claims.lean,
+  `import C.Elab` with Elab.lean); `section`, `open A2 C`, Program.lean's
+  definitions, `end`; Claims.lean without its imports; Elab.lean without
+  its imports. The file means what the modules mean:
+  - Program.lean's grammar (shape.nu) allows only its two first lines,
+    `import C.Cert` and `open A2 C`, exactly, then definitions: no option,
+    notation, instance, namespace or attribute. So its definitions read
+    the same inline as imported, and the `section` ends its `open` before
+    the claims, as the end of its module does;
+  - Claims.lean and Elab.lean are the templates byte for byte (certify
+    writes them, verify compares them before Lean runs);
+  - only lines checked to be exactly the expected ones are left out
+    (Program.lean's two lines; Claims.lean's `import Program`, and a
+    threaded one's `import C.Cert3`; Elab.lean's `import Program` and
+    `import C.Elab`, each after nothing but comments); any other shape is
+    refused;
+  - no `.olean` passes from one process to the next, so a planted
+    `Program.olean` is no longer an attack surface.
+
+  Lean runs it with `--json`, so every message, `#print axioms` output
+  included, comes with its file and line. A message is placed by its own
+  line, not by where it comes in the output. A message from the line
+  where the Elab.lean part starts on is Elab.lean's; any other is
+  Program.lean's or Claims.lean's. Output that cannot be placed (not one
+  of Lean's messages, another file's, a message with no line, anything
+  on stderr) counts as an error of the claims' part, so it fails closed.
+  An error of the claims' part is an error or a refusal, as with the
+  modules. An error of the Elab.lean part alone means only that
+  `Cert.elab` is not proved (no Elab.lean; the translation row the
+  translator's). `Cert.elab` still counts only on
+  an exit 0 and `#print axioms` listing the standard axioms. The selftest
+  checks three bundles both ways (verdict, each claim's axioms,
+  Cert.elab), a candidate whose Elab.lean part fails (accepted, no
+  Elab.lean), the refused programs of the subset (their claims refused
+  beside an Elab.lean part the kernel proves), and a refused program's
+  term in a bundle with Elab.lean (verify fails on the claims). A refused `Cert.elab` costs little: `C.Elab.elabIs` is
+  irreducible to the elaborator (not to the kernel), so `decide +kernel`
+  does not re-reduce it to explain the failure, which on a real core IR
+  took tens of GB.
 - **Refused and unsupported programs** get a bundle with no Claims.lean,
   and their `M.safe` and `M.leak` are `open`. A bundle is written whole:
   certify first deletes the old Claims.lean, Elab.lean and manifest.
@@ -376,11 +432,12 @@ refused), one at a time, on an x86-64 Linux host (AGORA-1019):
   fastest kernel route on every other program (0.41 s against 0.62 s on a
   typical one).
 
-Elab.lean (AGORA-1029 step 3) costs little: over the 62 certify
-programs, one at a time, best of 3, certify takes 79.2 s against 78.6 s
-before (+0.8 %). Lean is asked only for a term that can be `elabIR`'s,
-and checks Elab.lean beside Claims.lean; `docs/dev/TRANSLATION_TRUST.md`
-(step 3) has the numbers.
+Elab.lean costs little. At step 3 (AGORA-1029), over the 62 certify
+programs, one at a time, best of 3, certify took 79.2 s against 78.6 s
+before (+0.8 %). With step 4's larger subset and its one Lean process a
+program it takes 82.1 s against 83.9 s (−2.1 %). Lean is asked only for
+a term that can be `elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3
+and 4) has the numbers, peak memory included.
 
 Without `--certify`, nothing changes:
 - `--list-sources=TAG` is off by default;
