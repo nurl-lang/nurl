@@ -2,7 +2,8 @@
 //
 // Re-checks a bundle without nurlc: every hash again, Claims.lean written
 // again from the template and compared byte for byte, Program.lean held to
-// the program grammar, the proofs checked again by Lean against formal/
+// the program grammar, Elab.lean (when the manifest records it) made again
+// from Program.core and compared byte for byte, the proofs checked again by Lean against formal/
 // (whose tree must hash to what the manifest pins), `#print axioms` read
 // again, and every claim's status recomputed and compared with the
 // manifest's. Exit 0 only when all of it agrees; each disagreement is
@@ -97,7 +98,12 @@ $ `certify.nu`
     : String ptext0 ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → ( string_new ) }
     : ShapeRes sh0 ( cert_shape ( string_data ptext0 ) )
     : b threads & . sh0 ok . sh0 threads
-    ( __vf_structure t m ( string_data prof ) threads )
+    // The bundle's term is the kernel's (Elab.lean, Cert.elab) when the
+    // manifest records Elab.lean's hash; the translation ledger row then
+    // says so, and the files must be there. Otherwise there is no Elab.lean
+    // and the row is the translator's.
+    : b elab ( __vf_has m `hashes.elab_lean` )
+    ( __vf_structure t m ( string_data prof ) threads elab )
 
     // The sources.
     : ~ i k 0
@@ -154,6 +160,12 @@ $ `certify.nu`
     : String verdict ( mj_get_str m `program.verdict` )
     : i nclaims ( cert_claim_count threads )
     : String claims_path ( nc_join bundle `Claims.lean` )
+    : String elab_path ( nc_join bundle `Elab.lean` )
+    // The manifest's case and the files agree.
+    : b has_e ( file_exists ( string_data elab_path ) )
+    : b case_ok ? elab & ( nc_is verdict `accepted` ) has_e ! has_e
+    ( __vf_check t case_ok ? elab `Elab.lean is there, as the manifest records (the term is the kernel's, Cert.elab)`
+    `no Elab.lean, as the manifest records none (the term is the translator's)` `` )
     ? ( nc_is verdict `accepted` ) {
         ( __vf_hash t m bundle `Program.lean` `program_lean` )
         ( __vf_hash t m bundle `Claims.lean` `claims_lean` )
@@ -165,11 +177,20 @@ $ `certify.nu`
         : String want ( cert_claims_lean ( string_data prof ) . sh nv threads )
         : String have ?? ( nc_read ( string_data claims_path ) ) { T x → x F → ( string_new ) }
         ( __vf_check t ( string_eq want have ) `Claims.lean is the claims' template, byte for byte` `its statements or proofs were edited` )
+        ? elab {
+            ( __vf_hash t m bundle `Elab.lean` `elab_lean` )
+            : String core_text ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
+            : String ehave ?? ( nc_read ( string_data elab_path ) ) { T x → x F → ( string_new ) }
+            : b esame ?? ( cert_elab_lean ( string_data core_text ) ) { T w → ( string_eq w ehave ) F → F }
+            ( __vf_check t esame `Elab.lean is Program.core's words and the template, byte for byte`
+            `its words, statement or proof are not what nurl-cert makes of Program.core` )
+        } {}
         // Lean, again, and only on files every check above passed: Lean runs
         // code while it elaborates a file (`#eval`, `run_cmd`), so a file
         // the grammar, the template or a hash refused is never handed to it.
         ? > . t bad 0 {
             ( __vf_bad t `Lean checks Program.lean and Claims.lean` `not run: the bundle failed the checks above` )
+            ? elab { ( __vf_bad t `Lean proves Cert.elab (Elab.lean) on the standard axioms` `not run` ) } {}
             : ~ i c 0
             ~ < c nclaims {
                 : String what ( string_from ( cert_claim_id c ) )
@@ -184,10 +205,16 @@ $ `certify.nu`
         // for the one compiled from its Program.lean.
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
-        : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data . o formal ) bundle ( string_data work ) )
-        ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
+        : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data . o formal ) bundle ( string_data work ) elab )
         : b clean & . lr ran ! ( cert_lean_has_error . lr log )
         ( __vf_check t clean `Lean checks Program.lean and Claims.lean` ( string_data ( __vf_first . lr log ) ) )
+        // The term is the kernel's: Lean proves Cert.elab again, beside the
+        // claims (and only an exit 0 counts).
+        ? elab {
+            ( __vf_check t ( cert_elab_proved lr ) `Lean proves Cert.elab (Elab.lean) on the standard axioms`
+            ( string_data ( __vf_first . lr elab_log ) ) )
+        } {}
+        ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         : ~ i c 0
         ~ < c nclaims {
             : String mid ( mj_get_str m ( string_data ( __vf_path `claims.` c `.id` ) ) )
@@ -329,7 +356,7 @@ $ `certify.nu`
 
 @ __vf_has Json m s path → b { ^ ?? ( json_get m path ) { T _ → T F → F } }
 
-@ __vf_structure inout Tally t Json m s prof b threads → v {
+@ __vf_structure inout Tally t Json m s prof b threads b elab → v {
     // the top-level members, exactly
     : ( Vec String ) keys ( json_obj_keys m )
     : ( Vec String ) want ( string_split ( string_from `schema tool profile program claims coverage hashes versions ledger` ) ` ` )
@@ -341,7 +368,7 @@ $ `certify.nu`
     : ~ String bad ( string_new )
     ( __vf_obj m `tool` `name version` `` bad )
     ( __vf_obj m `program` `source verdict reason slots` `` bad )
-    ( __vf_obj m `hashes` `sources core_ir` `llvm_ir program_lean claims_lean binary` bad )
+    ( __vf_obj m `hashes` `sources core_ir` `llvm_ir program_lean claims_lean elab_lean binary` bad )
     ( __vf_obj m `versions` `nurlc formal_tree formal_commit lean_toolchain` `` bad )
     ? ! ( nc_is ( mj_get_str m `tool.name` ) `nurl-cert` ) { ( string_push_str bad `tool.name ` ) } {}
     ( __vf_strings m `tool.version program.source program.verdict program.reason hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain` bad )
@@ -351,6 +378,7 @@ $ `certify.nu`
     ( __vf_sha m `hashes.llvm_ir` F bad )
     ( __vf_sha m `hashes.program_lean` F bad )
     ( __vf_sha m `hashes.claims_lean` F bad )
+    ( __vf_sha m `hashes.elab_lean` F bad )
     ( __vf_sha m `versions.formal_tree` T bad )
     ? ( __vf_has m `hashes.binary` ) {
         ( __vf_obj m `hashes.binary` `path sha256` `` bad )
@@ -484,7 +512,7 @@ $ `certify.nu`
             F → { = more F }
         }
     }
-    : Json lw ( cert_ledger prof urows threads )
+    : Json lw ( cert_ledger prof urows threads elab )
     : String lws ( json_stringify lw )
     : String lhs ?? ( json_get m `ledger` ) { T j → ( json_stringify j ) F → ( string_new ) }
     ( __vf_check t ( string_eq lws lhs ) `the trust ledger is the one certify writes (no row dropped or reworded)` `` )

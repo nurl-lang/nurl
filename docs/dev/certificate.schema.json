@@ -377,6 +377,10 @@
         "claims_lean": {
           "$ref": "#/$defs/sha256"
         },
+        "elab_lean": {
+          "$ref": "#/$defs/sha256",
+          "description": "Elab.lean: present exactly when the bundle has it, which records that the kernel built the term from the core IR's words (Cert.elab; nurl-cert 0.2.0)"
+        },
         "binary": {
           "$ref": "#/$defs/file"
         }

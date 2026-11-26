@@ -1,7 +1,8 @@
 # The certificate bundle
 
 Status: **S1 and M4 of the certified-programs work** (AGORA-1019; M4,
-the translator in NURL and threaded programs, AGORA-1020; part of
+the translator in NURL and threaded programs, AGORA-1020; the term checked
+by the kernel for the scalar subset, AGORA-1029 step 3; part of
 AGORA-1010; spec in the agora notes `spec.program-cert`, `.2`, `.3`).
 Schema **`nurl-cert/1`**, described here and in
 [`certificate.schema.json`](certificate.schema.json).
@@ -21,7 +22,7 @@ unchanged. The exit code is the certificate's: 0 when every claim is
 proved, 2 when the translation does not cover the program, 3 when the
 checker refuses it. `nurl verify` runs `nurl-cert verify`. Both find
 `formal/` through `$NURL_FORMAL`, then next to `nurl.sh`. They need Lean's
-`lake` on `PATH`, and `formal/` built (`lake build C.Cert C.Cert3`).
+`lake` on `PATH`, and `formal/` built (`lake build C.Cert C.Cert3 C.Elab`).
 
 The flag's and the subcommand's names are working names. The owner
 confirms them before 1.0.
@@ -129,6 +130,9 @@ prog.cert/
   Program.core    nurlc's core IR of the program (--emit-core), the translation's input
   Program.lean    the program as a term of formal/A2: fn0 … fnN, P, entry
   Claims.lean     the claims above, stated and proved; only when the checker accepts
+  Elab.lean       Program.core as Lean data (C.Elab.IR) and the proof that Program.lean's
+                  term is the one the kernel builds from it (Cert.elab); only for a
+                  program in C.Elab's subset
 ```
 
 - **Program.lean** is made from Program.core by nurl-cert's translator
@@ -157,9 +161,44 @@ prog.cert/
   count (`packages/nurl-cert/src/claims.nu`). `verify` writes it again and
   compares the bundle's copy byte for byte. A statement weakened, a proof
   replaced by `sorry`, or an axiom added is a difference.
+- **Elab.lean** takes the translator out of the trusted path, for the
+  programs `C.Elab.elabIR` covers (the scalar subset,
+  `docs/dev/TRANSLATION_TRUST.md`, route (b)). It is a pure function of
+  Program.core (`cert_elab_lean`, `packages/nurl-cert/src/claims.nu`):
+
+  ```lean
+  import Program
+  import C.Elab
+  namespace Cert
+  noncomputable def ir : C.Elab.IR := [ … ]   -- nurl-cert words of Program.core
+  theorem «elab» : C.Elab.elabIR ir = some (P, entry) :=
+    C.Elab.elabIs_sound _ _ _ (by decide +kernel)
+  end Cert
+  #print axioms Cert.«elab»
+  ```
+
+  (`elab` is a keyword of Lean, hence `«elab»`; Lean prints the name
+  `Cert.elab`.)
+  - The words are `nurl-cert words` (`packages/nurl-cert/src/words.nu`).
+    Every word is a Lean string literal: `"` and `\` are escaped, a byte
+    below 32 is `\x..`, a byte above 127 is written as it is. Lean reads
+    well-formed UTF-8 back as the same bytes; a core IR that is not
+    well-formed UTF-8 has no words, and its bundle no Elab.lean.
+  - certify writes it for a translated term that can be `elabIR`'s at
+    all, and has Lean check it beside Claims.lean, in a second process.
+    A term with a constructor `elabIR` never builds (the list
+    `ELAB_CTORS` in claims.nu, read off formal/C/Elab.lean), or with
+    `true`, cannot equal `elabIR`'s, so Lean is not asked: that skip is
+    exact. For every other term Lean decides.
+  - The bundle keeps Elab.lean when the checker accepts the program, Lean
+    exits 0, and `Cert.elab` rests on the standard axioms only. Otherwise
+    it is deleted, and the bundle is as before, its term the translator's.
+  - With it, `M.safe` and `M.leak` are about the term the kernel built
+    from Program.core's words. What is left of the `translation` row is
+    nurlc's core IR and the split into words.
 - **Refused and unsupported programs** get a bundle with no Claims.lean,
   and their `M.safe` and `M.leak` are `open`. A bundle is written whole:
-  certify first deletes the old Claims.lean and manifest.
+  certify first deletes the old Claims.lean, Elab.lean and manifest.
 
 ## 3. Claims and statuses
 
@@ -193,7 +232,7 @@ claims      [ { id, lean, status, sentence { en, fi }, reason, axioms [..], prem
             M.safe, M.leak, (a threaded program) M.race, then M.unsafe, in this order
 coverage    { functions: [ { name, file, line, status, reason } ], <status>: count }
 hashes      { sources: [ { path, sha256 } ], core_ir, llvm_ir?, program_lean?, claims_lean?,
-              binary?: { path, sha256 } }
+              elab_lean?, binary?: { path, sha256 } }
 versions    { nurlc, formal_tree, formal_commit, lean_toolchain }
 ledger      [ { id, what, why, where, vouches, claims [..] } ]
 ```
@@ -210,6 +249,14 @@ ledger      [ { id, what, why, where, vouches, claims [..] } ]
 - `hashes.llvm_ir` is the sha256 of nurlc's LLVM IR, with no flags, for
   the program. It is absent when nurlc refuses to compile the program.
 - `hashes.binary` is present when `--binary` was given.
+- `hashes.elab_lean` is present exactly when the bundle has Elab.lean,
+  and records the case: with it, the `translation` row is the kernel's
+  (below), and verify requires the file.
+- **Schema.** The member is optional, so the schema stays
+  `nurl-cert/1`. A bundle made before it (nurl-cert 0.1.x, against the
+  same `formal/` tree) has none, and verifies as before with its
+  translator's row. An older verify refuses a bundle that has it (an
+  unknown member), which fails closed.
 - `versions.formal_tree` is the sha256 of a listing with one line
   `<sha256>  <path>` per file of `formal/`, in byte order of the paths:
   every `.lean` file, plus `lakefile.toml`, `lean-toolchain` and
@@ -229,7 +276,7 @@ One row per thing the claims rest on and do not prove:
 | `lean-kernel` | the Lean 4 kernel and the pinned toolchain |
 | `lean-compiler` | (profile `fast` only) the Lean compiler, which computes the verdict |
 | `claim-definitions` | the claims' definitions, A2's semantics (`formal/CLAIM.md`) |
-| `translation` | the step from source to term: `nurlc --emit-core`, then nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`; AGORA-1020 takes it out of the trusted path) |
+| `translation` | without Elab.lean: the step from source to term, `nurlc --emit-core`, then nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`). With Elab.lean: only `nurlc --emit-core` and the split of Program.core into words (`words.nu`; verify makes Elab.lean again from Program.core), and `C.Elab.elabIR`'s rules as the meaning of a core IR; the term itself is the kernel's (`Cert.elab`) |
 | `library-summaries` | the standard library as the term has it, A2 primitives and declared summaries; the models follow the library by inspection (AGORA-1014) |
 | `llvm`, `linker`, `os`, `c-runtime` | the path from the IR to a running binary |
 | `drf-sc` | (a threaded program) the C11 / LLVM memory model's DRF-SC guarantee, for `M.race` |
@@ -254,15 +301,21 @@ the toolchain and the library.
   - the trust ledger exactly as certify writes it for this profile and
     these unsafe rows. A dropped or reworded row does not verify;
 - the hash of every source file, of Program.core, Program.lean and
-  Claims.lean;
+  Claims.lean, and of Elab.lean when the manifest records it;
+- that the bundle has Elab.lean when the manifest records
+  `hashes.elab_lean` (and the program is accepted), and none otherwise;
 - that the `formal/` tree is the pinned one;
 - the binary, when given;
 - Program.lean's grammar and the slot count;
 - Claims.lean against the template, byte for byte;
-- that Lean checks Program.lean and Claims.lean again. Lean is run only
-  when every check above passed: it runs code while it elaborates a file,
-  so a file the grammar, the template or a hash refused is never handed to
-  it. A run counts only when Lean exits 0;
+- with Elab.lean: Elab.lean against the one made from Program.core
+  (its words and the template), byte for byte;
+- that Lean checks Program.lean and Claims.lean again, and, with
+  Elab.lean, that it proves `Cert.elab` again with the standard axioms
+  only. Lean is run only when every check above passed: it runs code
+  while it elaborates a file, so a file the grammar, the template or a
+  hash refused is never handed to it. A run counts only when Lean exits
+  0;
 - for each claim, that the manifest's status and axioms are what Lean
   reports now;
 - that `M.unsafe` is `assumed` (or `open` with no LLVM IR);
@@ -273,22 +326,33 @@ Claims.lean and that no claim is above `open`. The exit code is 0 only
 when every check passes.
 
 `packages/nurl-cert/tests/nurl-cert_test.sh` is the selftest, and CI runs
-it (`formal.yml`, job `certify`). A fresh bundle verifies, and `verify`
+it (`certify.yml`). A fresh bundle verifies, and `verify`
 fails, naming the check, on each of these edits:
 - one source byte changed;
 - a claim's status edited in the manifest;
 - a theorem's statement weakened in Claims.lean;
 - `sorry` put in Claims.lean, or an axiom added to Program.lean;
-- the wrong binary given.
+- the wrong binary given;
+- in a bundle with Elab.lean: another scalar program's Program.lean
+  swapped in, with its hash updated (on `Cert.elab`); Elab.lean
+  deleted with the manifest kept; its words or its theorem edited, its
+  hash updated; code put in it (Lean never runs it).
 
-A plain `verify` cannot tell whether Program.lean is the source's term or
-a well-formed term of some other program with every hash updated. The
-translation is a ledger row until AGORA-1020 puts it inside the kernel's
-sight. `verify --rebuild` checks that step where nurlc and the translator
-are at hand: it runs `nurlc --emit-core` on the recorded sources and the
-translator on Program.core again, and compares both byte for byte. The
-selftest swaps in another program's term: plain verify passes it, and
-`--rebuild` refuses it. Signing a bundle (an in-toto statement) is out of
+A bundle downgraded honestly verifies: Elab.lean removed, its hash
+dropped, and the `translation` row the translator's again.
+That is expected. It is the weaker bundle, and its ledger says so. With
+the kernel's row kept, it does not verify.
+
+Without Elab.lean, a plain `verify` cannot tell whether Program.lean is
+the source's term or a well-formed term of some other program with every
+hash updated: the translation is a ledger row. With Elab.lean it can, for
+the step from Program.core on: the kernel refuses any term but the one
+`C.Elab.elabIR` builds from Program.core's words. `verify --rebuild` checks
+the whole step where nurlc and the translator are at hand: it runs
+`nurlc --emit-core` on the recorded sources and the translator on
+Program.core again, and compares both byte for byte. The selftest swaps
+another program's term into a bundle without Elab.lean: plain verify
+passes it, and `--rebuild` refuses it. Signing a bundle (an in-toto statement) is out of
 scope.
 
 ## 6. Cost
@@ -311,6 +375,12 @@ refused), one at a time, on an x86-64 Linux host (AGORA-1019):
   That is why the kernel profile uses `decide +kernel`, which is also the
   fastest kernel route on every other program (0.41 s against 0.62 s on a
   typical one).
+
+Elab.lean (AGORA-1029 step 3) costs little: over the 62 certify
+programs, one at a time, best of 3, certify takes 79.2 s against 78.6 s
+before (+0.8 %). Lean is asked only for a term that can be `elabIR`'s,
+and checks Elab.lean beside Claims.lean; `docs/dev/TRANSLATION_TRUST.md`
+(step 3) has the numbers.
 
 Without `--certify`, nothing changes:
 - `--list-sources=TAG` is off by default;

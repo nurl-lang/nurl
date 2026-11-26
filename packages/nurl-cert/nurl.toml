@@ -1,7 +1,7 @@
 [package]
 name = "nurl-cert"
-version = "0.1.1"
-description = "Memory-safety certificates for NURL programs. `nurl-cert certify prog.nu` writes a bundle whose Claims.lean proves, about the program's own term in formal/A2, that it never gets stuck and frees everything it allocates (a panic's unwinding included), with the verified checker's verdict decided by the Lean kernel; `nurl-cert verify` re-checks a bundle (hashes, the claims' template, the program grammar, the proofs and their axioms) without the compiler."
+version = "0.2.0"
+description = "Memory-safety certificates for NURL programs. `nurl-cert certify prog.nu` writes a bundle whose Claims.lean proves, about the program's own term in formal/A2, that it never gets stuck and frees everything it allocates (a panic's unwinding included), with the verified checker's verdict decided by the Lean kernel; for a program in the scalar subset the bundle also proves that its term is the one the kernel builds from the compiler's core IR (`Cert.elab`, `C.Elab.elabIR`), so the translator is no longer trusted; `nurl-cert verify` re-checks a bundle (hashes, the claims' template, the program grammar, the proofs and their axioms) without the compiler."
 # `nurlc --list-sources` (the files a certificate hashes) lands after v0.94.0.
 nurl-version = "0.95.0"
 license = "MIT OR Apache-2.0"

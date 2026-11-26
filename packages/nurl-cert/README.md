@@ -19,12 +19,16 @@ nurl-cert verify prog.cert
 accepted
   M.safe proved
   M.leak proved
+  term: the translator's (the translation ledger row)
 ```
 
 `prog.cert/` holds:
 - `Program.lean`, the program as a term of the formal model;
 - `Claims.lean`, the theorems;
 - `Program.core`, the compiler's core IR;
+- for a program in the scalar subset, `Elab.lean`: the proof that the
+  term is the one the Lean kernel builds from the core IR (`Cert.elab`),
+  so the translator is not trusted for it;
 - `manifest.json`, with:
   - each claim's status, read off `#print axioms`;
   - the program's functions;
@@ -55,6 +59,6 @@ closures and channels in part. Threads and globals are not covered yet.
 Needs:
 - `nurlc`;
 - Lean's `lake` on `PATH`;
-- `formal/` built (`cd formal && lake build C.Cert C.Cert3`).
+- `formal/` built (`cd formal && lake build C.Cert C.Cert3 C.Elab`).
 
 `verify` needs only Lean.

@@ -8,6 +8,16 @@
 // `.core` text and the term Lean builds (`C.Elab`) that runs outside the
 // kernel. It makes no choice: `verify` splits Program.core again and
 // compares.
+//
+// What it prints is Lean data and nothing else: the fixed text around the
+// lists, and each word as a string literal. Inside a literal `"` and `\`
+// are escaped and every byte below 32 is written `\x..`, so a word cannot
+// end its literal, start a comment, or hold a line break (a newline ends a
+// core IR line, so no word has one anyway). A byte above 127 is written as
+// it is: Lean reads the file as UTF-8, and well-formed UTF-8 reads back as
+// the same bytes. Lean reads a byte that is not UTF-8 as U+FFFD, which is
+// another word: such a core IR has no words (`cert_words_utf8`), and its
+// bundle no Elab.lean.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -101,4 +111,41 @@ $ `util.nu`
     }
     ( string_push_str o `]\n` )
     ^ o
+}
+
+// Whether `core` is well-formed UTF-8 (RFC 3629: no overlong form, no
+// surrogate, nothing past U+10FFFF). Lean reads each such sequence back as
+// the same bytes; any other byte it reads as U+FFFD.
+@ cert_words_utf8 s core → b {
+    : ( Slice u ) t ( slice_of_str core )
+    : i n ( slice_len [u] t )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte t k )
+        ? < c 128 { = k + k 1 } {
+            // the continuation bytes a lead byte takes, and the range of the first
+            : ~ i len 0
+            : ~ i lo 128
+            : ~ i hi 191
+            ? & >= c 194 <= c 223 { = len 1 } {}
+            ? == c 224 { = len 2 = lo 160 } {}
+            ? | & >= c 225 <= c 236 | == c 238 == c 239 { = len 2 } {}
+            ? == c 237 { = len 2 = hi 159 } {}
+            ? == c 240 { = len 3 = lo 144 } {}
+            ? & >= c 241 <= c 243 { = len 3 } {}
+            ? == c 244 { = len 3 = hi 143 } {}
+            ? == len 0 { ^ F } {}
+            ? >= + k len n { ^ F } {}
+            : i b1 ( slice_byte t + k 1 )
+            ? | < b1 lo > b1 hi { ^ F } {}
+            : ~ i j 2
+            ~ <= j len {
+                : i bj ( slice_byte t + k j )
+                ? | < bj 128 > bj 191 { ^ F } {}
+                = j + j 1
+            }
+            = k + + k len 1
+        }
+    }
+    ^ T
 }

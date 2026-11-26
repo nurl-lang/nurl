@@ -759,7 +759,12 @@ def topOk (tops : List (List String)) : Bool :=
     | _ => true
 
 /-- The program and its entry statement (`__emit`): the functions whose
-    file is not the standard library's, in order, and a call of `main`. -/
+    file is not the standard library's, in order, and a call of `main`.
+
+    nurl-cert asks the kernel for this only on a translated term built from
+    the constructors `elabIR` emits (`ELAB_CTORS`,
+    packages/nurl-cert/src/claims.nu): a new constructor elabIR emits goes
+    into nurl-cert's list too. -/
 def elabIR (ir : IR) : Option (Prog × Stmt) := do
   let fns ← fnsOf ir
   let tops := topLines ir false

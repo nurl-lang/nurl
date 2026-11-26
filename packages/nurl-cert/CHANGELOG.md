@@ -1,6 +1,20 @@
 # Changelog
 
-## [0.1.1] — unreleased
+## [0.2.0] — unreleased
+
+### Added
+
+- The term checked by the kernel, for the programs `C.Elab.elabIR` covers (the scalar subset; AGORA-1029 step 3). A bundle can hold one more file, `Elab.lean`: Program.core's words (`nurl-cert words`) and the theorem `Cert.elab : C.Elab.elabIR ir = some (P, entry)`, by `decide +kernel`.
+  - `certify` writes it for a program the checker accepts and keeps it only when Lean proves `Cert.elab` on the standard axioms. Lean runs on it beside the claims' check. A program whose translated term holds a constructor `elabIR` never builds cannot be in the subset, and gets no attempt. Of the 62 certify programs, 3 are in the subset.
+  - With it, the `translation` ledger row says what is left: `nurlc --emit-core` and the split into words. `verify` makes Elab.lean again from Program.core and compares it byte for byte, then has Lean prove `Cert.elab` again. A swapped Program.lean, with its hash updated, now fails a plain `verify`.
+  - The manifest records the case with `hashes.elab_lean`. The schema stays `nurl-cert/1`: bundles without it verify as before, with the translator's row.
+
+### Changed
+
+- `nurl-cert words` refuses a core IR that is not well-formed UTF-8 (exit 1): Lean would read such a byte as U+FFFD, another word.
+- The bundle's format changed (one optional file and hash), hence 0.2.0. An older `verify` refuses a bundle that has it.
+
+## [0.1.1] — 2026-11-26
 
 ### Fixed
 
