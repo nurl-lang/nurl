@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # elab_parity.sh: the Lean translation of the subset of numbers, buffers of
-# numbers and views (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps
-# 2, 4 and 5)
+# numbers, views and closures (`C.Elab.elabIR`, formal/C/Elab.lean,
+# AGORA-1029 steps 2, 4, 5 and 6)
 # against the NURL translator (`nurl-cert translate`,
 # packages/nurl-cert/src/tolean.nu), over every certify program, every hole
 # probe, and the programs of tools/ncore/elab/ (written for this test: each
@@ -15,7 +15,7 @@
 # translate`). Then:
 #   1. One Lean process runs `elabIR` over every program's words
 #      (tools/ncore/elab_parity_run.lean; the words are handed over as JSON,
-#      `nurl-cert words`'s literal with its escapes rewritten, since Lean
+#      `nurl-cert words`'s literal, each word its number, since Lean
 #      takes ~20 s to elaborate an 8000-line literal).
 #   2. Each program `elabIR` answers a term for gets a Lean file of its own:
 #      the translator's `P` and `entry` (in a namespace of their own), and
@@ -69,7 +69,14 @@ EXPECT_CERTIFY="cursor_over_a_vec int_recursion_early_return joins_each_freeing_
     view_kept_across_a_reserve_refused string_copied_from_a_view_of_a_freed_string_refused
     string_pushed_its_own_view_refused vec_cleared_then_pushed vec_reserved_then_pushed
     foreach_summing_a_vec vec_pushed_while_iterated_refused raw_strings_held_in_a_vec
-    raw_string_held_in_a_vec_past_its_source_refused"
+    raw_string_held_in_a_vec_past_its_source_refused
+    clo_called_in_a_loop clo_called_on_a_moved_vec_refused clo_called_with_a_moved_vec_refused
+    clo_changes_a_captured_vec clo_changes_a_captured_vec_under_a_slice_refused
+    clo_no_captures_two_arguments clo_number_capture_called
+    clo_returned_over_a_parameter_then_called_after_its_free_refused
+    clo_returned_owning_a_vec_capture clo_returned_with_a_number_capture
+    clo_string_capture_rebound_then_called_refused clo_string_captured_and_read_after
+    clo_two_captures_passed_to_a_function"
 
 # (the list is copied aside first: it may be the work directory's own
 # progs.txt from an earlier run)
@@ -135,6 +142,10 @@ def r : Rhs → String
   | .at y i => s!".at {y} {e i}"
   | .view y => s!".view {y}"
   | .sat y i => s!".sat {y} {e i}"
+  | .pair y z => s!".pair {y} {z}"
+  | .fst y => s!".fst {y}"
+  | .snd y => s!".snd {y}"
+  | .pack fs te ms y cs => s!".pack {fs} {repr te} {ms} {y} {repr cs}"
   | _ => "?rhs"
 def ed : Edit → String
   | .push y => s!"(.push {y})"
@@ -153,6 +164,7 @@ def s : Stmt → String
   | .push x y => s!"(.push {x} {y})"
   | .free x => s!"(.free {x})"
   | .edit t x o => s!"(.edit {t} {x} {ed o})"
+  | .callc x c j σ zs b => s!"(.callc {x} {c} {j} {σ} [{", ".intercalate (zs.map toString)}] {s b})"
   | _ => "?stmt"
 def fn (f : Fn) : String :=
   s!"params := {repr f.params}, resTy := {repr f.resTy}, resOwn := {f.resOwn}, body := {s f.body}, nvars := {f.nvars}"

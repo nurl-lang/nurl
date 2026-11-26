@@ -661,15 +661,245 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   kernel's work in the one process); the other 49 within −33 to +4 MiB;
   the sum of the 62 peaks +1.5 %.
 
+## Route (b), step 6: closures (AGORA-1029)
+
+- `elabIR` covers the translator's **closures**. A variable, parameter or
+  result may be of a closure type `{ R (i8*, A…)*, i8* }`, A2's `.fn [σ]
+  .any`, whose interface `σ` is one function per closure type after the
+  program's own, in the order the translator first meets the type
+  (`__clo_index`: each function's variables, then its result, in the
+  program's order; `cloScan`). The constructors it builds beyond step 5's
+  are `.callc` (Stmt), `.pack .pair .fst .snd` (Rhs) and `.prod .fn` (Ty;
+  the class `.any`). They are tolean.nu's rules for:
+  - a closure's code (`__closure_…`): a function of its environment (lent),
+    its parameters, then its captures by name, then the result slot, its
+    other variables after it in id order (`__fn_init`'s numbering, one
+    number left out); the captures by value read out of the environment at
+    the top of the body, one the environment, more its pairs' fields
+    (`__read_caps`);
+  - which captures are by name (`__named_cap`): a buffer the environment
+    does not own (`CORE_VF_ENVOWN`), unless every literal of the code moves
+    it in, the binding a local or a temporary its function drops nowhere
+    and names no more after the literal (`__moved_caps`, `isMovedQ`, read
+    over every function of the program); and a capture by name's mode
+    (`__cap_mode`): read only, or `inout` at `drop` when the code takes it
+    by pointer or changes it in place (`__changes`);
+  - a literal (`let k closure f n caps…`): its captures by value copied into
+    one value (none: a number; more: pairs nested to the right) and packed
+    with the code and the interface of its variable's type (`.pack`), the
+    other captures by name;
+  - a call through a closure value (`callind`): `.callc` of method 0 of its
+    type's interface; the interfaces themselves: the closure (lent), then
+    the type's arguments, a result made fresh (a number or an empty buffer);
+  - `nurl_println_int`: the read of a number.
+- **Fail closed.** Each check the translator makes on closures is made too,
+  each with a kernel witness of the refusal and of its well-formed
+  neighbour (formal/C/Elab.lean, "step 6"): a capture that is not a
+  variable, a literal of fewer captures than its code has, a capture of a
+  type other than a number or a buffer of numbers (a `Vec` of raw strings),
+  a number capture taken by pointer, a closure parameter taken `inout`, a
+  closure bound from another binding or given another value, a closure
+  handed to a `sink` or `inout` parameter (nurlc copies it there, which the
+  core IR does not show), a call through a number, a closure type whose
+  result is a slice or that takes or hands back raw text, and a closure's
+  code naming a variable it does not declare where the translation reads
+  it. The checks run over the whole body and the whole program, as the
+  translator's (`__wellformed`, `__moved_caps`, `__changes`, the captures'
+  types and modes for every capture of every code, a literal or not).
+  Where the translator takes more, `elabIR` refuses (stricter, never
+  laxer):
+  - a literal of a function not named as a closure's code (the translator
+    packs any function of the program);
+  - a closure's code that names a variable it does not declare anywhere,
+    a `line` included (the translator stops only where it numbers one);
+  - a program with closures whose variables are not in id order, each id
+    once (the translator reads them by id; `elabIR` in the order of the `v`
+    lines; nurlc prints them in id order: no program of the corpus differs);
+  - a closure type's arguments spelled other than `, A` (the translator
+    splits at each comma, trims, and skips an empty piece);
+  - a closure copied from another binding where its value is handed back
+    at once: the translator's check sits after that case. A move there is
+    what the copy is modelled as anyway, so this is no hole of the
+    translator's, only a case the subset leaves out;
+  - a `let x` of `nurl_println_int` (the translator falls through to a call
+    that drops `x`);
+  - a closure's code in a program with no closure type. That makes a fact
+    nurl-cert's skip can read: a term of `elabIR`'s that holds `.callc .pack
+    .pair .fst .snd .prod` holds `.fn` too (`ELAB_CLO_CTORS`, below).
+- **Which programs.** Over tools/ncore/certify, 45 programs are in the
+  subset (32 at step 5): all 13 `clo_*` programs this step aimed at. 8 are
+  accepted and get Elab.lean, 26 bundles in all (the selftest requires
+  exactly these 26); the 5 `*_refused` ones (a closure called on, or with,
+  a moved Vec; a closure that pushes onto a captured Vec under a slice of
+  it; a closure over a parameter run after its argument is freed; a
+  captured Vec given a new value, then the closure run) have no Claims.lean,
+  so no Elab.lean. The four thread programs stay outside (A3, `C.Cert3`).
+- **The skip before Lean.** The closures' constructors include `.prod
+  .pair .fst`, which a struct's term holds too: with them in `ELAB_CTORS`
+  alone, the 6 struct programs became candidates, and each paid an
+  Elab.lean part `elabIR` refuses (+0.15 to +0.31 s). `cert_elab_candidate`
+  now also skips a term that holds one of `ELAB_CLO_CTORS` (`callc pack
+  pair fst snd prod`) but no `.fn`. That is exact: `elabIR` builds those
+  only for a literal or a call (whose variable is of a closure type) or a
+  closure's code (refused without a closure type), and every closure type
+  has an interface whose first parameter is a `.fn`.
+- **Parity** (`tools/ncore/elab_parity.sh`, 12 new fixtures in
+  `tools/ncore/elab/`: three captures in nested pairs, a Vec moved into the
+  environment, a Vec read by name, a closure taking a Vec, a closure
+  parameter called in a loop, a closure with no result, a literal inside a
+  closure's code, a closure handing back a String, and four the checker
+  refuses: a Vec cleared by name, a captured Vec freed before the call, a
+  captured String moved into a sink before the call, a push through a
+  closure under a slice): of 4566 programs nurlc makes a core IR of 4357.
+  tolean.nu translates 286 of those, and `elabIR` answers a term for 166
+  (the 45 certify programs, the 57 fixtures, 64 hole probes; 101 at step
+  5, none of them lost), every one exactly tolean.nu's term (each also by
+  `decide +kernel`). It answers `none` for the other 4191, and a term for
+  no program tolean.nu refuses. `elabIR` answers the same on the words and
+  on every line for all 4357. Of the 52 translated programs with closures,
+  the 4 thread programs and 3 hole probes over `Vec`s of `String`s stay
+  outside. The new matches are the 13 certify programs, the 12 fixtures
+  and 40 hole probes (8 of them without a closure, in the subset now for
+  their `nurl_println_int`).
+- **Verdicts unchanged.** Every program of step 5's parity list (4554)
+  certified by main's nurl-cert and formal/ and by this step's, 10 jobs:
+  the same exit status for all 4554 (111 accepted, 163 refused, 4071
+  unsupported, 209 not compiled). 14 more get Elab.lean (82 against 68),
+  none loses it. The 12 new fixtures, certified apart: the 8 accepted get
+  Elab.lean, the 4 `*_refused` are refused.
+- **Certify time, with the words still string literals**, over the 62
+  certify programs, one at a time, best of 3, base (main's nurl-cert and
+  formal/, 6e34f390) and branch run in turn on the same x86-64 host: 90.4 s
+  against 82.3 s (+9.8 %; the sums of the
+  per-program bests 88.2 s against 80.2 s). **A regression**, all of it the
+  13 programs new to the subset: +0.45 to +0.87 s each (+8.4 s in all;
+  `clo_number_capture_called` 0.59 → 1.06 s), the cost of their new
+  Elab.lean part. 5 of them the checker refuses and spend it too (no
+  Elab.lean is kept; the verdict comes from the same Lean run). The other
+  49: −0.35 s in all, each within ±0.10 s. Before the skip of a struct's
+  term (above), the 6 struct programs were +0.15 to +0.31 s each too.
+- **Peak memory, with the words still string literals** (the summed RSS
+  of certify's process tree, sampled every 5 ms), against the same base:
+  the largest peak 2583 → 2584 MiB (`joins…`); the 13 new programs +35 to +109 MiB each (`C.Elab` and the
+  kernel's work in the one process); the other 49 within −4 to +9 MiB; the
+  sum of the 62 peaks +1.9 %.
+- **Where the time went, with the words as string literals.** For a small program the Elab.lean part costs
+  0.4 to 0.6 s (`clo_two_captures_passed_to_a_function`: Lean's start and
+  `import C.Elab` +0.02 s over the claims alone, the words literal +0.04 s,
+  `decide +kernel` of `elabIs` +0.5 s, of which `elabIR` 0.39 s and the
+  comparison 0.11 s). No single pass of `elabIR` dominates: taking any one
+  of the drop check, `__view_vars`, the `let` check, `opsOk`, the summary
+  lookup or the variables' types out saves 0 to 0.08 s, since the next
+  pass then decodes the same words. Decoding every word of the words to
+  bytes, alone, costs 0.57 s (`clo_changes_a_captured_vec`, 92 lines) and
+  0.81 s (`vec_cleared_then_pushed`, 133 lines), more than `elabIR` itself
+  (0.53 and 0.63 s): most of the kernel's time is the first touch of a
+  string literal. The 13 new programs paid that, and it made this step
+  slower overall until the words became numbers (next section).
+- **Won back by the next section**: the `sum` lines no other word names
+  left out of the words, and the words printed as numbers. Both change
+  `words.nu`, the trusted split. (Measured first by cutting the `sum` lines
+  of the 26 bundles with Elab.lean: 28.2 s → 25.8 s over the 25 small
+  ones.)
+
+## Route (b): the words as numbers (AGORA-1029, with step 6)
+
+- **The cause.** In Lean 4.35 `String` is a UTF-8 `ByteArray`, which the
+  kernel builds from a literal by one `push` a byte: quadratic in the
+  word's length. For 40 distinct words, `(bytesOf w).length` by `decide
+  +kernel` costs 0.15 s at 8 bytes, 1.24 s at 32 and 17 s at 128;
+  `toByteArray.size` and `utf8ByteSize` cost the same and `toList` more, so
+  no decoder of a `String` avoids it. The long words are the file paths of
+  the `fn` lines: every closure is a function, so a closure program holds
+  several paths of ~70 bytes, ≈ 130 ms each.
+- **The words.** `nurl-cert words` prints each word as a number:
+  `nat_lit 0x1`, then the word's bytes from the last to the first, two hex
+  digits each (256^k + Σ bᵢ·256^i; an empty word is `0x1`), in `def ir :
+  C.Elab.IR := …` with `IR := List (List Nat)`. The split into lines and
+  words is unchanged, and so are the blank lines, the library functions
+  left out and the `sum` lines left out (below). The file is ASCII and
+  needs no escaping. `C.Elab.wordOf` reads a number back into its bytes by
+  `% 256` and `/ 256` (fuel: the number itself), and `wordOf_encB` proves
+  that it inverts the printer's encoding for every list of bytes.
+  `nat_lit` is a raw literal: Lean elaborates it without an `OfNat`
+  instance, 0.39 s against 0.72 s for the 1544 words of
+  `joins_each_freeing_a_different_vec` (the string literals took 0.49 s).
+- **The UTF-8 rule goes.** Lean no longer reads the words' bytes as text,
+  so a core IR that is not well-formed UTF-8 has words now, each read back
+  as its bytes (selftest 2c: quotes, backslashes, comment openers, control
+  bytes, CR, non-ASCII UTF-8 and five byte sequences that are not UTF-8).
+  The NUL rule stays (`cert_words_ok`): the words are made from the text
+  up to its first NUL, and the bundle hashes the whole file.
+- **Keywords are compared as numbers.** `elabIR` keeps each word as its
+  number and compares it with a keyword's number (`kLet`, `kCall`, …,
+  `@[match_pattern]` constants, each checked against its text): one GMP
+  comparison. It reads a word into its bytes (`wordOf`) only where its
+  text is needed (a variable, a count, a type, a callee's name), and the
+  kernel keeps what it reduced, so each distinct number is read once. The
+  first try read every word into a byte list and matched the keywords as
+  byte lists: on `joins_each_freeing_a_different_vec` that made `elabIR`'s
+  kernel time 3.69 s against 2.95 s with the string literals, since a
+  `match` on a byte-list keyword unfolds into a test a byte. Measured on
+  one pass over that program's 470 lines (a count of the `let … call` and
+  `eval call` lines): 191 ms with string literals, 314 ms with byte-list
+  patterns (their reading included), 210 ms with byte lists compared by
+  `==`, 86 ms with the numbers as patterns (one Lean run each, the host
+  loaded by the verdict sweep). With the keywords as numbers `elabIR`
+  takes 3.03 s there.
+- **The `sum` lines no other word names are left out** (`words.nu`). A
+  `sum` line whose name is none of the words of the kept lines but the
+  `sum` lines is not printed. `elabIR` looks a summary up only by a
+  function's own name, a callee's name, or the function a `let … call f`
+  calls, each a word of a kept line, and a name's summary is its last
+  `sum` line, which stays. A `sum` line with no name is kept (`topOk`
+  refuses it). `tools/ncore/elab_parity.sh`'s full words keep every line,
+  so its check that `elabIR` answers the same on both covers this rule too;
+  translate_test 1c checks the words against a Python reading of both
+  rules. ≈ 0.1 s on `clo_changes_a_captured_vec`.
+- **Breaking:** Elab.lean's words are another text now, so a 0.3.0 bundle
+  with Elab.lean does not verify with nurl-cert 0.3.1 (`verify` makes
+  Elab.lean again from Program.core and compares it byte for byte).
+  Migration: certify the program again. A bundle without Elab.lean
+  verifies as before.
+- **Parity** (`tools/ncore/elab_parity.sh`; its JSON handoff, its full
+  words and its run now carry the numbers): the same as above, 166
+  programs in the subset of 4357 core IRs, every one exactly tolean.nu's
+  term (each also by `decide +kernel`), 0 DIFF, 0 LAX, 0 errors, and
+  `elabIR` the same on the words as on every line for all 4357. Its
+  kernel comparisons take 161 s with 12 jobs, against 221 s with the
+  string literals.
+- **Verdicts unchanged.** The 4554 programs of step 5's parity list,
+  certified by main's nurl-cert and formal/ and by this one, 10 jobs: the
+  same exit status for all 4554 (111 accepted, 163 refused, 4071
+  unsupported, 209 not compiled); 82 get Elab.lean against 68, none loses
+  it (the same as with the string literals).
+- **Certify time** over the 62 certify programs, one at a time, best of
+  3, base (main's nurl-cert and formal/) and branch run in turn on the
+  same x86-64 host, measured again on the branch rebased onto f6e28704:
+  **77.1 s against 77.8 s (−0.9 %)**; the sums of the per-program bests
+  75.3 s against 75.9 s. (An earlier run on 6e34f390, on a less loaded
+  host: 74.1 s against 77.7 s, −4.6 %; the per-program changes were the
+  same, the totals' spread is the host's.) The 13 programs new to the
+  subset: +0.19 to +0.63 s each, +4.9 s in all (+8.4 s with the string
+  literals); the other 49: −5.6 s in all, each −0.40 to +0.13 s; of them
+  the 18 with Elab.lean −3.3 s (`vec_cleared_then_pushed` 1.57 → 1.17 s;
+  `joins_each_freeing_a_different_vec` 18.53 → 18.66 s, its time the
+  checker's and `elabIR`'s drop checks, not its words). The same exit
+  status for all 62 (36 accepted, 26 refused).
+- **Peak memory** (the summed RSS of certify's process tree, sampled
+  every 5 ms), against the same base: the largest peak 2581 → 2586 MiB
+  (`joins…`); the 13 new programs +15 to +71 MiB each; the other 49
+  within −51 to +5 MiB; the sum of the 62 peaks −1.1 %.
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
 rules over words. Done: the claims rest on `elabIR` for the subset of
-numbers (steps 2 and 3), buffers of numbers (step 4) and views, slices,
-`foreach` and changes through a borrow (step 5), and `verify` checks the
-words against `Program.core`. Then:
+numbers (steps 2 and 3), buffers of numbers (step 4), views, slices,
+`foreach` and changes through a borrow (step 5) and closures (step 6),
+and `verify` checks the words against `Program.core`. Then:
 - the subset widened rule by rule (options; structs; destructors;
-  closures; threads);
+  threads);
 - the per-encoding rows above replace `translation`;
 - kernel time is measured on the corpus;
 - `elab`'s parity with the NURL translator is shown over the sweep.

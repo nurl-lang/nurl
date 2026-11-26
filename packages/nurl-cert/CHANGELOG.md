@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.1] — unreleased
+
+### Added
+
+- More bundles get `Elab.lean` (AGORA-1029 step 6): `C.Elab.elabIR` now covers closures over numbers and buffers of numbers. That is a closure's code, its literals (the captures by value packed into the environment, the others by name), calls through a closure value (`.callc` of its type's interface), closures handed to and back from functions, and `nurl_println_int`. Of the 62 certify programs, 45 are in the subset (32 before), all 13 closure programs among them, and the 26 the checker accepts get `Cert.elab` (18 before).
+  - The skip before Lean (`ELAB_CTORS`) takes the new constructors (`.callc .pack .pair .fst .snd .prod .fn`). A term that holds one of `ELAB_CLO_CTORS` (`callc pack pair fst snd prod`) but no `.fn` is skipped too: `elabIR` never builds one, and a struct program's term is one.
+  - Certify takes 77.1 s over the 62 certify programs against 77.8 s before (−0.9 %; −4.6 % in an earlier run). The 13 closure programs new to the subset take +0.19 to +0.63 s each for their Elab.lean part (5 of them the checker refuses, and spend it too); the other 49 are 5.6 s faster in all, the 18 with Elab.lean among them 3.3 s, since the words are numbers now. The largest peak memory is about the same (2586 MiB against 2581 MiB); a new program's peak is +15 to +71 MiB, and the sum of the peaks is −1.1 %.
+
+### Changed
+
+- **`nurl-cert words` prints each word as a number**, not a string literal: `nat_lit 0x1`, then the word's bytes from the last to the first, two hex digits each. `C.Elab.wordOf` reads it back into the bytes (`wordOf_encB` proves it inverts the encoding), and `elabIR` compares the words with its keywords as numbers. In Lean 4.35 the kernel builds a string literal's bytes one `push` at a time, which is quadratic in the word's length: the file paths of the `fn` lines cost ≈ 130 ms each. The file is ASCII and needs no escaping, so a core IR that is not well-formed UTF-8 now has words too; one with a NUL byte still has none.
+- **`nurl-cert words` leaves out a `sum` line whose name no other word holds.** `elabIR` looks a summary up only by a function's name, a callee's name, or the function a `let … call f` calls. `tools/ncore/elab_parity.sh` checks that `elabIR` answers the same on the full words, and translate_test 1c checks the rule against a Python reading of it.
+- **Breaking:** Elab.lean's words are another text, so a 0.3.0 bundle with `Elab.lean` does not verify with 0.3.1 (`verify` makes Elab.lean again from `Program.core` and compares it byte for byte). Migration: certify the program again. A bundle without `Elab.lean` verifies as before.
+
 ## [0.3.0] — 2026-11-26
 
 ### Added

@@ -33,7 +33,8 @@ accepted
   `translation` ledger row names them). Certify tries it for an
   accepted program whose term `elabIR` could build (numbers, raw text,
   Strings, Vecs of numbers and of raw strings, views, slices of Vecs of
-  numbers, `foreach` over a Vec of numbers);
+  numbers, `foreach` over a Vec of numbers, closures over numbers and
+  buffers of numbers);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
 - `manifest.json`, with:

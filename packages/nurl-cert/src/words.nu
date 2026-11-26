@@ -10,14 +10,17 @@
 // compares.
 //
 // What it prints is Lean data and nothing else: the fixed text around the
-// lists, and each word as a string literal. Inside a literal `"` and `\`
-// are escaped and every byte below 32 is written `\x..`, so a word cannot
-// end its literal, start a comment, or hold a line break (a newline ends a
-// core IR line, so no word has one anyway). A byte above 127 is written as
-// it is: Lean reads the file as UTF-8, and well-formed UTF-8 reads back as
-// the same bytes. Lean reads a byte that is not UTF-8 as U+FFFD, which is
-// another word: such a core IR has no words (`cert_words_utf8`), and its
-// bundle no Elab.lean.
+// lists, and each word as a number (0.3.1): `nat_lit 0x1`, then the word's bytes
+// from its last to its first, two hex digits each, so 256^k + Σ b_i·256^i
+// for a word of k bytes b_0 … b_(k-1), and `0x1` for an empty word.
+// `C.Elab.wordOf` reads it back into the bytes (`wordOf_encB`: for every
+// list of bytes). A number cannot end the list, start a comment or hold a
+// line break, and it means the same bytes whatever they are: no escaping,
+// and no reading of the file as UTF-8 stands between the core IR and the
+// words. The kernel holds such a number as one GMP integer; a string
+// literal it builds by one `push` a byte, quadratic in its length
+// (docs/dev/TRANSLATION_TRUST.md, "the words as numbers"). A core IR with a
+// NUL byte has no words (`cert_words_ok`).
 //
 // A library function is left out whole (AGORA-1029 steps 4 and 5): the
 // translator takes the functions whose file is the standard library's for
@@ -37,33 +40,37 @@
 // the words as it would on every line (tools/ncore/elab_parity.sh
 // compares the two over the corpus; the selftest over IRs the reader
 // refuses).
+//
+// A `sum` line is left out when its name (its second word) is none of the
+// words of the lines kept but the `sum` lines (0.3.1). `elabIR` looks a
+// summary up only by a function's own name, a callee's name or the
+// function a `let … call f` calls, each a word of a kept line that is not
+// a `sum` line, and a name's summary is its last `sum` line, which stays.
+// A `sum` line with no name is kept (`topOk` refuses it, as the reader
+// does). So `elabIR` answers the same (tools/ncore/elab_parity.sh checks it
+// over the corpus; translate_test 1c checks the rule against a Python
+// reading of it).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/hashmap.nu`
 $ `util.nu`
 
-// A word as a Lean string literal: `"` and `\` escaped, a control
-// character written `\x..`.
-@ __wd_lit ( Slice u ) t i a i z inout String o → v {
-    ( string_push_char o 34 )
-    : ~ i k a
-    ~ < k z {
+// A word as a number: `nat_lit 0x1`, then its bytes from the last to the
+// first, two hex digits each (256^k + Σ b_i·256^i for its k bytes), which
+// `C.Elab.wordOf` reads back into the bytes. (`nat_lit`: a raw literal,
+// which Lean elaborates without an `OfNat` instance: a third of the cost.)
+@ __wd_num ( Slice u ) t i a i z inout String o → v {
+    ( string_push_str o `nat_lit 0x1` )
+    : ( Slice u ) hx ( slice_of_str `0123456789abcdef` )
+    : ~ i k - z 1
+    ~ >= k a {
         : i c ( slice_byte t k )
-        ? | == c 34 == c 92 {
-            ( string_push_char o 92 )
-            ( string_push_char o c )
-        } {
-            ? < c 32 {
-                ( string_push_str o `\x` )
-                : ( Slice u ) hx ( slice_of_str `0123456789abcdef` )
-                ( string_push_char o ( slice_byte hx / c 16 ) )
-                ( string_push_char o ( slice_byte hx % c 16 ) )
-            } { ( string_push_char o c ) }
-        }
-        = k + k 1
+        ( string_push_char o ( slice_byte hx / c 16 ) )
+        ( string_push_char o ( slice_byte hx % c 16 ) )
+        = k - k 1
     }
-    ( string_push_char o 34 )
 }
 
 // A header line: `fn`, `v`, `ty` or `sum`, then a tab.
@@ -153,7 +160,7 @@ $ `util.nu`
     ^ & & ( __wd_nat t ( vec_at [i] w 0 ) ( vec_at [i] w 1 ) F ) ( __wd_nat t ( vec_at [i] w 2 ) ( vec_at [i] w 3 ) T ) ( __wd_nat t ( vec_at [i] w 6 ) ( vec_at [i] w 7 ) F )
 }
 
-// The line t[a, z) as one entry of the list, its words as string literals.
+// The line t[a, z) as one entry of the list, its words as numbers.
 @ __wd_line ( Slice u ) t i a i z b header inout String o inout b first → v {
     ( string_push_str o ? first `\n  [` `,\n  [` )
     = first F
@@ -172,7 +179,7 @@ $ `util.nu`
         ? | header > e k {
             ? ! fw { ( string_push_str o `, ` ) } {}
             = fw F
-            ( __wd_lit t k e o )
+            ( __wd_num t k e o )
         } {}
         = k + e 1
     }
@@ -204,18 +211,51 @@ $ `util.nu`
     ^ & >= s0 0 ( __wd_is t s0 ( vec_at [i] w0 1 ) w )
 }
 
+// A line kept for the words: its start and end.
+@ __wd_keep ( Vec i ) kept i a i z → v {
+    ( vec_push [i] kept a )
+    ( vec_push [i] kept z )
+}
+
+// The words of the line t[a, z) as printed, each put in `seen`.
+@ __wd_see ( Slice u ) t i a i z b header ( HashMap String i ) seen → v {
+    : ~ i j 0
+    : ~ b more T
+    ~ more {
+        : ( Vec i ) w ( vec_new [i] )
+        ( __wd_word t a z header j w )
+        : i s ( vec_at [i] w 0 )
+        ? < s 0 { = more F } {
+            : String k ( string_new )
+            ( string_push_window k t s - ( vec_at [i] w 1 ) s )
+            : ?i _o ( map_set [String i] seen k 1 \ String x → i { ^ ( hash_string ( string_data x ) ) } \ String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) } )
+            = j + j 1
+        }
+    }
+}
+
+// Is t[s, e) a word in `seen`?
+@ __wd_seen ( Slice u ) t i s i e ( HashMap String i ) seen → b {
+    : String k ( string_new )
+    ( string_push_window k t s - e s )
+    ^ ?? ( map_get_with [String i s] seen ( string_data k ) \ s x → i { ^ ( hash_string x ) } \ String a s b → b { ^ ( eq_string ( string_data a ) b ) } ) {
+        T _ → T
+        F → F
+    }
+}
+
 // A library function that Lean's reader would refuse, from its `fn` line
 // at `a` to `b`: printed as step 4 printed it, its `fn`, `v` and `endfn`
 // lines (the ones the reader reads as records), so that `elabIR` refuses
 // it as it would on every line.
-@ __wd_records ( Slice u ) t i a i b inout String o inout b first → v {
+@ __wd_records ( Slice u ) t i a i b ( Vec i ) kept → v {
     : i n ( slice_len [u] t )
     : ~ i p a
     ~ < p b {
         : i q ( __wd_eol t p n )
         ? ! ( __wd_blank t p q ) {
             : b h ( __wd_header t p q )
-            ? | | ( __wd_first t p q h `fn` ) ( __wd_first t p q h `v` ) ( __wd_first t p q h `endfn` ) { ( __wd_line t p q h o first ) } {}
+            ? | | ( __wd_first t p q h `fn` ) ( __wd_first t p q h `v` ) ( __wd_first t p q h `endfn` ) { ( __wd_keep kept p q ) } {}
         } {}
         = p + q 1
     }
@@ -235,6 +275,7 @@ $ `util.nu`
     : ~ b in_lib F
     : ~ b lib_ok F
     : ~ i lib_a 0
+    : ( Vec i ) kept ( vec_new [i] )
     : ~ i a 0
     ~ < a n {
         : i z ( __wd_eol t a n )
@@ -245,13 +286,13 @@ $ `util.nu`
             : ~ b keep T
             ? & in_lib is_fn {
                 // a function opened inside the library's: the reader refuses
-                ( __wd_records t lib_a a o first )
+                ( __wd_records t lib_a a kept )
                 = in_lib F
             } {}
             ? in_lib {
                 = keep F
                 ? is_end {
-                    ? ! lib_ok { ( __wd_records t lib_a + z 1 o first ) } {}
+                    ? ! lib_ok { ( __wd_records t lib_a + z 1 kept ) } {}
                     = in_fn F
                     = in_lib F
                 } {
@@ -276,52 +317,59 @@ $ `util.nu`
                     ? is_end { = in_fn F } {}
                 }
             }
-            ? keep { ( __wd_line t a z header o first ) } {}
+            ? keep { ( __wd_keep kept a z ) } {}
         } {}
         = a + z 1
     }
     // a library function left open: the reader refuses
-    ? in_lib { ( __wd_records t lib_a n o first ) } {}
+    ? in_lib { ( __wd_records t lib_a n kept ) } {}
+    // The words of every kept line but the `sum` lines: the only names
+    // `elabIR` looks a summary up by (a function's own, its callees', a
+    // `let`'s called one). A `sum` line whose name is none of them is left
+    // out; one with no name is kept (`topOk` refuses it).
+    : ( HashMap String i ) seen ( map_new [String i] )
+    : i nk ( vec_len [i] kept )
+    : ~ i r 0
+    ~ < r nk {
+        : i ka ( vec_at [i] kept r )
+        : i kz ( vec_at [i] kept + r 1 )
+        : b h ( __wd_header t ka kz )
+        ? ! ( __wd_first t ka kz h `sum` ) { ( __wd_see t ka kz h seen ) } {}
+        = r + r 2
+    }
+    = r 0
+    ~ < r nk {
+        : i ka ( vec_at [i] kept r )
+        : i kz ( vec_at [i] kept + r 1 )
+        : b h ( __wd_header t ka kz )
+        : ~ b out T
+        ? ( __wd_first t ka kz h `sum` ) {
+            : ( Vec i ) w1 ( vec_new [i] )
+            ( __wd_word t ka kz h 1 w1 )
+            : i s1 ( vec_at [i] w1 0 )
+            ? & >= s1 0 ! ( __wd_seen t s1 ( vec_at [i] w1 1 ) seen ) { = out F } {}
+        } {}
+        ? out { ( __wd_line t ka kz h o first ) } {}
+        = r + r 2
+    }
     ( string_push_str o `]\n` )
     ^ o
 }
 
-// Whether `core` is well-formed UTF-8 (RFC 3629: no overlong form, no
-// surrogate, nothing past U+10FFFF). Lean reads each such sequence back as
-// the same bytes; any other byte it reads as U+FFFD.
-// (`core` read to its own length; a NUL byte is refused: no core IR holds
-// one, and the words are made from the text up to the first NUL)
-@ cert_words_utf8 String core → b {
+// Whether `core` has words: no NUL byte. The words are made from the text
+// up to its first NUL (`string_data`), and the bundle hashes the whole
+// file, so a NUL would leave the words short of Program.core; no core IR
+// holds one. Any other byte is printed as its value: the words are numbers,
+// which Lean reads as numbers whatever the bytes (before 0.3.1 they were
+// string literals, and a byte that is not UTF-8 read back as U+FFFD, so
+// such a core IR had no words).
+@ cert_words_ok String core → b {
     : ( Slice u ) t ( string_bytes core )
     : i n ( slice_len [u] t )
     : ~ i k 0
     ~ < k n {
-        : i c ( slice_byte t k )
-        ? == c 0 { ^ F } {}
-        ? < c 128 { = k + k 1 } {
-            // the continuation bytes a lead byte takes, and the range of the first
-            : ~ i len 0
-            : ~ i lo 128
-            : ~ i hi 191
-            ? & >= c 194 <= c 223 { = len 1 } {}
-            ? == c 224 { = len 2 = lo 160 } {}
-            ? | & >= c 225 <= c 236 | == c 238 == c 239 { = len 2 } {}
-            ? == c 237 { = len 2 = hi 159 } {}
-            ? == c 240 { = len 3 = lo 144 } {}
-            ? & >= c 241 <= c 243 { = len 3 } {}
-            ? == c 244 { = len 3 = hi 143 } {}
-            ? == len 0 { ^ F } {}
-            ? >= + k len n { ^ F } {}
-            : i b1 ( slice_byte t + k 1 )
-            ? | < b1 lo > b1 hi { ^ F } {}
-            : ~ i j 2
-            ~ <= j len {
-                : i bj ( slice_byte t + k j )
-                ? | < bj 128 > bj 191 { ^ F } {}
-                = j + j 1
-            }
-            = k + + k len 1
-        }
+        ? == ( slice_byte t k ) 0 { ^ F } {}
+        = k + k 1
     }
     ^ T
 }
