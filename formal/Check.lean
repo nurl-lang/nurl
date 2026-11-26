@@ -1066,6 +1066,9 @@ import D
 #print axioms C.cert3_safe
 #print axioms C.cert3_race
 #print axioms C.cert3_leak
+-- AGORA-1029 step 2: the term of a scalar program, built by the kernel from the core IR's words
+#print axioms C.Elab.elabIs_sound
+#print axioms C.Elab.elab_while
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided

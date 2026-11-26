@@ -172,6 +172,70 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
 - Next: the translator's rules as Lean definitions over `CoreFn` (step 2,
   the scalar subset first), then the claims stated about `elab ir`.
 
+## Route (b), step 2: the scalar subset (AGORA-1029)
+
+- `C.Elab.elabIR : IR → Option (Prog × Stmt)` (formal/C/Elab.lean; `elab`
+  is a keyword of Lean) builds the term and the entry statement for the
+  **scalar subset**: every function of the program (its file is not the
+  standard library's, as tolean.nu selects them) has only number-typed
+  variables, parameters and result (`__int_ty`: `i64` … `u8`, `void`,
+  the floats), and statements among `scope` / `if` / `else` / `loop` /
+  `loopcond` / `end`, `line`, `drop`, `break`, `continue`, `let k
+  use|none|scalar …`, `eval scalar|use|none …`, `assign vK
+  use|none|scalar …`, `ret c|-|vK`, and `let` / `eval` of `call f …` where
+  `f` is a function of the program. Anything else is `none`.
+- It is tolean.nu's rules for that subset, in tolean.nu's order: a `let`
+  or an `eval` translates the rest of its list before its own right-hand
+  side, a loop its body before its condition, so the fresh temporaries are
+  numbered as tolean.nu numbers them. The statements are first read into a
+  tree (blocks closed, fail closed otherwise); the translation is
+  structural recursion over a fuel of 4 × the body's lines + 4 (the `ret`
+  at a list's end rebuilds the list, as tolean.nu does).
+- Stricter than tolean.nu, never laxer: a count or an id that is not plain
+  digits, two program functions of one name, a program function named as
+  a library call tolean.nu makes a construct of (`vec_push__…`,
+  `nurl_println_int`, …), and any destructor type (a `ty` line whose drops
+  say `d`, a `drop__` function) are refused. The `ty`, `virt` and `sum`
+  lines are read only for that `d` and for the summary keys the subset
+  needs (`sink`, `keeps`, `retdyn`, `ret_owned`, `ret_unowned`, `rviews`).
+- `C.Elab.elabIs ir P e` compares the result with a term (A2's `Stmt`
+  has no decidable equality: its run-time forms hold a store);
+  `elabIs_sound` makes a `true` the equation `elabIR ir = some (P, e)`.
+  `elab_while` is one, by `decide +kernel`, against the term tolean.nu
+  prints for `while_loop_summing`, written out.
+- `tools/ncore/elab_parity.sh` compares `elabIR` with `nurl-cert
+  translate` over every certify program, every hole probe and the 18
+  scalar programs of `tools/ncore/elab_scalar/` (written for it: calls,
+  `inout` and `sink` parameters, `void` functions, nested loops, `break`,
+  `continue`, returns from inside loops and arms). A parity test, not a
+  proof. Of 4527 programs nurlc makes a core IR of 4322; tolean.nu
+  translates 247; `elabIR` answers a term for 21 (the 3 scalar certify
+  programs, `while_loop_summing`, `int_recursion_early_return`,
+  `loop_with_continue_and_break`, and the 18), every one exactly
+  tolean.nu's term, each also checked by `decide +kernel`; it answers
+  `none` for the other 4301, and a term for no program tolean.nu
+  refuses. 90 s in all with 12 jobs (`elabIR` itself runs over every IR
+  in one Lean process, from JSON: Lean takes ~10 s to elaborate an
+  8000-line words literal).
+- Kernel time, `decide +kernel` of `elabIs ir P entry` over the file that
+  only defines the data and the translator's term (best of 5):
+  `while_loop_summing` 0.19 s, `int_recursion_early_return` 0.27 s,
+  `loop_with_continue_and_break` 0.31 s. Outside the subset `none` costs
+  0.15 s for `vec_push_len` (588 lines) and 2.7 s for an 8087-line IR
+  (`chacha20poly1305_open_in_offset_wraps_its_range_check`, mostly the
+  library's functions, which step 1 reads too).
+- What the kernel spends its time on is turning words into characters: a
+  string literal's `toList` decodes its UTF-8 bytes at ~4 ms a character.
+  The words are therefore read as bytes (`bytesOf`, a third of the cost;
+  `natOf` and `varOf` of step 1 too), and the texts they are compared
+  with are written as lists of byte values, each checked against its
+  text. Before that the three programs took 0.47, 1.07 and 0.65 s, and
+  the 8087-line IR 16 s. Printing the words as numbers rather than
+  strings would take the rest of that cost away.
+- Next: the subset widened rule by rule (strings and `Vec`s of numbers,
+  options, structs, the library calls, closures), each with its rows of
+  the table above; then the certificate's claims stated about `elabIR ir`.
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
