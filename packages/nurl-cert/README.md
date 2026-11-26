@@ -30,8 +30,8 @@ accepted
   the proof that the term is the one the Lean kernel builds from the core
   IR, so the translator is not trusted for it. Certify tries it for an
   accepted program whose term `elabIR` could build (numbers, raw text,
-  Strings, Vecs of numbers and of raw strings, views and slices of them,
-  `foreach`);
+  Strings, Vecs of numbers and of raw strings, views, slices of Vecs of
+  numbers, `foreach`);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
 - `manifest.json`, with:
