@@ -228,19 +228,22 @@ $ `words.nu`
 }
 
 // The constructors `C.Elab.elabIR` builds terms from (formal/C/Elab.lean:
-// `go`, `rhsS`, `intrS`, `callAny`, `letcallS`, `readE`, `operandE`,
-// `retR`, `modeOf`, `fnElab`, `elabIR`), as the translator writes them:
-//   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop .push .free
-//   Rhs   .expr .new .var .borrow .at
-//   Expr  .any .lit .var .add .lt .len
+// `go`, `rhsS`, `intrS`, `editS`, `callAny`, `letcallS`, `readE`, `printE`,
+// `operandE`, `retR`, `modeOf`, `fnElab`, `elabIR`), as the translator
+// writes them:
+//   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop .push .free .edit
+//   Rhs   .expr .new .var .borrow .at .view .sat
+//   Expr  .any .lit .var .add .lt .len .slen
+//   Edit  .push .trunc
 //   PMode .inp .sink .inout
 //   Eff   .replace .drop .realloc .dropIn
-//   Ty    .int .vec
-// and the Bools of `resOwn := false` / `true` (a buffer handed back). A new
-// constructor elabIR emits goes into this list too (Elab.lean says so above
-// `elabIR`); the selftest's sweep fails if a certify program in the subset
-// loses its Elab.lean.
-: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free expr new var borrow at any lit add lt len inp sink inout replace drop realloc dropIn int vec`
+//   Ty    .int .vec .slice
+// and the Bools of `resOwn := false` / `true` (a buffer handed back) and of
+// `.edit true` (a change through a borrow). A new constructor elabIR emits
+// goes into this list too (Elab.lean says so above `elabIR`); the
+// selftest's sweep fails if a certify program in the subset loses its
+// Elab.lean.
+: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit expr new var borrow at view sat any lit add lt len slen trunc inp sink inout replace drop realloc dropIn int vec slice`
 
 // Can Program.lean's term be `elabIR`'s at all? F when it holds a
 // constructor outside ELAB_CTORS: `elabIs` compares the two terms

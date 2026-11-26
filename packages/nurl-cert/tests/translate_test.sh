@@ -353,30 +353,47 @@ if command -v python3 > /dev/null; then
         "$CERT" words "$TMP/$k.wcore" > "$TMP/$k.words"
         nw=$((nw + 1))
         # the words must be the line's split, header lines at tabs, statements
-        # at whitespace, with a library function's statement lines left out
-        # (a function opened by a line whose first word is `fn` and whose
-        # sixth starts with `stdlib/`, closed by `endfn`; its `fn`, `v` and
-        # `endfn` lines kept)
+        # at whitespace, with a library function left out whole (a function
+        # opened outside any other by a line whose first word is `fn` and
+        # whose sixth starts with `stdlib/`, closed by `endfn`) when Lean's
+        # reader reads its records (the `fn` line's fourth word a number,
+        # each `v` line's id, kind (at most 3) and flags numbers and a sixth
+        # word); else its `fn`, `v` and `endfn` lines kept
         python3 - "$TMP/$k.wcore" "$TMP/$k.words" <<'EOF2' || wbad=$((wbad + 1))
 import json, sys
 t = open(sys.argv[1]).read()
 rows = [l.split("\t") if l.startswith(("fn\t", "v\t", "ty\t", "sum\t")) else l.split()
         for l in t.splitlines() if l.strip()]
-kept, in_fn, lib = [], False, False
+nat = lambda w: w != "" and all("0" <= c <= "9" for c in w)
+var_ok = lambda r: len(r) > 5 and nat(r[1]) and nat(r[2]) and int(r[2]) <= 3 and nat(r[4])
+records = lambda fn: [r for r in fn if r and r[0] in ("fn", "v", "endfn")]
+kept, in_fn, lib = [], False, None
 for r in rows:
     w0 = r[0] if r else None
+    if lib is not None:
+        if w0 == "fn":
+            kept += records(lib); lib = None
+        else:
+            lib.append(r)
+            if w0 == "endfn":
+                ok = nat(lib[0][3]) and all(var_ok(x) for x in lib if x[0] == "v")
+                if not ok: kept += records(lib)
+                lib, in_fn = None, False
+            continue
     if w0 == "fn":
-        in_fn, lib = True, len(r) > 5 and r[5].startswith("stdlib/")
+        if not in_fn and len(r) > 5 and r[5].startswith("stdlib/"):
+            lib, in_fn = [r], True
+            continue
+        in_fn = True
     elif w0 == "endfn":
-        in_fn, lib = False, False
-    elif in_fn and lib and w0 != "v":
-        continue
+        in_fn = False
     kept.append(r)
+if lib is not None: kept += records(lib)
 src = open(sys.argv[2]).read()
 sys.exit(0 if json.loads(src[src.index(":= [") + 3:]) == kept else 1)
 EOF2
     done
-    [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split, the library's statements left out" || bad "words: $wbad of $nw differ from the split"
+    [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split, the library's functions left out" || bad "words: $wbad of $nw differ from the split"
 else
     echo "  SKIP  words parity: no python3"
 fi

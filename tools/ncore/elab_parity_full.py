@@ -3,7 +3,8 @@
 splits them (header lines at tabs, statements at whitespace, blank lines
 dropped), with no line left out: the full words, as JSON, for
 tools/ncore/elab_parity.sh to run `elabIR` on beside the words `nurl-cert
-words` prints (which leave out a library function's statement lines)."""
+words` prints (which leave out a library function whose records the
+reader reads)."""
 import json
 import re
 import sys

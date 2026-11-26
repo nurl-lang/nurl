@@ -2,8 +2,8 @@
 
 Status: **S1 and M4 of the certified-programs work** (AGORA-1019; M4,
 the translator in NURL and threaded programs, AGORA-1020; the term checked
-by the kernel for the subset of numbers and buffers of numbers,
-AGORA-1029 steps 3 and 4; part of
+by the kernel for the subset of numbers, buffers of numbers and views,
+AGORA-1029 steps 3 to 5; part of
 AGORA-1010; spec in the agora notes `spec.program-cert`, `.2`, `.3`).
 Schema **`nurl-cert/1`**, described here and in
 [`certificate.schema.json`](certificate.schema.json).
@@ -163,9 +163,13 @@ prog.cert/
   compares the bundle's copy byte for byte. A statement weakened, a proof
   replaced by `sorry`, or an axiom added is a difference.
 - **Elab.lean** takes the translator out of the trusted path, for the
-  programs `C.Elab.elabIR` covers (numbers, and buffers of numbers:
-  raw text, `String`s and `Vec`s of numbers; `docs/dev/TRANSLATION_TRUST.md`,
-  route (b), steps 2 and 4). It is a pure function of
+  programs `C.Elab.elabIR` covers (numbers; buffers of numbers: raw
+  text, `String`s and `Vec`s of numbers; views: slices of `Vec`s of
+  numbers, raw text viewed by `string_data`, `Vec`s of raw strings; and
+  `foreach` and the changes of a `Vec` through a borrow, `vec_clear`,
+  `vec_truncate`, `vec_reserve`, `string_push_str`;
+  `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2, 4 and 5). It is a
+  pure function of
   Program.core (`cert_elab_lean`, `packages/nurl-cert/src/claims.nu`):
 
   ```lean
@@ -186,12 +190,16 @@ prog.cert/
     below 32 is `\x..`, a byte above 127 is written as it is. Lean reads
     well-formed UTF-8 back as the same bytes; a core IR that is not
     well-formed UTF-8 has no words, and its bundle no Elab.lean.
-  - The statement lines of a library function (its file starts with
-    `stdlib/`) are left out of the words; its `fn`, `v` and `endfn`
-    lines stay. The translator reads only the program's own functions'
-    bodies, and `elabIR` drops the library's by the same test, so it
-    answers the same on the words as on every line
-    (`tools/ncore/elab_parity.sh` compares the two over the corpus).
+  - A library function (its file starts with `stdlib/`) is left out of
+    the words whole, when Lean's reader (`C.Elab.readFns`) would accept
+    its records: its `fn` line's parameter count and each of its `v`
+    lines. When it would not, its `fn`, `v` and `endfn` lines are
+    printed, and the reader refuses the words as it refuses the whole IR.
+    The translator reads only the program's own functions' bodies, and
+    `elabIR` drops the library's by the same test before it reads
+    anything of them but those records, so it answers the same on the
+    words as on every line (`tools/ncore/elab_parity.sh` compares the two
+    over the corpus; the selftest over IRs the reader refuses).
     This came with nurl-cert 0.3.0: a 0.2.0 bundle with Elab.lean whose
     core IR has library functions does not verify with it (`verify`
     makes Elab.lean again, and it is another file now). Certify the
@@ -441,9 +449,13 @@ refused), one at a time, on an x86-64 Linux host (AGORA-1019):
 Elab.lean costs little. At step 3 (AGORA-1029), over the 62 certify
 programs, one at a time, best of 3, certify took 79.2 s against 78.6 s
 before (+0.8 %). With step 4's larger subset and its one Lean process a
-program it takes 82.1 s against 83.9 s (−2.1 %). Lean is asked only for
-a term that can be `elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3
-and 4) has the numbers, peak memory included.
+program it takes 82.1 s against 83.9 s (−2.1 %). Step 5 covers 13 more
+of them, which now each have an Elab.lean part (+0.3 to +0.8 s a
+program; 8 of them are refused, and spend it too), and leaves the
+library's functions out of the words whole, which makes the other 49
+7.2 s faster: 81.3 s against 80.8 s (+0.6 %). Lean is asked only for a
+term that can be `elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3 to
+5) has the numbers, peak memory included.
 
 Without `--certify`, nothing changes:
 - `--list-sources=TAG` is off by default;

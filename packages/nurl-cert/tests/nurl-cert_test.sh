@@ -107,9 +107,11 @@ want_elab=$(printf '%s\n' cursor_over_a_vec int_recursion_early_return joins_eac
     loop_with_continue_and_break moved_on_one_branch_only owner_moved_only_on_an_early_return_from_a_loop \
     owners_rotated_in_a_loop raw_string_given_to_a_sink raw_strings_literal_and_fresh \
     temporary_dropped_in_an_if_arm vec_elements_read_between_pushes vec_push_len while_loop_summing \
+    view_taken_after_the_pushes vec_cleared_then_pushed vec_reserved_then_pushed foreach_summing_a_vec \
+    raw_strings_held_in_a_vec \
     | sort | tr '\n' ' ')
-if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 13 accepted certify programs in the subset have Elab.lean (Cert.elab)"
-else bad "exactly the 13 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
+if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 18 accepted certify programs in the subset have Elab.lean (Cert.elab)"
+else bad "exactly the 18 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
 if grep -qx "ok struct_fields_read accepted (translator)" "$TMP/progs.txt"; then ok "struct_fields_read (outside the subset): no Elab.lean, and it verifies"
 else bad "struct_fields_read (outside the subset): no Elab.lean, and it verifies"; fi
 
@@ -177,7 +179,11 @@ else bad "a candidate whose Elab.lean part fails: accepted, no Elab.lean, verifi
 nref=0; badref=""
 for n in moved_on_one_branch_then_read_refused owner_moved_in_a_loop_without_returning_refused \
     owner_read_after_its_move_in_the_round_before_refused raw_string_read_after_its_sink_refused \
-    use_after_move_refused vec_element_read_after_its_move_refused; do
+    use_after_move_refused vec_element_read_after_its_move_refused \
+    view_kept_across_a_realloc_refused view_kept_across_pushes_in_a_loop_refused \
+    view_kept_across_a_clear_refused view_kept_across_a_reserve_refused \
+    string_copied_from_a_view_of_a_freed_string_refused string_pushed_its_own_view_refused \
+    vec_pushed_while_iterated_refused raw_string_held_in_a_vec_past_its_source_refused; do
     pl="$TMP/progs/$n/$n.cert/Program.lean"
     c=$(python3 - "$pl" "$ctors" <<'EOF2'
 import re, sys
@@ -188,7 +194,7 @@ EOF2
 )
     if [ "$c" = yes ] && grep -qx "ok $n refused" "$TMP/progs.txt"; then nref=$((nref + 1)); else badref="$badref $n"; fi
 done
-[ "$nref" = 6 ] && ok "the 6 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
+[ "$nref" = 14 ] && ok "the 14 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
     || bad "the refused programs in the subset are refused:$badref"
 R="$TMP/rv"; rm -rf "$R"; cp -r "$TMP/progs/vec_push_len/vec_push_len.cert" "$R"
 cp "$TMP/progs/use_after_move_refused/use_after_move_refused.cert/Program.lean" "$R/Program.lean"
@@ -492,6 +498,50 @@ done
 printf 'ret c\000\377\n' > "$TMP/y.core"
 if "$C" words "$TMP/y.core" > /dev/null 2>&1; then bad "a core IR with a NUL and a byte that is not UTF-8 after it has no words"
 else ok "a core IR with a NUL and a byte that is not UTF-8 after it has no words"; fi
+
+echo "== 2d. a library function is left out of the words only when Lean's reader reads it"
+# A library function (file under stdlib/) and main. The words leave the
+# library function out when C.Elab.readFns would accept its records, and
+# print its records when it would not, so that the reader (and elabIR)
+# refuses the words as it refuses every line. Each case: the reader
+# (`fnsOf`) accepts the words exactly when it accepts every line, and that
+# is the answer the case expects.
+lib_case() {  # name, want (true/false), then the core IR's lines
+    local n="$1" want="$2"; shift 2
+    printf '%s\n' "$@" > "$TMP/l_$n.core"
+    if "$C" words "$TMP/l_$n.core" > "$TMP/l_$n.words" 2> /dev/null; then
+        # every line, split as the words are (the cases are plain ASCII)
+        full=$(python3 -c 'import json, re, sys
+rows = [l.split("\t") if l.startswith(("fn\t", "v\t", "ty\t", "sum\t")) else [w for w in re.split(r"[ \t]", l) if w]
+        for l in open(sys.argv[1]).read().split("\n") if l.strip(" ")]
+print(json.dumps(rows))' "$TMP/l_$n.core")
+        { echo "namespace L_$n"; cat "$TMP/l_$n.words"; echo "def full : C.Elab.IR := $full"
+          echo "#eval IO.println s!\"$n {(C.Elab.fnsOf ir).isSome} {(C.Elab.fnsOf full).isSome} $want\""; echo "end L_$n"; } >> "$TMP/l.lean"
+    else bad "nurl-cert words reads the library case $n"; fi
+}
+echo "import C.Elab" > "$TMP/l.lean"
+T=$'\t'
+LF="fn${T}libf${T}i64${T}1${T}1${T}stdlib/core/x.nu${T}0${T}"
+LV="v${T}0${T}0${T}0${T}0${T}1${T}-1${T}x${T}i64"
+MAIN=("fn${T}main${T}i64${T}0${T}5${T}m.nu${T}0${T}" "ret c" "endfn")
+lib_case clean true "$LF" "$LV" "ret v0" "endfn" "${MAIN[@]}"
+lib_case kind_0003 true "$LF" "v${T}0${T}0003${T}0${T}0${T}1${T}-1${T}x${T}i64" "endfn" "${MAIN[@]}"
+lib_case stmt_v true "$LF" "$LV" "v 0 0 0 0 1" "endfn" "${MAIN[@]}"
+lib_case kind_4 false "$LF" "v${T}0${T}4${T}0${T}0${T}1${T}-1${T}x${T}i64" "endfn" "${MAIN[@]}"
+lib_case stmt_v_kind_9 false "$LF" "$LV" "v 0 9 0 0 1" "endfn" "${MAIN[@]}"
+lib_case flags_x false "$LF" "v${T}0${T}0${T}0${T}x${T}1${T}-1${T}x${T}i64" "endfn" "${MAIN[@]}"
+lib_case v_short false "$LF" "v${T}0${T}0${T}0${T}0" "endfn" "${MAIN[@]}"
+lib_case np_empty false "fn${T}libf${T}i64${T}${T}1${T}stdlib/core/x.nu${T}0${T}" "$LV" "endfn" "${MAIN[@]}"
+lib_case nested false "$LF" "$LV" "fn${T}q${T}i64${T}0${T}1${T}q.nu${T}0${T}" "endfn" "${MAIN[@]}"
+lib_case in_main false "${MAIN[0]}" "$LF" "$LV" "endfn" "ret c" "endfn"
+lib_case unclosed false "${MAIN[@]}" "$LF" "$LV" "ret v0"
+if grep -q '"libf"' "$TMP/l_clean.words"; then bad "a library function the reader reads is left out of the words"
+else ok "a library function the reader reads is left out of the words"; fi
+have=$(cd "$ROOT/formal" && lake env lean "$TMP/l.lean" 2>&1); lrc=$?
+nl=$(printf '%s\n' "$have" | awk 'NF == 4 && $2 == $3 && $3 == $4' | wc -l)
+if [ "$lrc" = 0 ] && [ "$nl" = 11 ] && [ "$(printf '%s\n' "$have" | wc -l)" = 11 ]; then
+    ok "the reader accepts the words of each library case as it accepts its every line (11 cases)"
+else bad "the reader accepts the words of each library case as it accepts its every line (lean rc $lrc)"; printf '%s\n' "$have" | head -20 | sed 's/^/        /'; fi
 
 echo "== 3. the fast profile"
 "$C" certify "$P/prog.nu" "${CA[@]}" --profile fast --out "$P/fast.cert" > "$TMP/f.out" 2>&1
