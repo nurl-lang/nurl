@@ -201,15 +201,15 @@ $ `certify.nu`
             ^ ( __vf_end t )
         } {}
         : String work ( nc_join bundle `.build` )
-        // A fresh directory: an .olean the bundle brought must not stand in
-        // for the one compiled from its Program.lean.
+        // A fresh directory for the one Lean file the check runs
+        // (`cert_lean_check`: the bundle's modules, combined).
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
         : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data . o formal ) bundle ( string_data work ) elab )
         : b clean & . lr ran ! ( cert_lean_has_error . lr log )
         ( __vf_check t clean `Lean checks Program.lean and Claims.lean` ( string_data ( __vf_first . lr log ) ) )
-        // The term is the kernel's: Lean proves Cert.elab again, beside the
-        // claims (and only an exit 0 counts).
+        // The term is the kernel's: Lean proves Cert.elab again, in the same
+        // run as the claims (and only an exit 0 counts).
         ? elab {
             ( __vf_check t ( cert_elab_proved lr ) `Lean proves Cert.elab (Elab.lean) on the standard axioms`
             ( string_data ( __vf_first . lr elab_log ) ) )

@@ -4,7 +4,8 @@ import Lean.Data.Json
 /-! tools/ncore/elab_parity.sh, step 1: `C.Elab.elabIR` over many core IRs.
 The argument is a file of paths, one per line, each a core IR's words as
 JSON (`elab_parity_json.py`). Prints `<path> some` or `<path> none` for
-each. Run: `cd formal && lake env lean --run ../tools/ncore/elab_parity_run.lean list`. -/
+each, and `FULL <path> same` or `FULL <path> DIFFER` where the program's
+full words are beside it (`.full.json`). Run: `cd formal && lake env lean --run ../tools/ncore/elab_parity_run.lean list`. -/
 
 open Lean
 
@@ -21,4 +22,15 @@ def main (args : List String) : IO Unit := do
   let paths ← IO.FS.lines list
   for p in paths do
     let ir ← readIR p
-    IO.println s!"{p} {if (C.Elab.elabIR ir).isSome then "some" else "none"}"
+    let r := C.Elab.elabIR ir
+    IO.println s!"{p} {if r.isSome then "some" else "none"}"
+    -- the full words beside it (`k.full.json`, every line): elabIR must
+    -- answer the same on both (the words leave out a library function's
+    -- statement lines, which it never reads)
+    let fp := String.ofList (p.toList.take (p.length - 5)) ++ ".full.json"
+    if ← System.FilePath.pathExists fp then
+      let same := match r, C.Elab.elabIR (← readIR fp) with
+        | none, none => true
+        | some (P, e), some (Q, e') => C.Elab.progBeq P Q && C.Elab.stmtBeq e e'
+        | _, _ => false
+      IO.println s!"FULL {p} {if same then "same" else "DIFFER"}"

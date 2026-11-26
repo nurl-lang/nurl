@@ -29,7 +29,8 @@ accepted
 - `Elab.lean`, only when Lean proves `Cert.elab` on the standard axioms:
   the proof that the term is the one the Lean kernel builds from the core
   IR, so the translator is not trusted for it. Certify tries it for an
-  accepted program whose term `elabIR` could build (the scalar subset);
+  accepted program whose term `elabIR` could build (numbers, and raw
+  text, Strings and Vecs of numbers);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
 - `manifest.json`, with:

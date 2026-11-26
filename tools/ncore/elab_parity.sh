@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# elab_parity.sh: the Lean translation of the scalar subset
-# (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 step 2) against the NURL
-# translator (`nurl-cert translate`, packages/nurl-cert/src/tolean.nu), over
-# every certify program, every hole probe, and the scalar programs of
-# tools/ncore/elab_scalar/ (written for this test: each in the subset, so
-# that the rules the certify programs do not reach are compared too). A
-# parity test, not a proof.
+# elab_parity.sh: the Lean translation of the subset of numbers and buffers
+# of numbers (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps 2 and 4)
+# against the NURL translator (`nurl-cert translate`,
+# packages/nurl-cert/src/tolean.nu), over every certify program, every hole
+# probe, and the programs of tools/ncore/elab/ (written for this test: each
+# in the subset, so that the rules the certify programs do not reach are
+# compared too). A parity test, not a proof.
 #
 #   tools/ncore/elab_parity.sh [programs.txt]
 #
@@ -25,7 +25,12 @@
 #               elabIR's functions in the translator's syntax
 #        LAX    the translator refuses the program
 #   Every other program is `none` (outside the subset).
-# The target: no DIFF, no LAX (every program elabIR answers for matches).
+#   3. The words leave out a library function's statement lines
+#      (words.nu). elabIR also runs on every line of each core IR
+#      (`elab_parity_full.py`), and its answer must be the same on both
+#      (`progBeq`, `stmtBeq`), for every program.
+# The target: no DIFF, no LAX (every program elabIR answers for matches),
+# and elabIR the same on the words and on every line.
 #
 # Env: NURLC (default build/nurlc), NURL_CERT (default build/nurl-cert),
 #      JOBS (default nproc), KERNEL (default 1), PARITY_DIR (keep the work
@@ -48,10 +53,16 @@ else W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT; fi
 command -v lake > /dev/null || export PATH="$HOME/.elan/bin:$PATH"
 
 # The programs every default sweep must find in the subset and matching:
-# each scalar program written for this test, and the certify programs in
-# the subset. (A regression that makes elabIR answer `none` for one, or
+# each program written for this test, and the certify programs in the
+# subset. (A regression that makes elabIR answer `none` for one, or
 # nurlc fail on one, is a failure, not one more program outside the subset.)
-EXPECT_CERTIFY="int_recursion_early_return loop_with_continue_and_break while_loop_summing"
+EXPECT_CERTIFY="cursor_over_a_vec int_recursion_early_return joins_each_freeing_a_different_vec
+    loop_with_continue_and_break moved_on_one_branch_only moved_on_one_branch_then_read_refused
+    owner_moved_in_a_loop_without_returning_refused owner_moved_only_on_an_early_return_from_a_loop
+    owner_read_after_its_move_in_the_round_before_refused owners_rotated_in_a_loop
+    raw_string_given_to_a_sink raw_string_read_after_its_sink_refused raw_strings_literal_and_fresh
+    temporary_dropped_in_an_if_arm use_after_move_refused vec_element_read_after_its_move_refused
+    vec_elements_read_between_pushes vec_push_len while_loop_summing"
 
 # (the list is copied aside first: it may be the work directory's own
 # progs.txt from an earlier run)
@@ -59,11 +70,11 @@ rm -f "$W/progs.new" "$W/expect.txt"
 if [ $# -ge 1 ]; then
     cp "$1" "$W/progs.new" || { echo "elab_parity.sh: can not read the program list $1"; exit 1; }
 else
-    { ls tools/ncore/certify/*.nu && find tools/fuzz/holes -name '*.nu' | sort && ls tools/ncore/elab_scalar/*.nu; } > "$W/progs.new" \
+    { ls tools/ncore/certify/*.nu && find tools/fuzz/holes -name '*.nu' | sort && ls tools/ncore/elab/*.nu; } > "$W/progs.new" \
         || { echo "elab_parity.sh: can not list the programs"; exit 1; }
 fi
 mv -f "$W/progs.new" "$W/progs.txt" || exit 1
-{ ls tools/ncore/elab_scalar/*.nu; for c in $EXPECT_CERTIFY; do echo "tools/ncore/certify/$c.nu"; done; } > "$W/expect.txt"
+{ ls tools/ncore/elab/*.nu; for c in $EXPECT_CERTIFY; do echo "tools/ncore/certify/$c.nu"; done; } > "$W/expect.txt"
 nprog=$(grep -c '' "$W/progs.txt")       # records: a last one without its newline counts
 [ "$nprog" -gt 0 ] || { echo "elab_parity.sh: no programs"; exit 1; }
 
@@ -81,11 +92,12 @@ i=0; while IFS= read -r p || [ -n "$p" ]; do i=$((i + 1)); printf '%s\0%s\0' "$i
     if ! "$CERT" words "$d/$k.core" > "$d/$k.words" 2> /dev/null \
        || ! python3 "$ROOT/tools/ncore/elab_parity_json.py" "$d/$k.words" > "$d/$k.json"; then
         rm -f "$d/$k.json"; touch "$d/$k.nowords"; exit 0; fi
+    python3 "$ROOT/tools/ncore/elab_parity_full.py" "$d/$k.core" > "$d/$k.full.json" || rm -f "$d/$k.full.json"
     "$CERT" translate "$d/$k.core" > "$d/$k.tl" 2> /dev/null; echo $? > "$d/$k.rc"'
 t1=$(date +%s)
 
 # 1. elabIR over every program's words, in one process.
-ls "$W/r" | grep '\.json$' | sed 's/\.json$//' | sort -n > "$W/ok.txt"
+ls "$W/r" | grep '^[0-9]*\.json$' | sed 's/\.json$//' | sort -n > "$W/ok.txt"
 sed "s|^\(.*\)$|$W/r/\1.json|" "$W/ok.txt" > "$W/json.txt"
 (cd "$ROOT/formal" && lake env lean --run "$ROOT/tools/ncore/elab_parity_run.lean" "$W/json.txt") > "$W/run.txt" 2>&1
 rrc=$?
@@ -105,9 +117,14 @@ def e : Expr → String
   | .add a b => s!"(.add {e a} {e b})"
   | .lt a b => s!"(.lt {e a} {e b})"
   | .any => ".any"
+  | .len x => s!"(.len {x})"
   | _ => "?expr"
 def r : Rhs → String
   | .expr x => s!".expr {e x}"
+  | .new t => s!".new {repr t}"
+  | .var y => s!".var {y}"
+  | .borrow y => s!".borrow {y}"
+  | .at y i => s!".at {y} {e i}"
   | _ => "?rhs"
 def s : Stmt → String
   | .skip => ".skip"
@@ -119,6 +136,8 @@ def s : Stmt → String
   | .block a => s!"(.block {s a})"
   | .exit n => s!"(.exit {n})"
   | .loop a => s!"(.loop {s a})"
+  | .push x y => s!"(.push {x} {y})"
+  | .free x => s!"(.free {x})"
   | _ => "?stmt"
 def fn (f : Fn) : String :=
   s!"params := {repr f.params}, resTy := {repr f.resTy}, resOwn := {f.resOwn}, body := {s f.body}, nvars := {f.nvars}"
@@ -172,7 +191,10 @@ echo "    DIFF:                     $(count DIFF)"
 echo "    LAX (translator refuses): $(count LAX)"
 echo "    errors:                   $(count ERROR)"
 echo "  elabIR none:                $(grep -c ' none$' "$W/run.txt")"
+n_full=$(grep -c '^FULL ' "$W/run.txt"); n_fdiff=$(grep -c '^FULL .* DIFFER$' "$W/run.txt")
+grep '^FULL .* DIFFER$' "$W/run.txt" | head -5
+echo "full words beside the words:  $n_full (elabIR differs on $n_fdiff)"
 echo "expected matches missing:     $missing"
 echo "matched: $(sed -n 's/^match //p' "$W/verdicts.txt" | tr '\n' ' ')"
 echo "time, $JOBS jobs: IR and terms $((t1 - t0)) s, elabIR $((t2 - t1)) s, comparisons $((t3 - t2)) s"
-[ "$missing" = 0 ] && [ "$(count DIFF)" = 0 ] && [ "$(count LAX)" = 0 ] && [ "$(count ERROR)" = 0 ] && [ "$(ls "$W/r" | grep -c '\.nowords$')" = 0 ]
+[ "$missing" = 0 ] && [ "$n_fdiff" = 0 ] && [ "$n_full" = "$(wc -l < "$W/ok.txt")" ] && [ "$(count DIFF)" = 0 ] && [ "$(count LAX)" = 0 ] && [ "$(count ERROR)" = 0 ] && [ "$(ls "$W/r" | grep -c '\.nowords$')" = 0 ]

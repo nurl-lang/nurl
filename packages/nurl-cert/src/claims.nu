@@ -228,25 +228,28 @@ $ `words.nu`
 }
 
 // The constructors `C.Elab.elabIR` builds terms from (formal/C/Elab.lean:
-// `go`, `rhsS`, `operandE`, `retE`, `modeOf`, `fnElab`, `elabIR`), as the
-// translator writes them:
-//   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop
-//   Rhs   .expr
-//   Expr  .any .lit .var .add .lt
-//   PMode .inp .sink .inout .replace
-//   Ty    .int
-// and the one Bool it writes, `resOwn := false`. A new constructor elabIR
-// emits goes into this list too (Elab.lean says so above `elabIR`); the
-// selftest's sweep fails if a certify program in the subset loses its
-// Elab.lean.
-: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop expr any lit var add lt inp sink inout replace int`
+// `go`, `rhsS`, `intrS`, `callAny`, `letcallS`, `readE`, `operandE`,
+// `retR`, `modeOf`, `fnElab`, `elabIR`), as the translator writes them:
+//   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop .push .free
+//   Rhs   .expr .new .var .borrow .at
+//   Expr  .any .lit .var .add .lt .len
+//   PMode .inp .sink .inout
+//   Eff   .replace .drop .realloc .dropIn
+//   Ty    .int .vec
+// and the Bools of `resOwn := false` / `true` (a buffer handed back). A new
+// constructor elabIR emits goes into this list too (Elab.lean says so above
+// `elabIR`); the selftest's sweep fails if a certify program in the subset
+// loses its Elab.lean.
+: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free expr new var borrow at any lit add lt len inp sink inout replace drop realloc dropIn int vec`
 
 // Can Program.lean's term be `elabIR`'s at all? F when it holds a
-// constructor outside ELAB_CTORS, or `true`: `elabIs` compares the two terms
+// constructor outside ELAB_CTORS: `elabIs` compares the two terms
 // constructor by constructor, so `elabIR ir = some (P, entry)` is then
 // impossible whatever the core IR, and skipping Lean on it is exact. T
 // decides nothing: Lean does. (`text` has passed shape.nu's grammar: ASCII,
-// constructors written `.name`; the `import`/`open` lines are skipped.)
+// constructors written `.name`; the `import`/`open` lines are skipped. A
+// `true` is no constructor: the translator writes it in `resOwn` and in
+// constructors outside the list, `.edit true`, `.chanRecv true`.)
 @ cert_elab_candidate s text → b {
     : ( Vec String ) ok ( string_split ( string_from ELAB_CTORS ) ` ` )
     : ( Vec String ) ls ( nc_lines text )
@@ -273,9 +276,7 @@ $ `words.nu`
                             ( string_push_window w t k - e k )
                             ? dotted {
                                 ? ! ( __cl_in w ok ) { ^ F } {}
-                            } {
-                                ? ( nc_is w `true` ) { ^ F } {}
-                            }
+                            } {}
                             = k e
                         } { = k + k 1 }
                     }

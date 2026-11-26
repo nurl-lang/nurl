@@ -352,17 +352,31 @@ if command -v python3 > /dev/null; then
         "$NURLC" --emit-core "$f" > "$TMP/$k.wcore" 2> /dev/null || continue
         "$CERT" words "$TMP/$k.wcore" > "$TMP/$k.words"
         nw=$((nw + 1))
-        # the words must be the line's split, header lines at tabs, statements at whitespace
+        # the words must be the line's split, header lines at tabs, statements
+        # at whitespace, with a library function's statement lines left out
+        # (a function opened by a line whose first word is `fn` and whose
+        # sixth starts with `stdlib/`, closed by `endfn`; its `fn`, `v` and
+        # `endfn` lines kept)
         python3 - "$TMP/$k.wcore" "$TMP/$k.words" <<'EOF2' || wbad=$((wbad + 1))
 import json, sys
 t = open(sys.argv[1]).read()
 rows = [l.split("\t") if l.startswith(("fn\t", "v\t", "ty\t", "sum\t")) else l.split()
         for l in t.splitlines() if l.strip()]
+kept, in_fn, lib = [], False, False
+for r in rows:
+    w0 = r[0] if r else None
+    if w0 == "fn":
+        in_fn, lib = True, len(r) > 5 and r[5].startswith("stdlib/")
+    elif w0 == "endfn":
+        in_fn, lib = False, False
+    elif in_fn and lib and w0 != "v":
+        continue
+    kept.append(r)
 src = open(sys.argv[2]).read()
-sys.exit(0 if json.loads(src[src.index(":= [") + 3:]) == rows else 1)
+sys.exit(0 if json.loads(src[src.index(":= [") + 3:]) == kept else 1)
 EOF2
     done
-    [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split" || bad "words: $wbad of $nw differ from the split"
+    [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split, the library's statements left out" || bad "words: $wbad of $nw differ from the split"
 else
     echo "  SKIP  words parity: no python3"
 fi
