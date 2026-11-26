@@ -28,7 +28,9 @@ accepted
 - `Program.core`, the compiler's core IR;
 - `Elab.lean`, only when Lean proves `Cert.elab` on the standard axioms:
   the proof that the term is the one the Lean kernel builds from the core
-  IR, so the translator is not trusted for it. Certify tries it for an
+  IR, so the translator is not trusted for it (`nurlc --emit-core` and
+  the core IR's conversion to words, `words.nu`, still are: the
+  `translation` ledger row names them). Certify tries it for an
   accepted program whose term `elabIR` could build (numbers, raw text,
   Strings, Vecs of numbers and of raw strings, views, slices of Vecs of
   numbers, `foreach` over a Vec of numbers);
