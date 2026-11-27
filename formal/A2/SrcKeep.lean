@@ -178,6 +178,7 @@ theorem RhsT.ctxRelS {Γ Γ1 : Ctx} {F V : List Var} {r : Rhs} {E : Entry}
   | copyUp _ _ _ _ _ => exact CtxRel.refl _
   | borrow _ _ _ => exact CtxRel.refl _
   | «at» _ _ _ _ => exact CtxRel.refl _
+  | atIdx _ _ _ _ => exact CtxRel.refl _
   | view _ _ _ _ => exact CtxRel.refl _
   | sat _ _ _ _ => exact CtxRel.refl _
   | fst _ _ _ => exact CtxRel.refl _

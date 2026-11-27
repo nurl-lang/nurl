@@ -1660,6 +1660,70 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
   pkgs := ((hi.vecOf_pkgs hvec).elem (List.getElem_mem hn)).lendOf
   pkgFree := elem_pkgFree hi hy hl hty hn hvec
 
+/-- AGORA-1037: element `n` of an owned `Vec` of `Vec`s, lent as lying
+    inside element `n` (`RhsT.atIdx`): `out_at`'s value, its dependency at
+    `.innerAt n` (the element is `es[n]`, so it lands there, `BelowAt n`). -/
+theorem out_atIdx {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {s : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec (.vec s)) (hmo : E.mode = .own)
+    {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length) (hvec : VecOf m y t' c d es) :
+    RhsOut m Γ ⟨.vec s, .bor, true, [⟨y, .innerAt n⟩], E.held, false, false, false, false⟩ (lendOf es[n]) false := by
+  have h0 := out_at hi hy hl hty hn hvec
+  have hder : ∀ k, derive y E k = [⟨y, k⟩] := fun k => by
+    simp [derive, hmo, Mode.isRoot, hty, rootKind]
+  have hclean : ∀ k, k ≠ .share → CleanDeps Γ [⟨y, .innerAt n⟩] → CleanDeps Γ [⟨y, k⟩] := by
+    intro k hk hc d hd
+    simp only [memDeps, List.filter_cons, List.filter_nil] at hd
+    split at hd
+    · simp only [List.mem_singleton] at hd; subst hd
+      obtain ⟨_, hcl⟩ := hc ⟨y, .innerAt n⟩ (by simp [memDeps, Kind.isName])
+      exact ⟨Or.inl hk, hcl⟩
+    · cases hd
+  refine ⟨h0.own, h0.mode, h0.live, h0.tyok, ?_, (fun h => by cases h), ?_, ?_, h0.held, h0.pkgs,
+    (fun h => by cases h), ?_⟩
+  · -- what it depends on is rooted at the owner, as `out_at`'s
+    intro hn' r hr
+    apply h0.wf hn' r
+    simp only [Entry.vdeps, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, roots, List.map_append,
+      List.map_cons, List.map_nil, List.mem_append, List.mem_cons] at hr ⊢
+    rw [show (elemE y E (.vec s)).path = derive y E .inner from rfl, hder]
+    simpa [elemE] using hr
+  · -- the element's handle lands inside element `n`
+    intro _
+    obtain ⟨c0, d0, es0, hvec0, hw, hvs, hroot, hbor, hns, hshv⟩ := hi.vec_node hy hl hty
+    have heq := VecOf.unique hi.heap hvec0 hvec
+    cases heq
+    have hmem : es[n] ∈ es := List.getElem_mem hn
+    have hget : es[n]? = some es[n] := List.getElem?_eq_getElem hn
+    have hwe : WFv (.vec s) es[n] := hw.elem rfl hmem
+    generalize es[n] = e at hmem hwe hget ⊢
+    cases hwe with
+    | node hes =>
+      rename_i c1 d1 es1
+      have hlands : Lands (.innerAt n) (.node s c1 d1 es1) (.node (.vec s) c d es) :=
+        Or.inr (Or.inr (Or.inr ⟨n, rfl, _, _, _, _, _, rfl, hget, Sub.refl _⟩))
+      have := derive_hrefAt (k := .innerAt n) (hroot ·) hbor (by rw [hty]; rfl) hlands (WFv.node hes)
+        (hvs.elem hmem) (hns.sub (names_elem hmem)) (hshv.elem hmem)
+      rw [hder] at this
+      exact .href this
+  · -- by name, only what the owner holds
+    intro _
+    have hE := hi.names y E hy hl (Or.inl (by rw [hty]; simp))
+    show DepsNamed Γ ([⟨y, .innerAt n⟩] ++ E.held)
+    have hp : DepsNamed Γ [⟨y, .innerAt n⟩] := fun d hd b t hk => by
+      simp only [List.mem_singleton] at hd; subst hd; cases hk
+    exact hp.append hE.held
+  · -- what it names is `out_at`'s: the path's roots are the same, and none a share
+    intro i hni
+    refine h0.pkgFree i (PkgNames.mapClean
+      (E' := ⟨.vec s, .bor, true, [⟨y, .innerAt n⟩], E.held, false, false, false, false⟩)
+      (fun h => h) (fun h => h) ?_ ?_ (fun h => h) hni)
+    · intro hc; rw [show (elemE y E (.vec s)).path = derive y E .inner from rfl, hder]
+      exact hclean .inner (by decide) hc
+    · intro hc
+      rw [show (elemE y E (.vec s)).path = derive y E .inner from rfl, hder]
+      exact (hclean .inner (by decide) (hc.sub (List.subset_append_left _ _))).append
+        (hc.sub (List.subset_append_right _ _))
+
 theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t) (hhv : t.holdsView = false)
     {t' : Ty} {c d : Nat} {es : List Val} (hvec : VecOf m y t' c d es) :

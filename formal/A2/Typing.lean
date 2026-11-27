@@ -170,6 +170,12 @@ theorem rootKind_cases (t : Ty) (k : Kind) : rootKind t k = k ∨ (k = .self ∧
 def derive (y : Var) (E : Entry) (k : Kind) : List Dep :=
   if E.mode.isRoot then [⟨y, rootKind E.ty k⟩] else E.path.map (fun d => ⟨d.root, comp d.kind k⟩)
 
+/-- AGORA-1037: what is borrowed from an owned `Vec` depends on it alone,
+    at the way it is borrowed. -/
+theorem derive_own_vec {y : Var} {E : Entry} {t : Ty} (hm : E.mode = .own) (ht : E.ty = .vec t) (k : Kind) :
+    derive y E k = [⟨y, k⟩] := by
+  simp [derive, hm, Mode.isRoot, ht, rootKind]
+
 def setE (Γ : Ctx) (x : Var) (E : Entry) : Ctx := upd Γ x (some E)
 
 /-- Does effect `e` on `x` (element type holding views: `hv`) end `E`?  An
@@ -1003,6 +1009,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- holds) borrowed from the frame's own memory may be fresh
       (hf : f = true → FreshSrc Γ y ∧ ∀ s, t ≠ .slice s := by fresh_src) →
       RhsT Γ F (.at y i) { elemE y E t with fresh := f } Γ
+  /-- AGORA-1037: element `n` of an owned `Vec` of `Vec`s, at a number,
+      borrowed as lying inside element `n` (`Kind.innerAt n`): a change
+      inside another element leaves it (`Eff.dropInAt`). The same step as
+      `at` (`EvalR.at`); a typing chooses this one or that one. -/
+  | atIdx {y : Var} {n : Nat} {E : Entry} {s : Ty} :
+      Γ y = some E → E.live = true → E.ty = .vec (.vec s) → E.mode = .own →
+      RhsT Γ F (.at y (.lit n)) ⟨.vec s, .bor, true, [⟨y, .innerAt n⟩], E.held, false, false, false, false⟩ Γ
   | view {y : Var} {E : Entry} {t : Ty} {f h : Bool} :
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
       -- (A3.1's slices of shares: its elements may be shares, lent as
@@ -1322,6 +1335,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | copyUp _ hl hm => exact ⟨Or.inr hm, hl⟩
   | borrow => exact ⟨Or.inr rfl, rfl⟩
   | @«at» _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
+  | atIdx => exact ⟨Or.inr rfl, rfl⟩
   | view => exact ⟨Or.inr rfl, rfl⟩
   | slit => exact ⟨Or.inr rfl, rfl⟩
   | @sat _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩

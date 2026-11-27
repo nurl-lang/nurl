@@ -3355,6 +3355,28 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) (hfo : FreshOK Γa) {Fa : List V
           · simp only [elemE, ownHeld_false]; exact held_lift h hab hy
           · simp only [elemE]; rw [heq]; simp
     exact (S.elemE_subE h hpy _ t f (fun hft => fresh_keep h hab hfo hy (hf hft).1)).trans (S.subE_weaker old)
+  | @atIdx y n Ey s hy hl ht hmo =>
+    -- AGORA-1037: an owner, lifted to an owner; its element at `n`, renamed
+    have hpy : S.isPi y = false := hvs y (by simp [Rhs.vars])
+    have hc : S.canon Γa (S.ρ y) = some (S.subE (S.liftE y Ey)) := canon_some h hy hpy
+    have hrb : Ey.mode ≠ .rootb := by rw [hmo]; simp
+    refine ⟨_, RhsT.atIdx hc (by rw [subE_live, liftE_live]; exact hl)
+      (by rw [subE_ty, liftE_ty' h hab hy]; exact ht) (by rw [subE_mode, liftE_mode y hrb, hmo]; rfl), fun x => ?_⟩
+    have hsd : S.subD ⟨S.ρ y, .innerAt n⟩ = [⟨S.ρ y, .innerAt n⟩] :=
+      S.subD_of_not (fun w hw => by simp only [inv_ρ h] at hw; cases hw; exact hpy)
+    have heq : (⟨.vec s, .bor, true, [⟨S.ρ y, .innerAt n⟩], (S.subE (S.liftE y Ey)).held,
+        false, false, false, false⟩ : Entry) =
+        S.subE ⟨.vec s, .bor, true, [⟨S.ρ y, .innerAt n⟩], (S.liftE y Ey).held, false, false, false, false⟩ := by
+      simp only [RSetup.subE, subE_held, List.flatMap_cons, List.flatMap_nil, hsd, List.append_nil]
+    rw [heq]
+    apply S.subE_weaker
+    rw [S.liftE_of_bor x rfl]
+    refine EntryWeaker.mk' (by simp) (by simp) (by simp) (by simp) (fun _ => ?_) ?_
+    · intro d hd
+      simp only [List.mem_singleton] at hd; subst hd
+      simp only [Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+      exact List.mem_append_left _ (mem_rds.mpr ⟨_, List.mem_singleton_self _, rfl⟩)
+    · simp only [ownHeld_false]; exact held_lift h hab hy
   | @view y Ey t fv hv hy hl ht hhv hfs0 hhs =>
     have hpy : S.isPi y = false := hvs y (by simp [Rhs.vars])
     have hc : S.canon Γa (S.ρ y) = some (S.subE (S.liftE y Ey)) := canon_some h hy hpy

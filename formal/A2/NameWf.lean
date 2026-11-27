@@ -289,6 +289,12 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
       ⟨[], Keeps.refl Γ []⟩⟩
   | «at» hy hl ht _ =>
     exact ⟨hn, fun _ _ => elemE_named (hn _ _ hy hl (Or.inl (by rw [ht]; simp))) _, ⟨[], Keeps.refl Γ []⟩⟩
+  | @atIdx y n E s hy hl ht hmo =>
+    have hN := hn _ _ hy hl (Or.inl (by rw [ht]; simp))
+    exact ⟨hn, fun _ _ => by
+      show DepsNamed Γ ([⟨y, .innerAt n⟩] ++ _)
+      rw [← derive_own_vec hmo ht (.innerAt n)]; exact (derive_named hN rfl).append hN.held,
+      ⟨[], Keeps.refl Γ []⟩⟩
   | view hy hl ht _ =>
     have hN := hn _ _ hy hl (Or.inl (by rw [ht]; simp))
     exact ⟨hn, fun _ _ => by

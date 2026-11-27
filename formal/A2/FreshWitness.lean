@@ -294,6 +294,7 @@ theorem at_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {i : Expr} {E : Ent
     cases f
     · rfl
     · exact absurd (hf rfl).1 hs
+  | atIdx => rfl
 
 /-- **An element of a borrowed parameter is never fresh.** -/
 theorem at_rootb_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {i : Expr} {E Ey : Entry}

@@ -176,6 +176,11 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F V : List Var} {r : Rhs} {E : En
     by_cases hlt : n < es.length
     · exact ⟨_, EvalR.at hlt hvec hn⟩
     · exact ⟨_, EvalR.atOOB hvec hn (by omega)⟩
+  | @atIdx _ n _ _ hy hl ht _ =>
+    obtain ⟨c, d, es, hvec, _⟩ := hi.vec_node hy hl ht
+    by_cases hlt : n < es.length
+    · exact ⟨_, EvalR.at hlt hvec Eval.lit⟩
+    · exact ⟨_, EvalR.atOOB hvec Eval.lit (by omega)⟩
   | view hy hl ht _ =>
     obtain ⟨c, d, es, hvec, _⟩ := hi.vec_node hy hl ht
     exact ⟨_, EvalR.view hvec⟩
