@@ -134,9 +134,20 @@ jobs:
       - name: Install LLVM/clang
         run: ./tools/install-llvm.ps1
         shell: pwsh
+      - name: Build the toolchain
+        run: call build.bat --no-tests
+        shell: cmd
+      - name: Build nurl-cert
+        shell: cmd
+        run: |
+          set NURL_STDLIB=%GITHUB_WORKSPACE%\
+          cd packages\nurl-cert
+          call ..\..\nurl.bat src\main.nu ..\..\build\nurl-cert
       - name: Install Lean (the release formal/lean-toolchain names, pinned by content)
         # As the Linux job, the Windows archive: GitHub's digest for
         # lean-4.35.0-windows.zip. Bumping lean-toolchain means bumping it.
+        # After the toolchain's build: the archive's bin/ has a clang of its
+        # own, which build.bat must not pick up (it lacks mingw's headers).
         shell: bash
         env:
           LEAN_VERSION: "4.35.0"
@@ -157,15 +168,6 @@ jobs:
         working-directory: formal
         shell: bash
         run: lake build C.Cert C.Cert3 C.Elab
-      - name: Build the toolchain
-        run: call build.bat --no-tests
-        shell: cmd
-      - name: Build nurl-cert
-        shell: cmd
-        run: |
-          set NURL_STDLIB=%GITHUB_WORKSPACE%\
-          cd packages\nurl-cert
-          call ..\..\nurl.bat src\main.nu ..\..\build\nurl-cert
       - name: Certify and verify one program of each kind
         shell: bash
         run: |
