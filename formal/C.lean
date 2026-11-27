@@ -21,6 +21,7 @@ import C.DedupWitness
 import C.Cert
 import C.Cert3
 import C.Elab
+import C.Complete
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
@@ -46,6 +47,13 @@ boolean (`certOK2B`), and A2's memory safety and leak freedom for it
 program's (`C/Cert3.lean`, AGORA-1020): `certOK3B` adds A3's conditions
 (the spawned functions, no module global), and `cert3_safe`, `cert3_race`
 and `cert3_leak` give A3's claim on every interleaving from the entry.
+C15, conditional certificates (`C/Complete.lean`, AGORA-1015): a program
+whose translation leaves functions out holds a stub at each (its signature,
+callees and `hasThru`); `certOK2BA` checks the rest, and `cert_safe_cond`,
+`cert_leak_end_cond` and `cert_leak_panic_cond` give A2's claims for every
+completion in which the assumed functions are well-typed (`StmtT.complete`:
+typing over the stubs is typing over any completion); `cond_witness_safe`
+shows the hypotheses hold for a real program.
 `C/Elab.lean` (AGORA-1029): the core IR as words (`C.Elab.IR`) and its
 reader, in the kernel, the first part of building the term inside it;
 step 2, `C.Elab.elabIR`: the term of a scalar program built from those
