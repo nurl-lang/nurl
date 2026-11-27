@@ -18,9 +18,22 @@ $ `stdlib/ext/env.nu`
     ^ out
 }
 
+// Is `path` absolute: `/…`, or on Windows a drive's `X:/…` / `X:\…` or a
+// share's `\\…`?
+@ nc_is_abs s path → b {
+    : i c0 ( nurl_str_get path 0 )
+    ? | == c0 47 == c0 92 { ^ T } {}
+    : b letter | & >= c0 65 <= c0 90 & >= c0 97 <= c0 122
+    ? & letter == ( nurl_str_get path 1 ) 58 {
+        : i c2 ( nurl_str_get path 2 )
+        ^ | == c2 47 == c2 92
+    } {}
+    ^ F
+}
+
 // `path` made absolute against the working directory.
 @ nc_abs s path → String {
-    ? == 47 ( nurl_str_get path 0 ) { ^ ( string_from path ) } {}
+    ? ( nc_is_abs path ) { ^ ( string_from path ) } {}
     ^ ?? ( env_cwd ) {
         T cwd → ( nc_join ( string_data cwd ) path )
         F _ → ( string_from path )

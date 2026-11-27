@@ -99272,6 +99272,10 @@ unsafe @ emit_multiversion s fn_ir s lname s ret_ll s params i crypto i slvl →
 
 & `c` @ nurl_print_buf_at i off → i
 
+// stdout and stderr untranslated from here on (runtime_core.c): see main,
+// for the outputs a program reads byte for byte.
+& `c` @ nurl_stdio_binary → v
+
 // The program's reference graph, collected while scan_fn_sigs walks every
 // file (0 when lazy compilation cannot run): a function's name → the
 // identifiers its body spells, `__roots__` → the functions that compile
@@ -124742,6 +124746,11 @@ unsafe @ main → i {
     ? | != path_count 1 == 0 ( nurl_str_len path )
     { ( nurl_eprintln `usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch | --cpu-dispatch | --target=ARCH] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--max-nesting=N | --max-nesting-fixed=N] [--] <file.nu>` ) ^ 1 }
     {}
+    // A program reads these outputs byte for byte (nurl-cert: the source
+    // records and their lengths, the core IR, the LLVM IR and the unsafe
+    // report, each hashed): they go out as written on every platform, a
+    // `\n` as one byte where Windows' C runtime would write two (AGORA-1031).
+    ? | | != g_list_sources 0 != g_core_on 0 != g_unsafe_report 0 { ( nurl_stdio_binary ) } {}
     ? & != 0 ( nurl_str_len g_coverage_notes ) == 0 ( nurl_str_len g_coverage_prefix ) {
         ( nurl_eprintln `nurlc: --coverage-notes requires --coverage=PREFIX` ) ^ 2
     } {}

@@ -17,7 +17,10 @@ on:
       - 'packages/nurl-cert/**'
       - 'tools/ncore/**'
       - 'compiler/nurlc.nu'
+      - 'stdlib/runtime_core.c'
       - 'nurl.sh'
+      - 'nurl.bat'
+      - 'build.bat'
       - 'docs/dev/certificate.schema.json'
       - '.github/workflows/certify.yml'
   pull_request:
@@ -27,7 +30,10 @@ on:
       - 'packages/nurl-cert/**'
       - 'tools/ncore/**'
       - 'compiler/nurlc.nu'
+      - 'stdlib/runtime_core.c'
       - 'nurl.sh'
+      - 'nurl.bat'
+      - 'build.bat'
       - 'docs/dev/certificate.schema.json'
       - '.github/workflows/certify.yml'
   workflow_dispatch:
@@ -114,3 +120,67 @@ jobs:
           path: build/nurl-cert-self.cert
           retention-days: 30
           if-no-files-found: error
+
+  certify-windows:
+    # The same chain on Windows (AGORA-1031): nurlc's records and core IR
+    # are byte for byte the same as on Linux, Lean runs natively, and a
+    # bundle made here verifies. A few programs, one of each verdict: the
+    # whole corpus runs on Linux above.
+    name: certify on Windows (accepted, refused, threads)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM/clang
+        run: ./tools/install-llvm.ps1
+        shell: pwsh
+      - name: Install Lean (the release formal/lean-toolchain names, pinned by content)
+        # As the Linux job, the Windows archive: GitHub's digest for
+        # lean-4.35.0-windows.zip. Bumping lean-toolchain means bumping it.
+        shell: bash
+        env:
+          LEAN_VERSION: "4.35.0"
+          LEAN_SHA256: "5fc033e93e1a7bc59c5ebf311103d2c9cd18d4b3eddda4ffa3414e8adb0ef79e"
+        run: |
+          want="leanprover/lean4:v${LEAN_VERSION}"
+          have="$(tr -d '[:space:]' < formal/lean-toolchain)"
+          if [ "$have" != "$want" ]; then
+            echo "formal/lean-toolchain says $have; this step pins $want: update LEAN_VERSION and LEAN_SHA256" >&2
+            exit 1
+          fi
+          curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/lean.zip" \
+            "https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-windows.zip"
+          echo "${LEAN_SHA256}  $RUNNER_TEMP/lean.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/lean.zip" -d "$RUNNER_TEMP/lean"
+          echo "$(cygpath -w "$RUNNER_TEMP/lean/lean-${LEAN_VERSION}-windows/bin")" >> "$GITHUB_PATH"
+      - name: Build the checker's modules
+        working-directory: formal
+        shell: bash
+        run: lake build C.Cert C.Cert3 C.Elab
+      - name: Build the toolchain
+        run: call build.bat --no-tests
+        shell: cmd
+      - name: Build nurl-cert
+        shell: cmd
+        run: |
+          set NURL_STDLIB=%GITHUB_WORKSPACE%\
+          cd packages\nurl-cert
+          call ..\..\nurl.bat src\main.nu ..\..\build\nurl-cert
+      - name: Certify and verify one program of each kind
+        shell: bash
+        run: |
+          export NURL_STDLIB="$(cygpath -m "$GITHUB_WORKSPACE")"
+          root="$NURL_STDLIB"
+          out="$root/build/wincert"
+          mkdir -p "$out"
+          fail=0
+          for want in "vec_push_len 0" "use_after_move_refused 3" "thread_spawned_with_a_number_capture 0"; do
+            set -- $want
+            rc=0
+            build/nurl-cert.exe certify "tools/ncore/certify/$1.nu" --out "$out/$1.cert" \
+              --nurlc "$root/build/nurlc.exe" --formal "$root/formal" || rc=$?
+            if [ "$rc" != "$2" ]; then echo "FAIL: $1: certify exit $rc, expected $2"; fail=1; continue; fi
+            build/nurl-cert.exe verify "$out/$1.cert" --formal "$root/formal" > "$out/$1.verify" 2>&1 \
+              || { echo "FAIL: $1: verify"; cat "$out/$1.verify"; fail=1; }
+          done
+          exit $fail

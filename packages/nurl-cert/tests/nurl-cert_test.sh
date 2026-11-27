@@ -41,6 +41,15 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$ROOT"
 export NURL_STDLIB="$ROOT"
 NURLC="$ROOT/build/nurlc"
+# Windows (Git Bash): the driver is nurl.bat and a program is <name>.exe
+# (AGORA-1031); elsewhere nurl.sh and <name>.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WIN=1; EXE=.exe ;; *) WIN=0; EXE= ;; esac
+# build_prog SRC OUT [driver options…]: OUT$EXE, built by the repository's driver.
+build_prog() {
+    src="$1"; dst="$2"; shift 2
+    if [ "$WIN" = 1 ]; then cmd //c "$(cygpath -w "$ROOT/nurl.bat")" "$@" "$(cygpath -w "$src")" "$(cygpath -w "$dst")"
+    else "$ROOT/nurl.sh" "$@" "$src" "$dst"; fi
+}
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fail=0
@@ -52,7 +61,7 @@ if [ -n "${NURL_CERT:-}" ]; then
     CERT="$NURL_CERT"
 else
     CERT="$ROOT/build/nurl-cert"
-    ( cd packages/nurl-cert && "$ROOT/nurl.sh" -O0 src/main.nu "$CERT" ) > "$TMP/build.log" 2>&1 \
+    ( cd packages/nurl-cert && build_prog src/main.nu "$CERT" -O0 ) > "$TMP/build.log" 2>&1 \
         || { cat "$TMP/build.log"; echo "FAIL: nurl-cert did not build"; exit 1; }
 fi
 command -v lake > /dev/null || { echo "FAIL: lake is not on PATH"; exit 1; }
@@ -257,9 +266,9 @@ echo "== 2. tampering"
 # Strings)
 P="$TMP/t"; mkdir -p "$P"
 cp packages/nurl-cert/tests/outside_elab.nu "$P/prog.nu"
-"$ROOT/nurl.sh" "$P/prog.nu" "$P/prog" > /dev/null 2>&1 || bad "the program builds"
-cp "$P/prog" "$P/other"; printf 'x' >> "$P/other"
-"$C" certify "$P/prog.nu" "${CA[@]}" --binary "$P/prog" > /dev/null 2>&1 || bad "certify the tamper program"
+build_prog "$P/prog.nu" "$P/prog" > /dev/null 2>&1 || bad "the program builds"
+cp "$P/prog$EXE" "$P/other"; printf 'x' >> "$P/other"
+"$C" certify "$P/prog.nu" "${CA[@]}" --binary "$P/prog$EXE" > /dev/null 2>&1 || bad "certify the tamper program"
 B="$P/prog.cert"
 if [ -e "$B/Claims.lean" ] && [ ! -e "$B/Elab.lean" ]; then ok "the tamper program (outside the subset) is accepted, with no Elab.lean"
 else bad "the tamper program (outside the subset) is accepted, with no Elab.lean"; fi
@@ -273,7 +282,7 @@ expect_fail() {
     else bad "$name (verify rc $rc; expected a FAIL naming: $want)"; printf '%s\n' "$out" | sed 's/^/        /'; fi
 }
 fresh
-if "$C" verify "$P/w" --formal "$ROOT/formal" --binary "$P/prog" > "$TMP/v.out" 2>&1; then ok "a fresh bundle verifies"
+if "$C" verify "$P/w" --formal "$ROOT/formal" --binary "$P/prog$EXE" > "$TMP/v.out" 2>&1; then ok "a fresh bundle verifies"
 else bad "a fresh bundle verifies"; cat "$TMP/v.out"; fi
 
 fresh; printf ' ' >> "$P/prog.nu"
@@ -377,12 +386,16 @@ if [ "$nu" = 1 ] && grep -q 'uns.nu:2 f' "$P/uns.cert/manifest.json"; then ok "t
 else bad "the unsafe report: one row per unsafe function, none from source text ($nu rows)"; fi
 
 # nurlc lists one file per line, or stops.
+# (Windows file names cannot hold a newline: nothing to list there)
+if [ "$WIN" = 1 ]; then echo "  SKIP  a source path with a newline stops --list-sources: no such path on Windows"
+else
 mkdir -p "$P/nl"; nlf="$P/nl/a
 b.nu"
 cp "$P/prog.nu" "$nlf"
 if out=$("$NURLC" --emit-core --list-sources=t "$nlf" 2>&1 >/dev/null); then bad "a source path with a newline stops --list-sources"
 else
     case "$out" in *"holds a newline"*) ok "a source path with a newline stops --list-sources" ;; *) bad "a source path with a newline stops --list-sources ($out)" ;; esac
+fi
 fi
 
 # The term swapped for another program's, every hash made to agree: a

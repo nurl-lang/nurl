@@ -976,6 +976,28 @@ void nurl_print_bytes(const char *p, long long n) {
     NURL_IO_UNLOCK();
 }
 
+/* stdout and stderr untranslated from here on: a byte written is the byte
+ * that goes out. Windows' C runtime opens both in text mode and writes
+ * each '\n' as "\r\n", so output that a program reads byte for byte (a
+ * record that gives its own length, a file whose hash is recorded:
+ * nurlc's --list-sources and --emit-core, AGORA-1031) would arrive as
+ * other bytes. nurl_read_stdin does the same for stdin's side, for one
+ * read. Elsewhere nothing is translated, and this does nothing. What is
+ * pending is flushed first, so bytes written before it keep their mode. */
+void nurl_stdio_binary(void) {
+#ifdef _WIN32
+    NURL_IO_LOCK();
+    fflush(stdout);
+    fflush(stderr);
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1 || _setmode(_fileno(stderr), _O_BINARY) == -1) {
+        NURL_IO_UNLOCK();
+        fprintf(stderr, "nurl: cannot put stdout and stderr in binary mode\n");
+        exit(1);
+    }
+    NURL_IO_UNLOCK();
+#endif
+}
+
 /* Print with a trailing newline. Routed through nurl_print so the
  * output-capture buffer (nurl_print_buf_*) sees it too. */
 void nurl_println(const char *s)  { NURL_IO_LOCK(); nurl__print_locked(s); nurl__print_locked("\n"); NURL_IO_UNLOCK(); }

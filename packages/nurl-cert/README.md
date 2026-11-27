@@ -80,3 +80,6 @@ Needs:
 - `formal/` built (`cd formal && lake build C.Cert C.Cert3 C.Elab`).
 
 `verify` needs only Lean.
+
+On Windows, both run from Git Bash or cmd, with Lean's Windows release
+on `PATH` and `formal/` built by it.

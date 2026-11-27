@@ -27,6 +27,10 @@
   - The skip before Lean (`ELAB_CTORS`) takes `.getl .send`. It is still exact.
   - Certify takes 80.9 s over the 62 certify programs against 76.5 s before (+5.7 %, best of 3 alternated runs against step 9): the 4 thread programs new to the subset take +0.85 to +1.41 s each for their Elab.lean part (2 of them the checker refuses, and spend it too), the other 58 the same (+0.34 s in all, within noise). The largest peak memory is 2487 MiB against 2513 MiB; a thread program's peak is +18 to +70 MiB. This is the price of the kernel building the 4 programs' terms: every certify bundle is out of the translator's trust now.
 
+### Fixed
+
+- **Windows** (AGORA-1031): certify and verify run there. A path like `C:/…` or `\\host\share` is absolute (it was joined to the working directory), and a `--nurlc` or `--lean` path with a backslash is a path, not a command to look up. nurlc writes its records and core IR untranslated, so the bytes it lists are the file's bytes.
+
 ### Changed
 
 - **Breaking: a bundle with `Elab.lean` has no `translation` ledger row** (AGORA-1029 step 11). In its place are `core-ir-words` (nurlc's core IR and its words) and one row per encoding of `C.Elab.elabIR`'s the term uses (`enc-numbers`, `enc-raw-text`, `enc-shapes`, `enc-destructors`, `enc-closures`, `enc-threads`, `enc-channels`, `enc-summaries`), each with its design note (docs/dev/TRANSLATION_TRUST.md, "The encodings"); each claim's premises name the same rows. Certify and verify read which rows off Program.lean's constructors. A bundle without `Elab.lean` keeps the `translation` row. Migration: a 0.4.0 bundle with `Elab.lean` made before this change does not verify (its ledger and premises are the old ones); certify the program again.

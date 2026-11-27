@@ -95,10 +95,11 @@ $ `words.nu`
     ^ ( nc_abs ( string_data v ) )
 }
 
-// A command found on PATH stays a bare name; one with a slash is a path.
+// A command found on PATH stays a bare name; one with a slash (or, on
+// Windows, a backslash) is a path.
 @ __opt_cmd ArgParser p s name s env s dflt → String {
     : String v ( __opt p name env dflt )
-    ? ( string_contains v `/` ) { ^ ( nc_abs ( string_data v ) ) } {}
+    ? | ( string_contains v `/` ) ( string_contains v `\\` ) { ^ ( nc_abs ( string_data v ) ) } {}
     ^ v
 }
 
