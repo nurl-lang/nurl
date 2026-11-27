@@ -164,13 +164,15 @@ prog.cert/
   - `def P : Prog := [fn0, …]`;
   - `def entry : Stmt := .letcall 0 <k> [] .skip`;
   - for a threaded program, `def spawns : List Nat := […]`;
-  - for a conditional certificate (AGORA-1033), `def assumed : List Nat := […]`
+  - for a conditional certificate (AGORA-1033, AGORA-1035), `def assumed : List Nat := […]`
     (the indices of the assumed functions, each holding a stub `.seq s .panic`
     whose signature, callees and `hasThru` come from the core IR; `Claims.lean`
-    imports `C.Complete`, decides `C.certOK2BA P assumed entry 1`, and states
-    `M.safe` and `M.leak` over every completion `P'` satisfying `C.Completes`
-    and `C.AssumedOK`; each assumed function has a trust-ledger row
-    `assumed-fn:<name>` and `M.safe`/`M.leak` take status `assumed`);
+    imports `C.Complete`, decides `C.certOK2BA P assumed entry 1` — or
+    `C.certOK3BA P spawns assumed entry 1` for a threaded program — and states
+    `M.safe` and `M.leak` (and `M.race` for a threaded program) over every
+    completion `P'` satisfying `C.Completes` and `C.AssumedOK` / `C.AssumedOK3`;
+    each assumed function has a trust-ledger row `assumed-fn:<name>` and the
+    memory-safety claims take status `assumed`);
   - terms built from constructors (`.name`), numbers, `true`/`false`, the
     fields of `Fn` and the punctuation `( ) [ ] { } , :=`.
 

@@ -905,9 +905,85 @@ if ! "$C" verify "$CC/t5.cert" --formal "$ROOT/formal" > "$CC/t5.out" 2>&1; then
     ok "conditional tamper: M.safe upgraded from assumed to proved fails verify"
 else bad "conditional tamper: M.safe upgraded from assumed to proved should fail verify"; fi
 
+echo "== 3d. A3 (threaded) conditional certificates (AGORA-1035)"
+cat > "$CC/tcond.nu" <<'EOF3'
+$ `stdlib/core/io.nu`
+$ `stdlib/std/thread.nu`
+
+@ log_msg → v { ( nurl_print `hi\n` ) }
+
+@ main → i {
+    ( log_msg )
+    : i n 41
+    : ( @ v ) body \ → v { : i m + n 1 }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    ^ ?? r { T t → ( thread_join t ) F _ → 1 }
+}
+EOF3
+"$C" certify "$CC/tcond.nu" "${CA[@]}" --out "$CC/tcond.cert" > "$CC/tcert.out" 2>&1; crc=$?
+"$C" verify "$CC/tcond.cert" --formal "$ROOT/formal" > "$CC/tver.out" 2>&1; vrc=$?
+"$C" verify "$CC/tcond.cert" --formal "$ROOT/formal" --rebuild --nurlc "$NURLC" --stdlib "$ROOT" > "$CC/treb.out" 2>&1; rrc=$?
+if [ "$crc" = 0 ] && [ "$vrc" = 0 ] && [ "$rrc" = 0 ] \
+    && grep -q "M.safe assumed" "$CC/tcert.out" && grep -q "M.leak assumed" "$CC/tcert.out" && grep -q "M.race assumed" "$CC/tcert.out" \
+    && grep -q "^def spawns : List Nat := \[" "$CC/tcond.cert/Program.lean" \
+    && grep -q "^def assumed : List Nat := \[" "$CC/tcond.cert/Program.lean" \
+    && grep -q "C.certOK3BA P spawns assumed entry 1" "$CC/tcond.cert/Claims.lean" \
+    && python3 - "$CC/tcond.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+cl = {c["id"]: c for c in m["claims"]}
+lr = {r["id"]: r for r in m["ledger"]}
+row = lr.get("assumed-fn:log_msg")
+ok = (m["program"]["verdict"] == "accepted"
+      and cl["M.safe"]["status"] == "assumed" and cl["M.leak"]["status"] == "assumed" and cl["M.race"]["status"] == "assumed"
+      and all("assumed-fn:log_msg" in cl[k]["premises"] for k in ("M.safe", "M.leak", "M.race"))
+      and row is not None and "globsAt" in row["what"] and set(row["claims"]) == {"M.safe", "M.leak", "M.race"})
+sys.exit(0 if ok else 1)
+EOF3
+then ok "A3 conditional certificate: M.safe/M.leak/M.race assumed, verifies (+ --rebuild)"
+else bad "A3 conditional certificate: accepted and verifies (crc=$crc vrc=$vrc rrc=$rrc)"; cat "$CC/tcert.out" "$CC/tver.out" "$CC/treb.out" | head -40; fi
+
+cat > "$CC/tcond_refused.nu" <<'EOF3'
+$ `stdlib/core/io.nu`
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/thread.nu`
+
+@ log_msg → v { ( nurl_print `hi\n` ) }
+
+@ main → i {
+    ( log_msg )
+    : ~ ( Vec i ) v ( vec_new [i] )
+    ( vec_push [i] v 1 )
+    ( vec_free [i] v )
+    : i bad ( vec_len [i] v )
+    : ( @ v ) body \ → v { : i m + bad 1 }
+    : !Thread ThreadErr r ( thread_spawn_owned body )
+    ^ ?? r { T t → ( thread_join t ) F _ → 1 }
+}
+EOF3
+"$C" certify "$CC/tcond_refused.nu" "${CA[@]}" --out "$CC/tcond_refused.cert" > "$CC/tref.out" 2>&1; crc=$?
+"$C" verify "$CC/tcond_refused.cert" --formal "$ROOT/formal" > "$CC/tref_v.out" 2>&1; vrc=$?
+if [ "$crc" = 3 ] && [ "$vrc" = 0 ] && [ ! -e "$CC/tcond_refused.cert/Claims.lean" ] \
+    && grep -q "C.certOK3BA is false" "$CC/tref.out"; then
+    ok "A3 conditional certificate with a buggy non-assumed function stays refused"
+else bad "A3 conditional certificate with a buggy non-assumed function stays refused (crc=$crc vrc=$vrc)"; cat "$CC/tref.out" "$CC/tref_v.out" | head -20; fi
+
+# A3 tamper: M.race upgraded from assumed to proved fails verify.
+cp -r "$CC/tcond.cert" "$CC/tt1.cert"
+python3 - "$CC/tt1.cert/manifest.json" <<'EOF3'
+import json, sys
+mp = sys.argv[1]
+m = json.load(open(mp))
+m["claims"][2]["status"] = "proved"
+json.dump(m, open(mp, "w"), indent=2)
+EOF3
+if ! "$C" verify "$CC/tt1.cert" --formal "$ROOT/formal" > "$CC/tt1.out" 2>&1; then
+    ok "A3 conditional tamper: M.race upgraded from assumed to proved fails verify"
+else bad "A3 conditional tamper: M.race upgraded from assumed to proved should fail verify"; fi
+
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then
-    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$CC/cond.cert/manifest.json" "$CC/cond_refused.cert/manifest.json" <<'EOF2'
+    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$CC/cond.cert/manifest.json" "$CC/cond_refused.cert/manifest.json" "$CC/tcond.cert/manifest.json" "$CC/tcond_refused.cert/manifest.json" <<'EOF2'
 import json, sys, jsonschema
 schema = json.load(open(sys.argv[1]))
 bad = 0

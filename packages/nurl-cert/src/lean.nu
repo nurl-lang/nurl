@@ -426,24 +426,33 @@ $ `stdlib/ext/json.nu`
 @ cert_lean_refutes s lean s formal s bundle s work b threads b cond → b {
     : String ptext ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → { ^ F } }
     : String o ( string_new )
-    ? threads { ( string_push_str o `import C.Cert3
-` ) } {}
-    ? cond { ( string_push_str o `import C.Complete
-` ) } {}
-    ( string_push_str o ( string_data ptext ) )
-    ? threads {
-        ( string_push_str o `
-theorem refuted : C.certOK3B P spawns entry 1 = false := by decide +kernel
+    ? cond {
+        ( string_push_str o `import C.Complete
 ` )
     } {
-        ? cond {
+        ? threads { ( string_push_str o `import C.Cert3
+` ) } {}
+    }
+    ( string_push_str o ( string_data ptext ) )
+    ? & threads cond {
+        ( string_push_str o `
+theorem refuted : C.certOK3BA P spawns assumed entry 1 = false := by decide +kernel
+` )
+    } {
+        ? threads {
             ( string_push_str o `
-theorem refuted : C.certOK2BA P assumed entry 1 = false := by decide +kernel
+theorem refuted : C.certOK3B P spawns entry 1 = false := by decide +kernel
 ` )
         } {
-            ( string_push_str o `
+            ? cond {
+                ( string_push_str o `
+theorem refuted : C.certOK2BA P assumed entry 1 = false := by decide +kernel
+` )
+            } {
+                ( string_push_str o `
 theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
 ` )
+            }
         }
     }
     : String file ( nc_join work `Refute.lean` )
