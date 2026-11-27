@@ -1,18 +1,23 @@
 # Changelog
 
-## [0.3.1] — unreleased
+## [0.4.0] — unreleased
 
 ### Added
 
 - More bundles get `Elab.lean` (AGORA-1029 step 6): `C.Elab.elabIR` now covers closures over numbers and buffers of numbers. That is a closure's code, its literals (the captures by value packed into the environment, the others by name), calls through a closure value (`.callc` of its type's interface), closures handed to and back from functions, and `nurl_println_int`. Of the 62 certify programs, 45 are in the subset (32 before), all 13 closure programs among them, and the 26 the checker accepts get `Cert.elab` (18 before).
-  - The skip before Lean (`ELAB_CTORS`) takes the new constructors (`.callc .pack .pair .fst .snd .prod .fn`). A term that holds one of `ELAB_CLO_CTORS` (`callc pack pair fst snd prod`) but no `.fn` is skipped too: `elabIR` never builds one, and a struct program's term is one.
+  - The skip before Lean (`ELAB_CTORS`) takes the new constructors (`.callc .pack .pair .fst .snd .prod .fn`). A term that holds one of `ELAB_CLO_CTORS` (`callc pack pair fst snd prod`) but no `.fn` is skipped too: `elabIR` never builds one (step 7 narrows the list to `callc pack`, below).
   - Certify takes 77.1 s over the 62 certify programs against 77.8 s before (−0.9 %; −4.6 % in an earlier run). The 13 closure programs new to the subset take +0.19 to +0.63 s each for their Elab.lean part (5 of them the checker refuses, and spend it too); the other 49 are 5.6 s faster in all, the 18 with Elab.lean among them 3.3 s, since the words are numbers now. The largest peak memory is about the same (2586 MiB against 2581 MiB); a new program's peak is +15 to +71 MiB, and the sum of the peaks is −1.1 %.
+
+- More bundles get `Elab.lean` (AGORA-1029 step 7): `C.Elab.elabIR` now covers structs and options of the subset's types. That is a struct's literal (its fields nested in pairs), a field read through the pairs where an operand or a library call's argument names it, a number field's value, an option's literal (`.inl`/`.inr`), its match (`.isl`) and its payload (`.getr`). No struct with a destructor. Of the 62 certify programs, 51 are in the subset (45 before), all 6 struct and option programs among them, and the 30 the checker accepts get `Cert.elab` (26 before). Outside stay the destructor, channel and thread programs.
+  - The skip before Lean (`ELAB_CTORS`) takes the new constructors (`.inl .inr .getr .isl .sum`). `ELAB_CLO_CTORS` is `callc pack` now: `.pair .fst .snd .prod` are a struct's too, which `elabIR` builds. It is still exact.
+  - `elabIR` costs the kernel less, most in a long function. A drop's check reads the lines after it as bits of one number (`maskAfter`), `retSplit` runs once a list rather than once a statement, the literals' temporaries are set aside and given back rather than counted and cut, and a variable's `v` line is found from the end: `joins_each_freeing_a_different_vec`'s certify takes 18.7 s against 19.9 s.
+  - Certify takes 80.0 s over the 62 certify programs against 80.2 s before (−0.2 %; the sums of the per-program bests 77.7 s against 77.7 s). The 6 programs new to the subset take +0.11 to +0.39 s each for their Elab.lean part (2 of them the checker refuses, and spend it too); the other 56 are 1.55 s faster in all, most of it `joins…`. The largest peak memory is the same (2585 MiB); a new program's peak is +22 to +36 MiB, and the sum of the peaks is +0.2 %.
 
 ### Changed
 
 - **`nurl-cert words` prints each word as a number**, not a string literal: `nat_lit 0x1`, then the word's bytes from the last to the first, two hex digits each. `C.Elab.wordOf` reads it back into the bytes (`wordOf_encB` proves it inverts the encoding), and `elabIR` compares the words with its keywords as numbers. In Lean 4.35 the kernel builds a string literal's bytes one `push` at a time, which is quadratic in the word's length: the file paths of the `fn` lines cost ≈ 130 ms each. The file is ASCII and needs no escaping, so a core IR that is not well-formed UTF-8 now has words too; one with a NUL byte still has none.
 - **`nurl-cert words` leaves out a `sum` line outside every function whose name no other word holds.** `elabIR` looks a summary up only by a function's name, a callee's name, or the function a `let … call f` calls. A `sum` line inside a function is a statement of its body, which `elabIR` refuses, so it is kept. `tools/ncore/elab_parity.sh` checks that `elabIR` answers the same on the full words, selftest 2e checks both kinds of line, and translate_test 1c checks the rule against a Python reading of it.
-- **Breaking:** Elab.lean's words are another text, so a 0.3.0 bundle with `Elab.lean` does not verify with 0.3.1 (`verify` makes Elab.lean again from `Program.core` and compares it byte for byte). Migration: certify the program again. A bundle without `Elab.lean` verifies as before.
+- **Breaking:** Elab.lean's words are another text, so a 0.3.0 bundle with `Elab.lean` does not verify with 0.4.0 (`verify` makes Elab.lean again from `Program.core` and compares it byte for byte). Migration: certify the program again. A bundle without `Elab.lean` verifies as before.
 
 ## [0.3.0] — 2026-11-26
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # elab_parity.sh: the Lean translation of the subset of numbers, buffers of
-# numbers, views and closures (`C.Elab.elabIR`, formal/C/Elab.lean,
-# AGORA-1029 steps 2, 4, 5 and 6)
+# numbers, views, closures, structs and options (`C.Elab.elabIR`,
+# formal/C/Elab.lean, AGORA-1029 steps 2, 4, 5, 6 and 7)
 # against the NURL translator (`nurl-cert translate`,
 # packages/nurl-cert/src/tolean.nu), over every certify program, every hole
 # probe, and the programs of tools/ncore/elab/ (written for this test: each
@@ -76,7 +76,9 @@ EXPECT_CERTIFY="cursor_over_a_vec int_recursion_early_return joins_each_freeing_
     clo_returned_over_a_parameter_then_called_after_its_free_refused
     clo_returned_owning_a_vec_capture clo_returned_with_a_number_capture
     clo_string_capture_rebound_then_called_refused clo_string_captured_and_read_after
-    clo_two_captures_passed_to_a_function"
+    clo_two_captures_passed_to_a_function
+    struct_field_handed_to_a_reader struct_field_read_after_the_struct_moved_refused struct_fields_read
+    vec_moved_into_a_struct vec_moved_into_a_struct_then_pushed_refused option_built_and_matched"
 
 # (the list is copied aside first: it may be the work directory's own
 # progs.txt from an earlier run)
@@ -133,6 +135,7 @@ def e : Expr → String
   | .any => ".any"
   | .len x => s!"(.len {x})"
   | .slen x => s!"(.slen {x})"
+  | .isl x => s!"(.isl {x})"
   | _ => "?expr"
 def r : Rhs → String
   | .expr x => s!".expr {e x}"
@@ -145,6 +148,9 @@ def r : Rhs → String
   | .pair y z => s!".pair {y} {z}"
   | .fst y => s!".fst {y}"
   | .snd y => s!".snd {y}"
+  | .inl y t => s!".inl {y} {repr t}"
+  | .inr t y => s!".inr {repr t} {y}"
+  | .getr y => s!".getr {y}"
   | .pack fs te ms y cs => s!".pack {fs} {repr te} {ms} {y} {repr cs}"
   | _ => "?rhs"
 def ed : Edit → String

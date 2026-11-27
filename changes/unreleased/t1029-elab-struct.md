@@ -1,0 +1,12 @@
+### Added
+
+- **The kernel builds the certificate's term for programs with structs and options too** (AGORA-1029 step 7). `C.Elab.elabIR` (`formal/C/Elab.lean`) now also covers structs and options of the subset's types: a struct's literal (its fields nested in pairs), a field read through the pairs where an operand or a library call's argument names it, a number field's value, an option's literal, its match and its payload. A struct with a destructor stays outside.
+  - All 6 struct and option programs of the 62 certify programs are now in the subset (51 in all, 45 before). The 4 the checker accepts get `Elab.lean` and `Cert.elab` (30 bundles, 26 before), so their bundles no longer trust the translator `packages/nurl-cert/src/tolean.nu`.
+  - `elabIR` stays stricter than the translator, never laxer. It makes the translator's checks on structs and options for every variable and result (a struct holding raw text, a closure inside a value, a struct inside itself, an owning field moved out, a literal into a variable of another type, a payload or a match the translator does not translate). It also refuses what the translator takes but nurlc does not print: a struct whose fields' names repeat, a field of a type that is no struct (a `Vec`'s handle), a struct named like a number, a match of more than two arms. Each check has a kernel witness for its refusal and for its well-formed neighbour.
+  - `tools/ncore/elab_parity.sh` finds 0 differences and 0 programs `elabIR` takes but the translator refuses, over 223 programs in the subset (166 before). 16 new fixtures in `tools/ncore/elab/` cover the new rules.
+  - `nurl-cert` 0.4.0: the skip before Lean (`ELAB_CTORS`) takes the new constructors (`.inl .inr .getr .isl .sum`). The closures' skip (`ELAB_CLO_CTORS`) is `.callc .pack` now: struct terms, which hold `.pair .fst .snd .prod`, are asked of Lean.
+
+### Changed
+
+- **`elabIR` costs the kernel less, most in a long function.** A drop's check reads the lines after the drop as bits of one number rather than every mention in the body, a list's `ret` is looked for once rather than at every statement, and the literals' temporaries are set aside rather than counted and cut. `joins_each_freeing_a_different_vec`'s certify takes 18.7 s against 19.9 s.
+- **Cost:** certify takes 80.0 s over the 62 certify programs against 80.2 s before (−0.2 %). The 6 programs new to the subset take +0.11 to +0.39 s each for their Elab.lean part; the other 56 are 1.55 s faster in all. The largest peak memory is the same (2585 MiB), and the sum of the peaks is +0.2 %.

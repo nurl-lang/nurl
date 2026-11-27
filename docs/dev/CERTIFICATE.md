@@ -2,8 +2,8 @@
 
 Status: **S1 and M4 of the certified-programs work** (AGORA-1019; M4,
 the translator in NURL and threaded programs, AGORA-1020; the term checked
-by the kernel for the subset of numbers, buffers of numbers, views and
-closures, AGORA-1029 steps 3 to 6; part of
+by the kernel for the subset of numbers, buffers of numbers, views,
+closures, options and structs, AGORA-1029 steps 3 to 7; part of
 AGORA-1010; spec in the agora notes `spec.program-cert`, `.2`, `.3`).
 Schema **`nurl-cert/1`**, described here and in
 [`certificate.schema.json`](certificate.schema.json).
@@ -168,8 +168,10 @@ prog.cert/
   numbers, raw text viewed by `string_data`, `Vec`s of raw strings; and
   `foreach` and the changes of a `Vec` through a borrow, `vec_clear`,
   `vec_truncate`, `vec_reserve`, `string_push_str`; closures over numbers
-  and buffers of numbers, their literals and calls through them;
-  `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2, 4, 5 and 6). It is a
+  and buffers of numbers, their literals and calls through them; options
+  and structs of those types, their literals, a struct's fields read
+  through its pairs, an option's match; no struct with a destructor;
+  `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2 and 4 to 7). It is a
   pure function of
   Program.core (`cert_elab_lean`, `packages/nurl-cert/src/claims.nu`):
 
@@ -187,7 +189,7 @@ prog.cert/
   (`elab` is a keyword of Lean, hence `«elab»`; Lean prints the name
   `Cert.elab`.)
   - The words are `nurl-cert words` (`packages/nurl-cert/src/words.nu`).
-    Every word is a number (nurl-cert 0.3.1): `nat_lit 0x1`, then the
+    Every word is a number (nurl-cert 0.4.0): `nat_lit 0x1`, then the
     word's bytes from its last to its first, two hex digits each, so
     256^k + Σ bᵢ·256^i for its k bytes. `C.Elab.wordOf` reads it back into
     the bytes (`wordOf_encB`, for every list of bytes), whatever they are:
@@ -197,10 +199,10 @@ prog.cert/
     and a core IR that was not well-formed UTF-8 had none; the numbers
     cost the kernel far less (`docs/dev/TRANSLATION_TRUST.md`, "the words
     as numbers"). A 0.3.0 bundle with Elab.lean does not verify with
-    0.3.1 (`verify` makes Elab.lean again, and it is another file now):
+    0.4.0 (`verify` makes Elab.lean again, and it is another file now):
     certify the program again.
   - A `sum` line outside every function is left out of the words when its
-    name is none of the words of the other lines kept (0.3.1): `elabIR`
+    name is none of the words of the other lines kept (0.4.0): `elabIR`
     looks a summary up only by a function's name, a callee's name or the
     function a `let … call f` calls, all of them words of those lines. A
     `sum` line with no name is kept (the reader refuses it), and so is one
@@ -224,10 +226,12 @@ prog.cert/
     A term with a constructor `elabIR` never builds (the list
     `ELAB_CTORS` in claims.nu, read off formal/C/Elab.lean) cannot equal
     `elabIR`'s, so Lean is not asked: that skip is exact. Neither can a
-    term that holds a closure's constructor (`ELAB_CLO_CTORS`: `.callc
-    .pack .pair .fst .snd .prod`) but no `.fn`: `elabIR`'s terms with one
-    hold an interface's `.fn` too (a struct's term is skipped so). For
-    every other term Lean decides.
+    term that holds `.callc` or `.pack` (`ELAB_CLO_CTORS`) but no `.fn`:
+    `elabIR` builds those only for a variable of a closure type, and every
+    closure type has an interface whose first parameter is a `.fn`. (Until
+    step 7 the list also held `.pair .fst .snd .prod`, which skipped a
+    struct's term; a struct's term is now one `elabIR` builds.) For every
+    other term Lean decides.
   - The bundle keeps Elab.lean when the checker accepts the program, Lean
     exits 0, and `Cert.elab` rests on the standard axioms only. Otherwise
     it is deleted, and the bundle is as before, its term the translator's.
@@ -477,9 +481,14 @@ a program; 5 of them are refused, and spend it too), and prints the words
 as numbers, not string literals (the kernel builds a string literal's
 bytes one `push` at a time, quadratic in its length), and leaves out the
 `sum` lines no other word names: the other 49 are 5.6 s faster, and in
-all certify takes 77.1 s against 77.8 s (−0.9 %). Lean is asked only for a
-term that can be `elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3 to 6
-and "the words as numbers") has the numbers, peak memory included.
+all certify takes 77.1 s against 77.8 s (−0.9 %). Step 7 covers the 6
+struct and option programs, which now each have an Elab.lean part (+0.11
+to +0.39 s a program; 2 of them are refused, and spend it too), and makes
+`elabIR` cheaper (a drop's check read as bits, a list's `ret` looked for
+once): the other 56 are 1.55 s faster, and in all certify takes 80.0 s
+against 80.2 s (−0.2 %). Lean is asked only for a term that can be
+`elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3 to 7 and "the words as
+numbers") has the numbers, peak memory included.
 
 Without `--certify`, nothing changes:
 - `--list-sources=TAG` is off by default;

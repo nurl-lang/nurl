@@ -34,7 +34,8 @@ accepted
   accepted program whose term `elabIR` could build (numbers, raw text,
   Strings, Vecs of numbers and of raw strings, views, slices of Vecs of
   numbers, `foreach` over a Vec of numbers, closures over numbers and
-  buffers of numbers);
+  buffers of numbers, options and structs of those types, read and built
+  field by field, but no struct with a destructor);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
 - `manifest.json`, with:

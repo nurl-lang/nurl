@@ -10,7 +10,7 @@
 // compares.
 //
 // What it prints is Lean data and nothing else: the fixed text around the
-// lists, and each word as a number (0.3.1): `nat_lit 0x1`, then the word's bytes
+// lists, and each word as a number (0.4.0): `nat_lit 0x1`, then the word's bytes
 // from its last to its first, two hex digits each, so 256^k + Σ b_i·256^i
 // for a word of k bytes b_0 … b_(k-1), and `0x1` for an empty word.
 // `C.Elab.wordOf` reads it back into the bytes (`wordOf_encB`: for every
@@ -44,7 +44,7 @@
 // A `sum` line outside every function (where Lean's reader reads it as a
 // summary; inside one it is a statement of the body, which `elabIR`
 // refuses, and is kept) is left out when its name (its second word) is
-// none of the words of the lines kept but those `sum` lines (0.3.1).
+// none of the words of the lines kept but those `sum` lines (0.4.0).
 // `elabIR` looks a summary up only by a function's own name, a callee's
 // name or the function a `let … call f` calls, each a word of a kept line
 // that is not such a `sum` line, and a name's summary is its last `sum`
@@ -376,7 +376,7 @@ $ `util.nu`
 // up to its first NUL (`string_data`), and the bundle hashes the whole
 // file, so a NUL would leave the words short of Program.core; no core IR
 // holds one. Any other byte is printed as its value: the words are numbers,
-// which Lean reads as numbers whatever the bytes (before 0.3.1 they were
+// which Lean reads as numbers whatever the bytes (before 0.4.0 they were
 // string literals, and a byte that is not UTF-8 read back as U+FFFD, so
 // such a core IR had no words).
 @ cert_words_ok String core → b {
