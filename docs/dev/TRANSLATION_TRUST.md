@@ -1384,10 +1384,12 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
     channel program's: `stdlib/std/thread.nu`'s ≈ 62 `ty` lines take ≈ 0.2 s
     of it (the IR with them filtered out: 0.83 s against 1.04 s); the rest
     is spread (`set_option diagnostics true`: `List.rec`, `Bool.rec`,
-    `decide` at the top, and `readVar`'s `getLast?` read again ≈ 2600
-    times, the kernel reducing a function's `v` lines again on every read
-    of its variables). Sharing those reads is a change of how `elabIR`
-    holds what it reads, for every step, not this one's.
+    `decide` at the top; no one definition dominates). Repeated reads are
+    not it: the kernel caches them (ten traversals of every function's
+    variables cost what one does, ≈ 40 ms), so the cost is the number of
+    distinct reductions `elabIR` makes. (A first reading of the
+    diagnostics, that the kernel reduced the `v` lines again on every
+    read, was wrong; step 11 corrects it.)
   - Peak RSS: the largest 2487 against 2513 MiB; a thread program +18 to
     +70 MiB.
   - AGORA-1029 as a whole (each step against the one before): certify time
@@ -1435,6 +1437,6 @@ rests on `core-ir-words` and the per-encoding rows, not on `translation`
   (the full answer; phase D needs it too);
 - the rows that read nurlc's own summaries (`enc-summaries`) removed by
   the engine computing them (AGORA-877);
-- `elabIR` holding what it reads as tables it reads once: the kernel
-  reduces a function's `v` lines again on every read of its variables
-  (step 10's cost).
+- `elabIR`'s kernel cost (0.2–0.3 s a small bundle, ≈ 1 s a thread
+  program's, step 10): fewer distinct reductions, since repeated ones are
+  cached (fewer passes over the IR, cheaper tests of a word).
