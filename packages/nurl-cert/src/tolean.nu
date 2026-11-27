@@ -2530,9 +2530,11 @@ $ `coreir.nu`
     ^ @ !v String { T }
 }
 
-// Fn.__init__: the function's variables, A2's numbering of them, its
-// result and what it lends.
-@ __fn_init TlMod m inout TlSt t i p → !v String {
+// Fn.__init__ (signature part): the function's parameters, A2's numbering
+// of them, its result and what it lends. With `check_locals` F, skips
+// checking local variables' types so stubs can reuse the exact same
+// signature mapping; with T, runs in the exact order of tolean.py.
+@ __fn_sig_init TlMod m inout TlSt t i p b check_locals → !v String {
     \ ( __wellformed m p )
     ? & . m threaded > ( string_len ( vec_at [String] . m serr p ) ) 0 { ^ @ !v String { F ( string_clone ( vec_at [String] . m serr p ) ) } } {}
     : s name ( __name m p )
@@ -2631,16 +2633,19 @@ $ `coreir.nu`
         = . t prms prms
         = . t next + nxt 1
     } {}
-    : ( Vec i ) order ( __ids_order m p )
-    : i no ( vec_len [i] order )
-    : ~ i j 0
-    ~ < j no {
-        : String _l \ ( __lean_ty m t ( __vty m p ( vec_at [i] order j ) ) )
-        = j + j 1
-    }
     // (a parameter with no `v` line has type "": only when "" names a
     // destructor type must every index below np be asked; else the ones
     // with a type)
+    : ~ i j 0
+    ? check_locals {
+        : ( Vec i ) order ( __ids_order m p )
+        : i no ( vec_len [i] order )
+        = j 0
+        ~ < j no {
+            : String _l \ ( __lean_ty m t ( __vty m p ( vec_at [i] order j ) ) )
+            = j + j 1
+        }
+    } {}
     : b dt0 ( __is_dtor m `` )
     : ( Vec i ) pl ( vec_new [i] )
     ? dt0 { = j 0 ~ < j np { ( vec_push [i] pl j ) = j + j 1 } } {
@@ -2717,6 +2722,12 @@ $ `coreir.nu`
     ^ @ !v String { T }
 }
 
+// Fn.__init__: the function's variables, A2's numbering of them, its
+// result and what it lends.
+@ __fn_init TlMod m inout TlSt t i p → !v String {
+    ^ ( __fn_sig_init m t p T )
+}
+
 // mode: parameter `i`'s A2 mode: `sink`, `inout`, a handle the function
 // changes through as its summary says (AGORA-994), or read only.
 @ __mode TlMod m inout TlSt t i i → !String String {
@@ -2731,22 +2742,11 @@ $ `coreir.nu`
     ^ ( __ok ( string_from `.inp` ) )
 }
 
-// Fn.lean: the function as A2's `Fn`.
-@ __lean TlMod m inout TlSt t → !String String {
+// The `params` list of a function (normal or closure), after `__fn_sig_init`.
+@ __fn_params TlMod m inout TlSt t → !String String {
     : i p . t p
-    : ( Vec i ) all ( vec_new [i] )
-    : i nl ( __nl m p )
-    : ~ i j 0
-    ~ < j nl { ( vec_push [i] all j ) = j + j 1 }
-    // (a `void` function may fall off its end: its result is the unit)
-    : String tail ? ( __eq ( __ret m p ) `void` ) ( __f1 `(.assign % (.expr (.lit 0)))` ( string_data ( __ns . t rslot ) ) ) ( string_from `.skip` )
-    : ~ String inner \ ( __stmts m t all 0 nl ( string_data tail ) )
-    // (every literal temporary is bound at the statement that consumes it:
-    // __stmts leaves none)
-    ? > ( vec_len [i] . t lits ) 0 { ^ @ !String String { F ( string_from `internal: a literal temporary bound by no statement` ) } } {}
-    ? . t closure { = inner \ ( __read_caps m t ( string_data inner ) ) } {}
-    : String body ( __f1 `(.block %)` ( string_data inner ) )
     : String params ( string_new )
+    : ~ i j 0
     ? . t closure {
         // the environment (lent, `inp`), then the interface's parameters
         : ( Vec String ) ets ( vec_new [String] )
@@ -2787,14 +2787,38 @@ $ `coreir.nu`
             = j + j 1
         }
     }
+    ^ ( __ok params )
+}
+
+@ __fn_lends TlSt t → String {
     : String lends ( string_new )
     : i nle ( vec_len [String] . t lends )
-    = j 0
+    : ~ i j 0
     ~ < j nle {
         ? > j 0 { ( string_push_str lends `, ` ) } {}
         ( string_push_str lends ( string_data ( vec_at [String] . t lends j ) ) )
         = j + j 1
     }
+    ^ lends
+}
+
+// Fn.lean: the function as A2's `Fn`.
+@ __lean TlMod m inout TlSt t → !String String {
+    : i p . t p
+    : ( Vec i ) all ( vec_new [i] )
+    : i nl ( __nl m p )
+    : ~ i j 0
+    ~ < j nl { ( vec_push [i] all j ) = j + j 1 }
+    // (a `void` function may fall off its end: its result is the unit)
+    : String tail ? ( __eq ( __ret m p ) `void` ) ( __f1 `(.assign % (.expr (.lit 0)))` ( string_data ( __ns . t rslot ) ) ) ( string_from `.skip` )
+    : ~ String inner \ ( __stmts m t all 0 nl ( string_data tail ) )
+    // (every literal temporary is bound at the statement that consumes it:
+    // __stmts leaves none)
+    ? > ( vec_len [i] . t lits ) 0 { ^ @ !String String { F ( string_from `internal: a literal temporary bound by no statement` ) } } {}
+    ? . t closure { = inner \ ( __read_caps m t ( string_data inner ) ) } {}
+    : String body ( __f1 `(.block %)` ( string_data inner ) )
+    : String params \ ( __fn_params m t )
+    : String lends ( __fn_lends t )
     : s own ? . t res_own `true` `false`
     : String a ( __f5 `{ params := [%], resTy := %, resOwn := %, lends := [%], rholds := [%],\n` ( string_data params ) ( string_data . t res_ty ) own ( string_data lends ) ( string_data lends ) )
     ^ ( __ok ( __f3 `%    outHolds := [], body := %, nvars := % }` ( string_data a ) ( string_data body ) ( string_data ( __ns + . t next 1 ) ) ) )
@@ -3164,6 +3188,178 @@ $ `coreir.nu`
     String why
 }
 
+// A stub emitted for an assumed function (AGORA-1033, formal/C/Complete.lean):
+// its index in P, name, signature summary, callee list, local hasThru bit,
+// and why it was not translated.
+: TlStub {
+    i idx
+    String name
+    String sig
+    String callees
+    b has_thru
+    String why
+}
+
+// Is `f` a known non-own intrinsic that changes elements through a borrow
+// (`.edit true` in `__intrinsic_`)?
+@ __stub_is_thru_intr s f → b {
+    ^ | | | | ( __sw f `vec_clear__` ) ( __sw f `vec_truncate__` ) ( __sw f `vec_reserve__` )
+    ( __sw f `vec_shrink_to_fit__` ) ( __eq f `string_push_str` )
+}
+
+// Is `f` a known non-own intrinsic or pure/IO runtime call that never
+// changes elements through a borrow?
+@ __stub_is_nonthru_intr s f → b {
+    ? | | | | ( __eq f `nurl_println_int` ) ( __eq f `nurl_println` ) ( __eq f `nurl_print` )
+    ( __eq f `nurl_print_int` ) ( __eq f `nurl_eprint` ) { ^ T } {}
+    ? | | | | ( __eq f `nurl_eprintln` ) ( __eq f `nurl_free_count` ) ( __eq f `nurl_alloc_count` )
+    ( __eq f `nurl_str_cat` ) ( __eq f `nurl_str_len` ) { ^ T } {}
+    ? | | | | ( __eq f `nurl_str_eq` ) ( __eq f `nurl_str_cmp` ) ( __eq f `nurl_str_starts` )
+    ( __eq f `nurl_str_ends` ) ( __eq f `nurl_str_find` ) { ^ T } {}
+    ? | | | | ( __eq f `nurl_str_to_int` ) ( __eq f `string_from` ) ( __eq f `string_data` )
+    ( __eq f `string_len` ) ( __eq f `string_free` ) { ^ T } {}
+    ? | | | | ( __sw f `vec_new__` ) ( __sw f `vec_push__` ) ( __sw f `vec_len__` )
+    ( __sw f `vec_free__` ) ( __sw f `vec_at__` ) { ^ T } {}
+    ? | | | | ( __sw f `slice_from_vec__` ) ( __sw f `slice_len__` ) ( __sw f `chan_new__` )
+    ( __sw f `Channel_share__` ) ( __sw f `chan_send__` ) { ^ T } {}
+    ^ | | ( __sw f `chan_recv__` ) ( __sw f `chan_try_recv__` ) ( __sw f `chan_close__` )
+}
+
+// Classify rvalue at word offset `off` of line `l` in function `p` for a stub:
+// records own callees / closure interfaces in `callees` and sets `has_thru`
+// when an intrinsic changes elements through a borrow. Refuses (F) any
+// rvalue or unknown call whose effect on `calls` or `hasThru` cannot be
+// determined syntactically (never guesses).
+@ __stub_rv TlMod m inout TlSt t i p i l i off ( Vec i ) callees ( Vec String ) callee_names inout b has_thru → !v String {
+    : i nw ( __nw m p l )
+    ? >= off nw { ^ @ !v String { F ( __u m p `stub: missing rvalue` ) } } {}
+    : s rw ( __wd m p l off )
+    ? | | | | ( __eq rw `use` ) ( __eq rw `agg` ) ( __eq rw `scalar` ) ( __eq rw `payload` ) ( __eq rw `closure` ) {
+        ^ @ !v String { T }
+    } {}
+    ? ( __eq rw `callind` ) {
+        ? < nw + off 3 { ^ @ !v String { F ( __u m p `stub: malformed callind` ) } } {}
+        : s c0 ( __wd m p l + off 2 )
+        ? ! ( __vref c0 ) { ^ @ !v String { F ( __u m p ( string_data ( __f1 `stub: callind through %` c0 ) ) ) } } {}
+        : String vl \ ( __vlean m t ( __pint_from c0 1 ) )
+        : i sigma \ ( __fn_sigma ( string_data vl ) )
+        ? ! ( __in callees sigma ) {
+            ( vec_push [i] callees sigma )
+            ( vec_push [String] callee_names ( __f1 `fn%` ( string_data ( __ns sigma ) ) ) )
+        } {}
+        ^ @ !v String { T }
+    } {}
+    ? ( __eq rw `call` ) {
+        ? < nw + off 2 { ^ @ !v String { F ( __u m p `stub: malformed call` ) } } {}
+        : s f ( __wd m p l + off 1 )
+        : i fi ( __mget . m names f )
+        ? >= fi 0 {
+            ? ! ( __in callees fi ) {
+                ( vec_push [i] callees fi )
+                ( vec_push [String] callee_names ( string_from f ) )
+            } {}
+            ^ @ !v String { T }
+        } {}
+        ? ( __stub_is_thru_intr f ) {
+            = has_thru T
+            ^ @ !v String { T }
+        } {}
+        ? ( __stub_is_nonthru_intr f ) {
+            ^ @ !v String { T }
+        } {}
+        // A stdlib function whose core summary finished its body and neither
+        // mutates, reallocates, drops elements of, nor takes inout any
+        // parameter cannot change elements through a borrow.
+        : i si ( core_sum_index . m ir f )
+        ? & >= si 0 & ( __eq ( __sval m f `body_done` `` ) `1` )
+        & ! ( __shas m f `mutates` ) & ! ( __shas m f `reallocs` )
+        & ! ( __shas m f `drops` ) ! ( __shas m f `inout` ) {
+            ^ @ !v String { T }
+        } {}
+        ^ @ !v String { F ( __u m p ( string_data ( __f1 `stub: cannot classify call of % for hasThru` f ) ) ) }
+    } {}
+    ^ @ !v String { F ( __u m p ( string_data ( __f1 `stub: cannot classify rvalue %` rw ) ) ) }
+}
+
+// Build a stub `Fn` for function `p` (formal/C/Complete.lean): its signature
+// from the core IR (`__fn_sig_init` + `__fn_params` + `__fn_lends`), and a
+// body `(.seq s .panic)` whose `Stmt.calls` and `Stmt.hasThru` match the real
+// body's. Returns F if any part of the signature or body cannot be classified.
+@ __fn_stub TlMod m inout TlSt t i p s why ( Vec TlStub ) stubs → !String String {
+    \ ( __fn_sig_init m t p F )
+    : String params \ ( __fn_params m t )
+    : String lends ( __fn_lends t )
+    : s own ? . t res_own `true` `false`
+    : ( Vec i ) callees ( vec_new [i] )
+    : ( Vec String ) callee_names ( vec_new [String] )
+    : ~ b has_thru F
+    : i nl ( __nl m p )
+    : ~ i l 0
+    ~ < l nl {
+        : i nw ( __nw m p l )
+        ? > nw 0 {
+            : s w0 ( __wd m p l 0 )
+            ? | | | | | ( __eq w0 `line` ) ( __eq w0 `nop` ) ( __eq w0 `scope` ) ( __eq w0 `end` ) ( __eq w0 `if` ) ( __eq w0 `else` ) {
+            } {
+                ? | | | | | ( __eq w0 `match` ) ( __eq w0 `arm` ) ( __eq w0 `loop` ) ( __eq w0 `loopcond` ) ( __eq w0 `foreach` ) ( __eq w0 `break` ) {
+                } {
+                    ? | | | | ( __eq w0 `continue` ) ( __eq w0 `drop` ) ( __eq w0 `ret` ) ( __eq w0 `retnx` ) ( __eq w0 `defer` ) {
+                    } {
+                        ? ( __eq w0 `let` ) {
+                            ? < nw 3 { ^ @ !String String { F ( __u m p `stub: malformed let` ) } } {}
+                            : i vid ( __pint ( __wd m p l 1 ) )
+                            ? ( __is_dtor m ( __vtyd m p vid `` ) ) {
+                                : i df ( __dtor_f m ( __vty m p vid ) )
+                                ? < df 0 { ^ @ !String String { F ( __u m p `stub: unknown destructor` ) } } {}
+                                ? ! ( __in callees df ) {
+                                    ( vec_push [i] callees df )
+                                    ( vec_push [String] callee_names ( string_from ( __name m df ) ) )
+                                } {}
+                            } {}
+                            \ ( __stub_rv m t p l 2 callees callee_names has_thru )
+                        } {
+                            ? ( __eq w0 `assign` ) {
+                                \ ( __stub_rv m t p l 2 callees callee_names has_thru )
+                            } {
+                                ? ( __eq w0 `eval` ) {
+                                    \ ( __stub_rv m t p l 1 callees callee_names has_thru )
+                                } {
+                                    ^ @ !String String { F ( __u m p ( string_data ( __f1 `stub: cannot classify statement %` w0 ) ) ) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } {}
+        = l + l 1
+    }
+    : ~ String s ? has_thru ( string_from `(.edit true 0 (.trunc (.lit 0)))` ) ( string_from `.skip` )
+    : ~ i q - ( vec_len [i] callees ) 1
+    ~ >= q 0 {
+        : String gs ( __ns ( vec_at [i] callees q ) )
+        ? ( __eq ( string_data s ) `.skip` ) {
+            = s ( __f1 `(.letcall 0 % [] .skip)` ( string_data gs ) )
+        } {
+            = s ( __f2 `(.seq (.letcall 0 % [] .skip) %)` ( string_data gs ) ( string_data s ) )
+        }
+        = q - q 1
+    }
+    : String body ( __f1 `(.seq % .panic)` ( string_data s ) )
+    : String a ( __f5 `{ params := [%], resTy := %, resOwn := %, lends := [%], rholds := [%],\n` ( string_data params ) ( string_data . t res_ty ) own ( string_data lends ) ( string_data lends ) )
+    : String sig ( __f4 `params := [%], resTy := %, resOwn := %, lends := [%]` ( string_data params ) ( string_data . t res_ty ) own ( string_data lends ) )
+    : String cstr ( string_new )
+    : i nc ( vec_len [String] callee_names )
+    : ~ i ci 0
+    ~ < ci nc {
+        ? > ci 0 { ( string_push_str cstr `, ` ) } {}
+        ( string_push_str cstr ( string_data ( vec_at [String] callee_names ci ) ) )
+        = ci + ci 1
+    }
+    ( vec_push [TlStub] stubs @ TlStub { p ( string_from ( __name m p ) ) sig cstr has_thru ( string_from why ) } )
+    ^ ( __ok ( __f2 `%    outHolds := [], body := %, nvars := 0 }` ( string_data a ) ( string_data body ) ) )
+}
+
 // One function's term (`__fn_init`, then `__lean`), or why not.
 @ __fn_lean TlMod m inout TlSt t i p → !String String {
     \ ( __fn_init m t p )
@@ -3174,10 +3370,12 @@ $ `coreir.nu`
 // why it is not translated; each of its own functions not translated goes
 // into `miss`, and `cur` holds the name of the function being translated.
 // With `all` F it stops at the first one, as tolean.py does: the verdict
-// and its reason are the same either way. `reached` gets an entry once the
-// functions are translated at all (a program refused before, as one with
-// no `main`, has none of its functions translated).
-@ __emit s text ( Vec TlMiss ) miss ( Vec String ) cur b all ( Vec i ) reached → !String String {
+// and its reason are the same either way. With `all` T and a single-threaded
+// program, each missed function whose signature and body can be classified
+// gets a stub (`__fn_stub`, `stubs`, `def assumed`), so the rest of the
+// program can be certified conditionally (AGORA-1033). `reached` gets an
+// entry once the functions are translated at all.
+@ __emit s text ( Vec TlMiss ) miss ( Vec TlStub ) stubs ( Vec String ) cur b all ( Vec i ) reached → !String String {
     : CoreIR ir \ ( core_read text )
     // The standard library's functions are A2's constructs (`intrinsic`),
     // not bodies to check: their code is phase B's.
@@ -3231,14 +3429,14 @@ $ `coreir.nu`
     // Every function is translated, also after one that is not (AGORA-1015):
     // each one the translation does not cover goes into `miss` with its
     // reason, and the program is refused with the first of them, as
-    // tolean.py refuses it. A function's translation reads the module and
-    // its own records; of the state across functions, the closure types it
-    // met and the types it was expanding are set back to where they were
-    // before it, so the functions after it translate as they would without it.
+    // tolean.py refuses it — unless `all` is set on a single-threaded
+    // program and every missed function gets a stub (AGORA-1033).
     ( vec_push [i] reached 1 )
     : ~ i p 0
     : ~ String first ( string_new )
     : ~ b failed F
+    : ~ b stub_ok & all ! threaded
+    : ( Vec i ) assumed ( vec_new [i] )
     ~ & < p nfn | all ! failed {
         : i nclo0 ( vec_len [String] . t clo_list )
         : i nexp0 ( vec_len [String] . t expanding )
@@ -3260,12 +3458,38 @@ $ `coreir.nu`
                     = first ( string_clone e )
                     = failed T
                 } {}
+                ? & stub_ok ! ( string_starts_with e `internal: ` ) {
+                    ?? ( __fn_stub mm t p ( string_data e ) stubs ) {
+                        T sl → {
+                            ( string_push_str out `def fn` )
+                            ( string_push_int out p )
+                            ( string_push_str out ` : Fn :=\n  ` )
+                            ( string_push_str out ( string_data sl ) )
+                            ( string_push_char out 10 )
+                            ( vec_push [i] assumed p )
+                        }
+                        F _se → {
+                            : b _c ( vec_truncate [String] . t clo_list nclo0 )
+                            : b _d ( vec_truncate [String] . t expanding nexp0 )
+                            = stub_ok F
+                        }
+                    }
+                } {
+                    = stub_ok F
+                }
             }
         }
         = p + p 1
     }
     ( vec_clear [String] cur )
-    ? failed { ^ @ !String String { F first } } {}
+    // Conditional certificate only when every missed function got a stub and
+    // at least one own function was actually translated (not all stubbed).
+    : i na ( vec_len [i] assumed )
+    : b cond & & & failed stub_ok > na 0 < na nfn
+    ? & failed ! cond {
+        ( vec_clear [TlStub] stubs )
+        ^ @ !String String { F first }
+    } {}
     // one interface per closure type: the receiver (the closure, lent),
     // then its parameters; its body is never run (a call runs the
     // package's code), so it is one that type-checks: a result of the
@@ -3347,6 +3571,17 @@ $ `coreir.nu`
         // indices are known
         ^ @ !String String { T ( __subst_wrappers ( string_data out ) + nfn nclo ) }
     } {}
+    ? cond {
+        ( string_push_str out ` [] .skip\ndef assumed : List Nat := [` )
+        : ~ i ai 0
+        ~ < ai na {
+            ? > ai 0 { ( string_push_str out `, ` ) } {}
+            ( string_push_int out ( vec_at [i] assumed ai ) )
+            = ai + ai 1
+        }
+        ( string_push_str out `]\n\n#eval certOK2BA P assumed entry 1\n` )
+        ^ @ !String String { T out }
+    } {}
     ( string_push_str out ` [] .skip\n\n#eval progOK2B P && (checkA2 P entry.vars (fun _ => none) [] entry).isSome && stmtCodesB P entry\n` )
     ^ @ !String String { T out }
 }
@@ -3356,20 +3591,19 @@ $ `coreir.nu`
 // the core IR is not one the translation can read.
 @ tolean_translate s text → !String String {
     : ( Vec TlMiss ) miss ( vec_new [TlMiss] )
-    ^ ( __translate text miss F )
+    : ( Vec TlStub ) stubs ( vec_new [TlStub] )
+    ^ ( __translate text miss stubs F )
 }
 
 // tolean_translate, and each of the program's own functions it does not
 // translate into `miss`, with its reason (AGORA-1015), in the order of the
-// core IR. The program is refused with the first one's reason, exactly as
-// tolean_translate refuses it. Where the translation stops on an internal
-// error (a panic), the function it stopped in goes into `miss` with it, then
-// an entry with an empty name: the functions after it were not reached. A
-// program refused before any function is translated (no `main`, say) gets
-// that entry alone: none was reached.
-@ tolean_translate_fns s text ( Vec TlMiss ) miss → !String String { ^ ( __translate text miss T ) }
+// core IR. When single-threaded and every missed function can be stubbed
+// (with at least one own function translated), emits stubs and `def assumed`
+// and records each stub in `stubs` (AGORA-1033). Otherwise refuses with the
+// first reason, as tolean_translate does.
+@ tolean_translate_fns s text ( Vec TlMiss ) miss ( Vec TlStub ) stubs → !String String { ^ ( __translate text miss stubs T ) }
 
-@ __translate s text ( Vec TlMiss ) miss b all → !String String {
+@ __translate s text ( Vec TlMiss ) miss ( Vec TlStub ) stubs b all → !String String {
     : ~ String res ( string_new )
     : ~ String why ( string_new )
     : ~ b ok F
@@ -3377,7 +3611,7 @@ $ `coreir.nu`
     : ( Vec String ) cur ( vec_new [String] )
     : ( Vec i ) reached ( vec_new [i] )
     : !v PanicInfo r ( recover \ → v {
-        ?? ( __emit ( string_data tx ) miss cur all reached ) {
+        ?? ( __emit ( string_data tx ) miss stubs cur all reached ) {
             T o → {
                 = res o
                 = ok T
@@ -3389,6 +3623,7 @@ $ `coreir.nu`
         T _ → {}
         F pi → {
             = ok F
+            ( vec_clear [TlStub] stubs )
             : ~ String iw ( string_clone . pi msg )
             ? ! ( string_starts_with iw `internal: ` ) { = iw ( __f1 `internal: %` ( string_data . pi msg ) ) } {}
             ?? ( vec_get [String] cur 0 ) {

@@ -6,7 +6,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
 
-: s CERT_SCHEMA `nurl-cert/1`
+: s CERT_SCHEMA `nurl-cert/2`
 
 @ mj_str Json o s k s v → v { ( json_obj_set o k ( json_str_lit v ) ) }
 

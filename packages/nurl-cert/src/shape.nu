@@ -13,6 +13,7 @@
 //   def P : Prog := [fn0, fn1, …]
 //   def entry : Stmt := .letcall 0 <k> [] .skip
 //   def spawns : List Nat := [k, …]     (a threaded program only)
+//   def assumed : List Nat := [k, …]    (a conditional certificate only)
 //
 // where a <term> is built from constructors written `.name`, numbers,
 // `true`/`false`, the structure fields of `Fn`, the names `fn<k>`, and the
@@ -41,6 +42,7 @@ $ `stdlib/core/slice.nu`
     i nv
     String why
     b threads
+    ( Vec i ) assumed
 }
 
 @ __sh_bad s why i line → ShapeRes {
@@ -48,7 +50,7 @@ $ `stdlib/core/slice.nu`
     ( string_push_str w ` (line ` )
     ( string_push_int w line )
     ( string_push_str w `)` )
-    ^ @ ShapeRes { F 0 w F }
+    ^ @ ShapeRes { F 0 w F ( vec_new [i] ) }
 }
 
 @ __sh_is_alpha i c → b { ^ | | & >= c 65 <= c 90 & >= c 97 <= c 122 == c 95 }
@@ -144,7 +146,7 @@ $ `stdlib/core/slice.nu`
         } {}
         ^ ( __sh_bad `a character the program grammar does not have` line )
     }
-    ^ @ ShapeRes { T 0 ( string_new ) F }
+    ^ @ ShapeRes { T 0 ( string_new ) F ( vec_new [i] ) }
 }
 
 // Does line [a, z) start with `pre`?
@@ -164,7 +166,34 @@ $ `stdlib/core/slice.nu`
     ^ & == - z a ( nurl_str_len want ) ( __sh_starts t a z want )
 }
 
-// `[` already read: `<digits>(, <digits>)*]` up to the line's end, or `]`.
+// `[` already read: non-empty `<digits>(, <digits>)*]` up to the line's end,
+// parsed into `out` (rejecting duplicates).
+@ __sh_nat_list_parse ( Slice u ) t i a i z ( Vec i ) out → b {
+    : ~ i k a
+    ~ < k z {
+        : i d0 k
+        : ~ i v 0
+        ~ & < k z ( __sh_is_digit ( slice_byte t k ) ) {
+            = v + * v 10 - ( slice_byte t k ) 48
+            = k + k 1
+        }
+        ? == k d0 { ^ F } {}
+        ? >= k z { ^ F } {}
+        // reject duplicate indices
+        : i no ( vec_len [i] out )
+        : ~ i j 0
+        ~ < j no {
+            ? == ( vec_at [i] out j ) v { ^ F } {}
+            = j + j 1
+        }
+        ( vec_push [i] out v )
+        ? == ( slice_byte t k ) 93 { ^ == + k 1 z } {}
+        ? | >= + k 1 z | != ( slice_byte t k ) 44 != ( slice_byte t + k 1 ) 32 { ^ F } {}
+        = k + k 2
+    }
+    ^ F
+}
+
 @ __sh_nat_list ( Slice u ) t i a i z → b {
     ? & == - z a 1 == ( slice_byte t a ) 93 { ^ T } {}
     : ~ i k a
@@ -216,6 +245,8 @@ $ `stdlib/core/slice.nu`
     : ~ b have_p F
     : ~ b have_entry F
     : ~ b have_spawns F
+    : ~ b have_assumed F
+    : ( Vec i ) assumed ( vec_new [i] )
     : ~ b in_def F
     : i need ( cert_rec_depth text )
     : ~ b have_depth F
@@ -263,7 +294,7 @@ $ `stdlib/core/slice.nu`
                                 ? ( __sh_starts t a z `def spawns : List Nat := [` ) {
                                     // A threaded program: the functions it spawns (A3),
                                     // a list of numbers and nothing else, right after entry.
-                                    ? | have_spawns ! have_entry { ^ ( __sh_bad `spawns not right after entry` line ) } {}
+                                    ? | | have_spawns have_assumed ! have_entry { ^ ( __sh_bad `spawns not right after entry` line ) } {}
                                     ? ! ( __sh_nat_list t + a 26 z ) { ^ ( __sh_bad `spawns is not a list of function numbers` line ) } {}
                                     = have_spawns T
                                     = in_def F
@@ -271,8 +302,19 @@ $ `stdlib/core/slice.nu`
                                     = line + line 1
                                     continue
                                 } {}
+                                ? ( __sh_starts t a z `def assumed : List Nat := [` ) {
+                                    // A conditional certificate: the assumed functions' indices
+                                    // (formal/C/Complete.lean), non-empty list of numbers right after entry.
+                                    ? | | have_assumed have_spawns ! have_entry { ^ ( __sh_bad `assumed not right after entry` line ) } {}
+                                    ? ! ( __sh_nat_list_parse t + a 27 z assumed ) { ^ ( __sh_bad `assumed is not a non-empty list of distinct function numbers` line ) } {}
+                                    = have_assumed T
+                                    = in_def F
+                                    = a + z 1
+                                    = line + line 1
+                                    continue
+                                } {}
                                 ? ( __sh_starts t a z `def entry : Stmt := .letcall 0 ` ) {
-                                    ? | | have_entry have_spawns ! have_p { ^ ( __sh_bad `entry not right after P` line ) } {}
+                                    ? | | | have_entry have_spawns have_assumed ! have_p { ^ ( __sh_bad `entry not right after P` line ) } {}
                                     // the rest: <digits> [] .skip
                                     : ~ i k + a 31
                                     : i d0 k
@@ -298,5 +340,73 @@ $ `stdlib/core/slice.nu`
     }
     ? ! & have_p have_entry { ^ ( __sh_bad `P or entry is missing` line ) } {}
     ? & > need 0 ! have_depth { ^ ( __sh_bad `a term this deep has no set_option maxRecDepth line` 3 ) } {}
-    ^ @ ShapeRes { T 1 ( string_new ) have_spawns }
+    ^ @ ShapeRes { T 1 ( string_new ) have_spawns assumed }
+}
+
+: StubRead {
+    b ok
+    String sig
+    ( Vec i ) callees
+    b has_thru
+}
+
+// Read stub `fn<idx>` from a shape-checked Program.lean: its signature
+// (`params := … , lends := […]`), its callees (every `.letcall 0 <g> [] .skip`),
+// and whether its body contains `.edit true`. Used by `verify` to check
+// `assumed-fn:*` ledger rows against Program.lean itself.
+@ cert_stub_read String text i idx → StubRead {
+    : String hdr ( string_from `def fn` )
+    ( string_push_int hdr idx )
+    ( string_push_str hdr ` : Fn :=` )
+    : ( Slice u ) t ( string_bytes text )
+    : i n ( slice_len [u] t )
+    : ~ i a 0
+    : ~ b found F
+    : ~ String l1 ( string_new )
+    : ~ String l2 ( string_new )
+    ~ < a n {
+        : ~ i z a
+        ~ & < z n != ( slice_byte t z ) 10 { = z + z 1 }
+        ? ! found {
+            ? ( __sh_line_is t a z ( string_data hdr ) ) { = found T } {}
+        } {
+            ? == ( string_len l1 ) 0 {
+                ( string_push_window l1 t a - z a )
+            } {
+                ( string_push_window l2 t a - z a )
+                break
+            }
+        }
+        = a + z 1
+    }
+    ? | ! found | == ( string_len l1 ) 0 == ( string_len l2 ) 0 {
+        ^ @ StubRead { F ( string_new ) ( vec_new [i] ) F }
+    } {}
+    // l1: `  { params := [...], resTy := ..., resOwn := ..., lends := [...], rholds := [...],`
+    : i s0 ( nurl_str_find ( string_data l1 ) `params := ` )
+    : i s1 ( nurl_str_find ( string_data l1 ) `, rholds := ` )
+    ? | < s0 0 <= s1 s0 { ^ @ StubRead { F ( string_new ) ( vec_new [i] ) F } } {}
+    : String sig ( string_substr l1 s0 - s1 s0 )
+    // l2: `    outHolds := [], body := (.seq ... .panic), nvars := 0 }`
+    : b has_thru ( string_contains l2 `.edit true` )
+    : ( Vec i ) callees ( vec_new [i] )
+    : ( Slice u ) b2 ( string_bytes l2 )
+    : i n2 ( slice_len [u] b2 )
+    : s pat `.letcall 0 `
+    : i pn ( nurl_str_len pat )
+    : ~ i k 0
+    ~ < k n2 {
+        ? ( __sh_starts b2 k n2 pat ) {
+            : ~ i p + k pn
+            : i d0 p
+            : ~ i g 0
+            ~ & < p n2 ( __sh_is_digit ( slice_byte b2 p ) ) {
+                = g + * g 10 - ( slice_byte b2 p ) 48
+                = p + p 1
+            }
+            ? > p d0 { ( vec_push [i] callees g ) } {}
+            = k p
+        } { = k + k 1 }
+    }
+    ^ @ StubRead { T sig callees has_thru }
 }

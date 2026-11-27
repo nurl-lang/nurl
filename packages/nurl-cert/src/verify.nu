@@ -90,14 +90,16 @@ $ `certify.nu`
     ( nurl_print `verifying ` )
     ( nurl_println bundle )
     : String schema ( mj_get_str m `schema` )
-    ( __vf_check t ( nc_is schema CERT_SCHEMA ) `the manifest's schema is nurl-cert/1` ( string_data schema ) )
+    ( __vf_check t ( nc_is schema CERT_SCHEMA ) `the manifest's schema is nurl-cert/2` ( string_data schema ) )
     : String prof ( mj_get_str m `profile` )
     ( __vf_check t ( cert_profile_ok ( string_data prof ) ) `the profile is kernel or fast` ( string_data prof ) )
     // A threaded program's claims are A3's (one more, M.race): it is
     // threaded when its Program.lean, held to the grammar, names spawns.
+    // A conditional certificate names assumed functions (C.Complete).
     : String ptext0 ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → ( string_new ) }
     : ShapeRes sh0 ( cert_shape ptext0 )
     : b threads & . sh0 ok . sh0 threads
+    : b cond & . sh0 ok > ( vec_len [i] . sh0 assumed ) 0
     // The bundle's term is the kernel's (Elab.lean, Cert.elab) when the
     // manifest records Elab.lean's hash; the translation ledger row then
     // says so, and the files must be there. Otherwise there is no Elab.lean
@@ -107,7 +109,73 @@ $ `certify.nu`
     // certify reads them: their ledger rows and premises)
     : ~ ( Vec String ) enc ( vec_new [String] )
     ? elab { = enc ( cert_enc_ids ( string_data ptext0 ) ) } {}
-    ( __vf_structure t m ( string_data prof ) threads elab enc )
+    // For a conditional bundle, reconstruct each assumed function's ledger
+    // row from Program.lean (stub signature, callees, hasThru), Program.core
+    // (name, file:line) and coverage.functions (reason).
+    : ( Vec AssumedRow ) assumed_rows ( vec_new [AssumedRow] )
+    : ( Vec String ) assumed_ids ( vec_new [String] )
+    : ~ b assumed_ok T
+    ? cond {
+        : String core0 ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
+        : ( Vec FnRow ) fns0 ( cert_functions ( string_data core0 ) )
+        : i nf0 ( vec_len [FnRow] fns0 )
+        : i na0 ( vec_len [i] . sh0 assumed )
+        : ~ i ai 0
+        ~ < ai na0 {
+            : i idx ( vec_at [i] . sh0 assumed ai )
+            ? | < idx 0 >= idx nf0 {
+                = assumed_ok F
+            } {
+                : FnRow fr ( vec_at [FnRow] fns0 idx )
+                : StubRead sr ( cert_stub_read ptext0 idx )
+                ? ! . sr ok {
+                    = assumed_ok F
+                } {
+                    : String cstr ( string_new )
+                    : i ncal ( vec_len [i] . sr callees )
+                    : ~ i ci 0
+                    ~ < ci ncal {
+                        ? > ci 0 { ( string_push_str cstr `, ` ) } {}
+                        : i g ( vec_at [i] . sr callees ci )
+                        ? & >= g 0 < g nf0 {
+                            ( string_push_str cstr ( string_data . ( vec_at [FnRow] fns0 g ) name ) )
+                        } {
+                            ( string_push_str cstr `fn` )
+                            ( string_push_int cstr g )
+                        }
+                        = ci + ci 1
+                    }
+                    : String loc ( string_clone . fr file )
+                    ( string_push_str loc `:` )
+                    ( string_push_str loc ( string_data . fr line ) )
+                    // Find this function's reason in coverage.functions (must be `unsupported`).
+                    : ~ String why ( string_new )
+                    : ~ b found_cov F
+                    : ~ i fi 0
+                    ~ ( __vf_has m ( string_data ( __vf_path `coverage.functions.` fi `` ) ) ) {
+                        : String cn ( mj_get_str m ( string_data ( __vf_path `coverage.functions.` fi `.name` ) ) )
+                        ? ( string_eq cn . fr name ) {
+                            : String cst ( mj_get_str m ( string_data ( __vf_path `coverage.functions.` fi `.status` ) ) )
+                            ? ( nc_is cst `unsupported` ) {
+                                = why ( mj_get_str m ( string_data ( __vf_path `coverage.functions.` fi `.reason` ) ) )
+                                = found_cov T
+                            } {}
+                            break
+                        } {}
+                        = fi + fi 1
+                    }
+                    ? ! found_cov { = assumed_ok F } {}
+                    ( vec_push [AssumedRow] assumed_rows @ AssumedRow {
+                        idx ( string_clone . fr name ) . sr sig cstr . sr has_thru why loc
+                    } )
+                    ( vec_push [String] assumed_ids ( cert_assumed_id ( string_data . fr name ) ) )
+                }
+            }
+            = ai + ai 1
+        }
+        ( __vf_check t & assumed_ok ! elab `assumed functions in Program.lean match Program.core and coverage.functions` `` )
+    } {}
+    ( __vf_structure t m ( string_data prof ) threads cond elab enc assumed_ids assumed_rows )
 
     // The sources.
     : ~ i k 0
@@ -178,7 +246,7 @@ $ `certify.nu`
         ( __vf_check t . sh ok `Program.lean only defines the program` ( string_data . sh why ) )
         : i slots ?? ( json_get m `program.slots` ) { T j → ( json_as_int j ) F → -1 }
         ( __vf_check t == slots . sh nv `the claims are stated over the program's slots` `` )
-        : String want ( cert_claims_lean ( string_data prof ) . sh nv threads )
+        : String want ( cert_claims_lean ( string_data prof ) . sh nv threads cond )
         : String have ?? ( nc_read ( string_data claims_path ) ) { T x → x F → ( string_new ) }
         ( __vf_check t ( string_eq want have ) `Claims.lean is the claims' template, byte for byte` `its statements or proofs were edited` )
         ? elab {
@@ -231,7 +299,8 @@ $ `certify.nu`
                 ?? ( cert_lean_axioms . lr log ( cert_claim_lean c ) ) {
                     T ax → {
                         : ( Vec String ) al ( cert_axiom_list ax )
-                        : String st ( string_from ? clean ( cert_status_of ( string_data prof ) al ) `open` )
+                        : s raw ? clean ( cert_status_of ( string_data prof ) al ) `open`
+                        : String st ( string_from ? & cond == 0 ( nurl_str_eq raw `open` ) `assumed` raw )
                         : String detail ( string_from `Lean says ` )
                         ( string_push_str detail ( string_data st ) )
                         ( string_push_str detail ` (axioms: ` )
@@ -318,7 +387,7 @@ $ `certify.nu`
         `--rebuild: the compile read exactly the recorded source bytes` `` )
         : String plp ( nc_join bundle `Program.lean` )
         ? ( file_exists ( string_data plp ) ) {
-            : Translated tr ( cert_translate ( string_data ( nc_join bundle `Program.core` ) ) F )
+            : Translated tr ( cert_translate ( string_data ( nc_join bundle `Program.core` ) ) T )
             : String lean_have ?? ( nc_read ( string_data plp ) ) { T x → x F → ( string_new ) }
             ( __vf_check t & . tr ok ( string_eq . tr lean lean_have )
             `--rebuild: the translation makes Program.lean from Program.core again` `` )
@@ -360,7 +429,7 @@ $ `certify.nu`
 
 @ __vf_has Json m s path → b { ^ ?? ( json_get m path ) { T _ → T F → F } }
 
-@ __vf_structure inout Tally t Json m s prof b threads b elab ( Vec String ) enc → v {
+@ __vf_structure inout Tally t Json m s prof b threads b cond b elab ( Vec String ) enc ( Vec String ) assumed_ids ( Vec AssumedRow ) assumed_rows → v {
     // the top-level members, exactly
     : ( Vec String ) keys ( json_obj_keys m )
     : ( Vec String ) want ( string_split ( string_from `schema tool profile program claims coverage hashes versions ledger` ) ` ` )
@@ -482,13 +551,13 @@ $ `certify.nu`
     ~ <= c nc {
         : s id ? == c nc `M.unsafe` ( cert_claim_id c )
         : s lean ? == c nc `` ( cert_claim_lean c )
-        : String prem_c ( cert_claim_premises prof c elab enc )
+        : String prem_c ( cert_claim_premises prof c elab enc assumed_ids )
         : s prem ? == c nc `unsafe-report` ( string_data prem_c )
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.id` ) ) ) id ) { = claims_ok F } {}
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.lean` ) ) ) lean ) { = claims_ok F } {}
         ? == c nc {} {
-            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.en` ) ) ) ( cert_claim_sentence threads c ) ) { = claims_ok F } {}
-            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.fi` ) ) ) ( cert_claim_sentence_fi threads c ) ) { = claims_ok F } {}
+            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.en` ) ) ) ( cert_claim_sentence threads cond c ) ) { = claims_ok F } {}
+            ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.sentence.fi` ) ) ) ( cert_claim_sentence_fi threads cond c ) ) { = claims_ok F } {}
         }
         : String pk ( __vf_path `claims.` c `.premises` )
         // element by element: one string that reads like the four
@@ -516,7 +585,7 @@ $ `certify.nu`
             F → { = more F }
         }
     }
-    : Json lw ( cert_ledger prof urows threads elab enc )
+    : Json lw ( cert_ledger prof urows threads elab enc assumed_rows )
     : String lws ( json_stringify lw )
     : String lhs ?? ( json_get m `ledger` ) { T j → ( json_stringify j ) F → ( string_new ) }
     ( __vf_check t ( string_eq lws lhs ) `the trust ledger is the one certify writes (no row dropped or reworded)` `` )

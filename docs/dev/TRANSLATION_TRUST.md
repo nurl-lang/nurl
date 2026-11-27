@@ -282,9 +282,10 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   these 3, so a stale constructor list fails CI rather than silently
   dropping the stronger bundle.
 - The manifest records the case by `hashes.elab_lean`, and the
-  `translation` row's text follows it. The schema stays `nurl-cert/1`: a
-  bundle without it, an older one included, verifies with the
-  translator's row. A bundle downgraded honestly (Elab.lean removed, its
+  `translation` row's text follows it. That addition kept the schema at
+  `nurl-cert/1` (later bumped to `nurl-cert/2` for conditional
+  certificates, AGORA-1033): a bundle without `hashes.elab_lean` verifies
+  with the translator's row. A bundle downgraded honestly (Elab.lean removed, its
   hash dropped, the row the translator's again) verifies too. That is
   expected: it claims less, and its ledger says so.
 - **Tested** (`packages/nurl-cert/tests/nurl-cert_test.sh`, part 2b):
