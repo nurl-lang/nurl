@@ -20,6 +20,9 @@ $ `manifest.nu`
 
 : s COV_STATUSES `proved validated refused open unsupported error`
 
+// The reasons table's rows: the most frequent families, then the rest in one.
+: i COV_ROWS 25
+
 // One function of one bundle.
 : CovFn {
     String file
@@ -301,7 +304,8 @@ $ `manifest.nu`
             = a + a 1
         }
         = r 0
-        ~ < r nr {
+        : i shown ? > nr COV_ROWS COV_ROWS nr
+        ~ < r shown {
             : CovRow row ( vec_at [CovRow] reasons ( vec_at [i] order r ) )
             ( string_push_str o `| ` )
             ( string_push_int o . row n )
@@ -314,6 +318,24 @@ $ `manifest.nu`
             ( string_push_str o ` |\n` )
             = r + r 1
         }
+        // the rest in one row: how many families, functions and lines
+        ? > nr shown {
+            : ~ i rn 0
+            : ~ i rl 0
+            ~ < r nr {
+                : CovRow row ( vec_at [CovRow] reasons ( vec_at [i] order r ) )
+                = rn + rn . row n
+                = rl + rl . row lines
+                = r + r 1
+            }
+            ( string_push_str o `| ` )
+            ( string_push_int o rn )
+            ( string_push_str o ` | ` )
+            ( string_push_int o rl )
+            ( string_push_str o ` | ` )
+            ( string_push_int o - nr shown )
+            ( string_push_str o ` other reasons | |\n` )
+        } {}
     } {}
     ^ @ ?String { T o }
 }
