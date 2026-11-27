@@ -16,5 +16,14 @@
   - **The payload of an enum, or of an option in a struct's field,** is now
     lent to the arm (h231). Reading it is unchanged. Storing it is refused:
     it would need a copy, and one cannot be made.
-  - **Migration:** none. Every in-repo program that compiled before still
-    does.
+  - **Migration:** a program that is refused now was unsound before, and
+    every in-repo program that compiled before still does. Three shapes
+    change:
+    - matching the option again after its payload moved out: match it
+      once and keep what the arm needs, or hand the value back out of the
+      arm (`: ?Pet back ?? got { T p → … }`) instead of reading `got`
+      again;
+    - moving the same payload out twice (two pushes): move it once;
+    - storing a payload of an enum, or of an option in a struct's field
+      (`( vec_push vs p )` in its arm): take the value out of its owner
+      first, moving the enum or replacing the field, then store it.
