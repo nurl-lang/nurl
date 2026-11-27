@@ -502,7 +502,7 @@ $ `stdlib/std/random.nu`
         // core IR that is not UTF-8 has no words.
         : ~ b try_elab F
         ? ( cert_elab_candidate ( string_data . tr lean ) ) {
-            ?? ( cert_elab_lean . r1 out ) {
+            ?? ( cert_elab_lean . r1 out threads ) {
                 T el → { = try_elab ( nc_write ( string_data elab_path ) ( string_data el ) ) }
                 F → {}
             }

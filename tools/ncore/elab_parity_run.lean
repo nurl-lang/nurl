@@ -23,14 +23,20 @@ def main (args : List String) : IO Unit := do
   for p in paths do
     let ir ← readIR p
     let r := C.Elab.elabIR ir
-    IO.println s!"{p} {if r.isSome then "some" else "none"}"
+    -- (step 10) a program that spawns: `elabIR3`, its wrappers too
+    let r3 := C.Elab.elabIR3 ir
+    IO.println s!"{p} {if r.isSome || r3.isSome then "some" else "none"}"
     -- the full words beside it (`k.full.json`, every line): elabIR must
     -- answer the same on both (the words leave out a library function
     -- whose records the reader reads, and the `sum` lines no word names)
     let fp := String.ofList (p.toList.take (p.length - 5)) ++ ".full.json"
     if ← System.FilePath.pathExists fp then
-      let same := match r, C.Elab.elabIR (← readIR fp) with
+      let fir ← readIR fp
+      let same := (match r, C.Elab.elabIR fir with
         | none, none => true
         | some (P, e), some (Q, e') => C.Elab.progBeq P Q && C.Elab.stmtBeq e e'
-        | _, _ => false
+        | _, _ => false) && (match r3, C.Elab.elabIR3 fir with
+        | none, none => true
+        | some (P, sp, e), some (Q, sq, e') => C.Elab.progBeq P Q && sp == sq && C.Elab.stmtBeq e e'
+        | _, _ => false)
       IO.println s!"FULL {p} {if same then "same" else "DIFFER"}"
