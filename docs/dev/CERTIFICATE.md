@@ -150,6 +150,15 @@ prog.cert/
   `unsupported`, never a term).
 - **Program.lean** is held to the translator's grammar:
   - the lines `import C.Cert` and `open A2 C`;
+  - for a deep term only, a third line `set_option maxRecDepth <n>`, with
+    `n` exactly the bound the term's own nesting depth asks for
+    (`cert_rec_depth`: 2 × the deepest nesting of parentheses + 128, where
+    that is above Lean's default of 512). A2 nests each statement over the
+    rest of its list, so a long body is a deep term, and Lean's elaborator
+    stops at its default bound (AGORA-1034). The line bounds only the
+    elaborator's recursion. It is a function of the term, and any other
+    value, any other option, or the line on a term that does not need it,
+    is refused;
   - `def fn<k> : Fn := …`;
   - `def P : Prog := [fn0, …]`;
   - `def entry : Stmt := .letcall 0 <k> [] .skip`;
@@ -261,8 +270,10 @@ prog.cert/
   definitions, `end`; Claims.lean without its imports; Elab.lean without
   its imports. The file means what the modules mean:
   - Program.lean's grammar (shape.nu) allows only its two first lines,
-    `import C.Cert` and `open A2 C`, exactly, then definitions: no option,
-    notation, instance, namespace or attribute. So its definitions read
+    `import C.Cert` and `open A2 C`, exactly, a deep term's
+    `set_option maxRecDepth` with the one value its depth asks for, then
+    definitions: no other option, notation, instance, namespace or
+    attribute. So its definitions read
     the same inline as imported, and the `section` ends its `open` before
     the claims, as the end of its module does;
   - Claims.lean and Elab.lean are the templates byte for byte (certify
@@ -342,6 +353,15 @@ versions    { nurlc, formal_tree, formal_commit, lean_toolchain }
 ledger      [ { id, what, why, where, vouches, claims [..] } ]
 ```
 
+- `program.verdict` `refused`: the checker refuses the program. Lean says
+  so when it explains a failed `decide +kernel` ("… is false"), by reducing
+  the proposition again in the elaborator. Where that explanation fails
+  too, on a term too deep for the elaborator, only the kernel's own
+  mismatch is left, and it would also be what a reduction that got stuck
+  leaves. So certify then proves the refusal in a Lean run of its own
+  (`C.certOK2B P entry 1 = false`, or A3's, by `decide +kernel`). The
+  reason then reads `… is false, proved by the kernel`, and without that
+  proof the verdict is `error` (AGORA-1034).
 - `hashes.sources`: every file the compile read, hashed as the bytes
   nurlc compiled. `nurlc --list-sources=TAG` prints each snapshot it
   reads on stderr: a line `source:TAG <length> <real path>`, then the

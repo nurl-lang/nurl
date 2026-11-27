@@ -85,6 +85,23 @@ $ `stdlib/std/random.nu`
 
 // With `all` T, every function the translation does not cover goes into
 // `miss` (certify's coverage); with F it stops at the first (verify).
+// The term's file with, for a deep term, the elaborator's bound it needs as
+// its third line (`cert_rec_depth`, shape.nu; AGORA-1034).
+@ __ct_depth String text → String {
+    : i need ( cert_rec_depth text )
+    ? == need 0 { ^ ( string_clone text ) } {}
+    : s head `import C.Cert
+open A2 C
+`
+    : i hn ( nurl_str_len head )
+    : String o ( string_from head )
+    ( string_push_str o `set_option maxRecDepth ` )
+    ( string_push_int o need )
+    ( string_push_char o 10 )
+    ( string_push_str o ( string_data ( string_substr text hn - ( string_len text ) hn ) ) )
+    ^ o
+}
+
 @ cert_translate s core_path b all → Translated {
     : String text ?? ( nc_read core_path ) {
         T x → x
@@ -93,7 +110,7 @@ $ `stdlib/std/random.nu`
     : ( Vec TlMiss ) miss ( vec_new [TlMiss] )
     : !String String r ? all ( tolean_translate_fns ( string_data text ) miss ) ( tolean_translate ( string_data text ) )
     ^ ?? r {
-        T lean → @ Translated { T ( __ct_reframe ( string_data lean ) ) ( string_new ) miss }
+        T lean → @ Translated { T ( __ct_depth ( __ct_reframe ( string_data lean ) ) ) ( string_new ) miss }
         F why → @ Translated { F ( string_new ) why miss }
     }
 }
@@ -618,12 +635,20 @@ $ `stdlib/std/random.nu`
             = verdict ( string_from `refused` )
             = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)` `the verified checker refuses the program (C.certOK2B is false)` )
         } {
-            ? | ! . lr ran ( cert_lean_has_error . lr log ) {
-                = verdict ( string_from `error` )
-                = reason ( string_from `Lean did not check the claims: ` )
-                ( string_push_str reason ( string_data ( __ct_first_line . lr log ) ) )
-                ( nurl_eprint ( string_data . lr log ) )
-            } {}
+            // (Lean's explanation of the failure may itself fail on a deep
+            // term: the refusal is then proved in a run of its own)
+            : b failed | ! . lr ran ( cert_lean_has_error . lr log )
+            ? & failed ( cert_lean_refutes ( string_data . o lean ) ( string_data formal ) out ( string_data work ) threads ) {
+                = verdict ( string_from `refused` )
+                = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false, proved by the kernel)` `the verified checker refuses the program (C.certOK2B is false, proved by the kernel)` )
+            } {
+                ? failed {
+                    = verdict ( string_from `error` )
+                    = reason ( string_from `Lean did not check the claims: ` )
+                    ( string_push_str reason ( string_data ( __ct_first_line . lr log ) ) )
+                    ( nurl_eprint ( string_data . lr log ) )
+                } {}
+            }
         }
         // The bundle keeps Elab.lean only for a program the checker accepts
         // and a run that proved Cert.elab on the standard axioms; otherwise

@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- **A deep term, and a refusal Lean cannot explain** (AGORA-1034). Program.lean gives a deep term the elaborator bound it needs (`set_option maxRecDepth`, `cert_rec_depth`: 2 × the deepest nesting + 128, only past the default 512; the grammar check takes exactly that value). Where Lean's explanation of a failed `decide +kernel` fails too, certify proves the refusal (`certOK2B … = false`) in a run of its own, or the verdict stays `error`. `loop_nest_deep` is now accepted, and `option_payload_chain_forty_deep_compiles_fast` is refused with a proof.
+
 - **Windows** (AGORA-1031): certify and verify run there. A path like `C:/…` or `\\host\share` is absolute (it was joined to the working directory), and a `--nurlc` or `--lean` path with a backslash is a path, not a command to look up. nurlc writes its records and core IR untranslated, so the bytes it lists are the file's bytes.
 
 ### Changed

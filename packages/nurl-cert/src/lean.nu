@@ -404,6 +404,46 @@ $ `stdlib/ext/json.nu`
 
 @ cert_lean_has_error String log → b { ^ ( string_contains log `: error` ) }
 
+// Does the kernel prove that the checker refuses the program in `bundle`
+// (`C.certOK2B P entry 1 = false`, or A3's `C.certOK3B P spawns entry 1`)?
+// Lean explains a failed `decide +kernel` by reducing the proposition again
+// in the elaborator, and certify reads that explanation ("… is false"). On
+// a term too deep for the elaborator the explanation fails too, and only
+// the kernel's own mismatch is left, which would also be what a reduction
+// that got stuck leaves (AGORA-1034). So a refusal is not read off that
+// message: it is proved, in a run of its own, or the verdict stays an
+// error. Program.lean has passed the grammar check (shape.nu) before.
+@ cert_lean_refutes s lean s formal s bundle s work b threads → b {
+    : String ptext ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → { ^ F } }
+    : String o ( string_new )
+    ? threads { ( string_push_str o `import C.Cert3
+` ) } {}
+    ( string_push_str o ( string_data ptext ) )
+    ? threads {
+        ( string_push_str o `
+theorem refuted : C.certOK3B P spawns entry 1 = false := by decide +kernel
+` )
+    } {
+        ( string_push_str o `
+theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
+` )
+    }
+    : String file ( nc_join work `Refute.lean` )
+    ? ! ( nc_write ( string_data file ) ( string_data o ) ) { ^ F } {}
+    : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
+    ?? ( env_chdir formal ) { T _ → {} F _ → { ^ F } }
+    : String lp ( string_from formal )
+    ( string_push_str lp `/.lake/build/lib/lean` )
+    : b set ?? ( env_set `LEAN_PATH` ( string_data lp ) ) { T _ → T F _ → F }
+    : ( Vec String ) a ( vec_new [String] )
+    ( vec_push [String] a ( string_from `--json` ) )
+    ( vec_push [String] a ( string_clone file ) )
+    : Run r ? set ( nc_run lean a ) @ Run { F -1 ( string_new ) ( string_new ) }
+    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
+    // proved: Lean exited 0, wrote no error and nothing on stderr
+    ^ & & & . r started == . r code 0 ! ( string_contains . r out `\"severity\":\"error\"` ) == 0 ( string_len . r err )
+}
+
 // The kernel (or compiled code) decided that the checker refuses.
 @ cert_lean_refused String log → b {
     ^ & ( string_contains log `that the proposition` ) ( string_contains log `is false` )

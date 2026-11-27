@@ -651,6 +651,38 @@ if [ "$lrc" = 0 ] && [ "$nl" = 4 ] && [ "$(printf '%s\n' "$have" | wc -l)" = 4 ]
     ok "elabIR answers on the words of each sum case as on its every line (4 cases)"
 else bad "elabIR answers on the words of each sum case as on its every line (lean rc $lrc)"; printf '%s\n' "$have" | head -20 | sed 's/^/        /'; fi
 
+echo "== 2f. a deep term, and a refusal the kernel proves (AGORA-1034)"
+# A long body is a deep term: Program.lean says how deep Lean's elaborator
+# may recurse, exactly the bound the term's depth asks for, and nothing else.
+D="$P/deep"; rm -rf "$D"; mkdir -p "$D"
+"$C" certify compiler/tests/loop_nest_deep.nu "${CA[@]}" --out "$D/deep.cert" > "$D/out" 2>&1; drc=$?
+dline="$(sed -n 3p "$D/deep.cert/Program.lean")"
+if [ "$drc" = 0 ] && grep -q "M.safe proved" "$D/out" && printf '%s\n' "$dline" | grep -Eq '^set_option maxRecDepth [0-9]+$' \
+    && "$C" verify "$D/deep.cert" --formal "$ROOT/formal" > /dev/null 2>&1; then
+    ok "a deep term: accepted, its bound on line 3 of Program.lean, and it verifies"
+else bad "a deep term (certify rc $drc, line 3: $dline)"; tail -5 "$D/out"; fi
+dfresh() { rm -rf "$P/w"; cp -r "$D/deep.cert" "$P/w"; }
+dn="${dline##* }"
+dfresh; sed -i "3s/.*/set_option maxRecDepth $((dn + 1))/" "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
+expect_fail "a deep term's bound changed" "Program.lean only defines the program"
+dwrap="$(python3 -c "print($dn + 2**64)")"
+dfresh; sed -i "3s/.*/set_option maxRecDepth $dwrap/" "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
+expect_fail "a deep term's bound plus 2^64 (the same number in 64 bits)" "Program.lean only defines the program"
+dfresh; sed -i "3s/.*/set_option maxRecDepth 0$dn/" "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
+expect_fail "a deep term's bound with a leading zero" "Program.lean only defines the program"
+dfresh; sed -i "3s/.*/set_option maxHeartbeats 0/" "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
+expect_fail "another option in its place" "Program.lean only defines the program"
+dfresh; sed -i "3d" "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
+expect_fail "a deep term's bound dropped" "Program.lean only defines the program"
+efresh; sed -i "2a set_option maxRecDepth 4096" "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
+expect_fail "a bound on a term that needs none" "Program.lean only defines the program"
+# Lean's explanation of a failed decision fails on this term too: the
+# refusal is proved by the kernel in a run of its own, not read off a message.
+"$C" certify compiler/tests/option_payload_chain_forty_deep_compiles_fast.nu "${CA[@]}" --out "$D/ref.cert" > "$D/rout" 2>&1; rrc=$?
+if [ "$rrc" = 3 ] && grep -q "C.certOK2B is false, proved by the kernel" "$D/ref.cert/manifest.json"; then
+    ok "a refusal Lean cannot explain: refused, proved by the kernel"
+else bad "a refusal Lean cannot explain (certify rc $rrc)"; tail -5 "$D/rout"; fi
+
 echo "== 3. the fast profile"
 "$C" certify "$P/prog.nu" "${CA[@]}" --profile fast --out "$P/fast.cert" > "$TMP/f.out" 2>&1
 if grep -q "M.safe validated" "$TMP/f.out" && grep -q "native_decide" "$P/fast.cert/manifest.json" \

@@ -8,6 +8,7 @@
 //
 //   import C.Cert
 //   open A2 C
+//   set_option maxRecDepth <n>          (only for a deep term: see below)
 //   def fn<k> : Fn := <term>            (continuation lines indented)
 //   def P : Prog := [fn0, fn1, …]
 //   def entry : Stmt := .letcall 0 <k> [] .skip
@@ -21,6 +22,15 @@
 //
 // The check also reads off the slot count the claims are stated over: the
 // entry is one call into slot 0, so it is 1.
+//
+// A2's statements nest each one over the rest of its list, so a long body
+// is a deep term, and Lean's elaborator recurses once or twice per level:
+// past its default bound (`maxRecDepth` 512) it stops with "maximum
+// recursion depth has been reached" (AGORA-1034). Such a program's
+// Program.lean says how deep Lean may go, and the line must give exactly
+// the bound `cert_rec_depth` computes from the term itself, so it is a
+// function of the program and nothing a bundle can choose. It is a bound
+// on the elaborator's recursion, not on what the kernel checks.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -173,6 +183,31 @@ $ `stdlib/core/slice.nu`
 // The check. `text` is the whole of Program.lean.
 // (`text` as a String, read to its own length: a NUL byte is a byte the
 // grammar refuses, not the end of the file Lean goes on reading)
+// The `maxRecDepth` a term needs, from its deepest nesting of parentheses
+// d: about 2 per level (measured on A2 statement chains: depth 202, 402
+// and 802 needed 422, 824 and 1611), so 2d + 128. 0 when Lean's default,
+// 512, covers it, and the file has no `set_option` line.
+@ cert_rec_depth String text → i {
+    : ( Slice u ) t ( string_bytes text )
+    : i n ( slice_len [u] t )
+    : ~ i d 0
+    : ~ i m 0
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte t k )
+        ? == c 40 {
+            = d + d 1
+            ? > d m { = m d } {}
+        } {
+            ? == c 41 { = d - d 1 } {}
+        }
+        = k + k 1
+    }
+    : i need + * 2 m 128
+    ? <= need 512 { ^ 0 } {}
+    ^ need
+}
+
 @ cert_shape String text → ShapeRes {
     : ( Slice u ) t ( string_bytes text )
     : i n ( slice_len [u] t )
@@ -182,6 +217,8 @@ $ `stdlib/core/slice.nu`
     : ~ b have_entry F
     : ~ b have_spawns F
     : ~ b in_def F
+    : i need ( cert_rec_depth text )
+    : ~ b have_depth F
     ~ < a n {
         : ~ i z a
         ~ & < z n != ( slice_byte t z ) 10 { = z + z 1 }
@@ -191,6 +228,21 @@ $ `stdlib/core/slice.nu`
             ? == line 2 {
                 ? ! ( __sh_line_is t a z `open A2 C` ) { ^ ( __sh_bad `the second line is not 'open A2 C'` line ) } {}
             } {
+                // the deep term's bound, exactly the one its depth asks for:
+                // the line compared byte for byte with the one `need` makes, so
+                // no literal is parsed (a number past 64 bits would wrap to
+                // `need`, and Lean would read the big one)
+                ? & == line 3 ( __sh_starts t a z `set_option maxRecDepth ` ) {
+                    : String want ( string_from `set_option maxRecDepth ` )
+                    ( string_push_int want need )
+                    ? | == need 0 ! ( __sh_line_is t a z ( string_data want ) ) {
+                        ^ ( __sh_bad `set_option maxRecDepth is not the bound the term's depth asks for` line )
+                    } {}
+                    = have_depth T
+                    = a + z 1
+                    = line + line 1
+                    continue
+                } {}
                 ? == a z {
                     = in_def F
                 } {
@@ -245,5 +297,6 @@ $ `stdlib/core/slice.nu`
         = line + line 1
     }
     ? ! & have_p have_entry { ^ ( __sh_bad `P or entry is missing` line ) } {}
+    ? & > need 0 ! have_depth { ^ ( __sh_bad `a term this deep has no set_option maxRecDepth line` 3 ) } {}
     ^ @ ShapeRes { T 1 ( string_new ) have_spawns }
 }
