@@ -39771,7 +39771,19 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 = __vg_c ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __vg_c ) ( nurl_print ` = and i1 ` ) ( nurl_print __vg_s ) ( nurl_print `, ` ) ( nurl_print __vg_n ) ( nurl_print `\n` )
             } {}
-            ( mem_vget_consume syms cg bck_arg_val __vg_c )
+            // (…but not a value that cannot be copied and whose all-zero
+            // bytes are no value of its type — a trait object's null vtable,
+            // a closure's null code, a library handle's null block, or a
+            // struct holding one: the emptied slot stays in the Vec, and a
+            // later read of it calls through null. A callee that only reads
+            // it takes nothing; one that keeps or releases it is refused at
+            // module end, on its final summary, as a store of what a call
+            // lends (resolve_nc_lent_stores). A declared `sink` is the
+            // borrow rules' to refuse.)
+            ? & & ! __vg_decl ! ( __clone_supported at syms ) ( __zero_invalid at syms ) {
+                : s __vg_ety ( str_skip_word ( str_skip_word ( nurl_sym_get2 syms bck_arg_val `__vget` ) ) )
+                ( __park_nc_lent_store_k lex ( nurl_lex_line lex ) at ( nurl_str_cat `vec_get__` ( mangle_type __vg_ety ) ) `vec_get` call_name arg_idx fname )
+            } { ( mem_vget_consume syms cg bck_arg_val __vg_c ) }
         } {}
         // A field read through a pointer, handed to a consumer, is emptied
         // where it lives — as the legacy loop that frees each element's field
