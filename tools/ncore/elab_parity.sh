@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # elab_parity.sh: the Lean translation of the subset of numbers, buffers of
-# numbers, views, closures, structs and options (`C.Elab.elabIR`,
-# formal/C/Elab.lean, AGORA-1029 steps 2, 4, 5, 6 and 7)
+# numbers, views, closures, structs, options and destructor frames
+# (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps 2 and 4 to 8)
 # against the NURL translator (`nurl-cert translate`,
 # packages/nurl-cert/src/tolean.nu), over every certify program, every hole
 # probe, and the programs of tools/ncore/elab/ (written for this test: each
@@ -78,7 +78,9 @@ EXPECT_CERTIFY="cursor_over_a_vec int_recursion_early_return joins_each_freeing_
     clo_string_capture_rebound_then_called_refused clo_string_captured_and_read_after
     clo_two_captures_passed_to_a_function
     struct_field_handed_to_a_reader struct_field_read_after_the_struct_moved_refused struct_fields_read
-    vec_moved_into_a_struct vec_moved_into_a_struct_then_pushed_refused option_built_and_matched"
+    vec_moved_into_a_struct vec_moved_into_a_struct_then_pushed_refused option_built_and_matched
+    destructor_frame_left_by_an_early_return destructor_frame_left_by_an_early_return_after_its_source_moved_refused
+    destructor_reads_a_view_of_a_live_source destructor_reads_a_view_of_a_moved_source_refused"
 
 # (the list is copied aside first: it may be the work directory's own
 # progs.txt from an earlier run)
@@ -171,6 +173,7 @@ def s : Stmt → String
   | .free x => s!"(.free {x})"
   | .edit t x o => s!"(.edit {t} {x} {ed o})"
   | .callc x c j σ zs b => s!"(.callc {x} {c} {j} {σ} [{", ".intercalate (zs.map toString)}] {s b})"
+  | .letd x f q b => s!"(.letd {x} {f} ({r q}) {s b})"
   | _ => "?stmt"
 def fn (f : Fn) : String :=
   s!"params := {repr f.params}, resTy := {repr f.resTy}, resOwn := {f.resOwn}, body := {s f.body}, nvars := {f.nvars}"

@@ -170,8 +170,12 @@ prog.cert/
   `vec_truncate`, `vec_reserve`, `string_push_str`; closures over numbers
   and buffers of numbers, their literals and calls through them; options
   and structs of those types, their literals, a struct's fields read
-  through its pairs, an option's match; no struct with a destructor;
-  `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2 and 4 to 7). It is a
+  through its pairs, an option's match; and structs with a `% Drop` of
+  the program's own whose fields are of those types (raw text in a field
+  a view), each value bound by a destructor frame (`.letd`) in a
+  function's body: not handed back, assigned, returned by a call, given to
+  a `sink` or `inout` parameter or held in another value;
+  `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2 and 4 to 8). It is a
   pure function of
   Program.core (`cert_elab_lean`, `packages/nurl-cert/src/claims.nu`):
 

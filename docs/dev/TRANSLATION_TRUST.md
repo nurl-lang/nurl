@@ -1072,15 +1072,137 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   on a synthetic body of 50 such Vecs, which `elabIR` reads; certify has
   no term for such a program, so no Elab.lean either.
 
+## Route (b), step 8: destructor frames (AGORA-1029)
+
+- `elabIR` covers the translator's **destructor frames**. A type with a
+  `% Drop` of the program's own (a function `drop__X` of the program,
+  `%X` its type) is A2's `.dtor f u` (`__lean_ty`, `__dtor_of`; `dtorU`,
+  `tyOf`): `f` the index of `drop__X` among the program's functions, `u`
+  its struct, the fields' types nested in pairs to the right as a
+  struct's, but raw text in a field a view (`.slice .int`,
+  `__dtor_field_ty`), and a struct of one field padded with a number
+  (`.prod u .int`: A2's destructor types are of a struct). The
+  constructors it builds beyond step 7's are `.letd` (Stmt) and `.dtor`
+  (Ty). They are tolean.nu's rules for:
+  - a binding of a destructor type (`let x …`, a temporary or a local):
+    `.letd x f r`, whose scope's end runs `f` on the value (the IR's
+    `drop` lines are that end, as for every binding); its value is never
+    returned at once (`let x r` then `ret vx` is a `letd` too);
+  - a destructor struct's literal of one operand: the pair of the
+    operand's value and a padding temporary (`.pair v t`); of more, a
+    struct's pairs;
+  - a field read through the pairs (`fieldAt`, `fieldTemp`, `rdTy`): of a
+    destructor struct, its struct `u`, the padded struct of one field read
+    as two (`__field_temp`'s `padded`: `.fst`), a raw text field's type a
+    view (`__flean`);
+  - the destructor itself, `drop__X`, a function of the program, its
+    parameter read only (`.inp`, of `.dtor f u`).
+- **The destructor types.** The translator's set is every `drop__X` of
+  the program and every type whose `ty` line's drops say `d`
+  (`__emit`); `__is_dtor t` asks `t` and `%t`. `elabIR` reads the set off
+  the program's `drop__X` functions (`dtorsOf`), and refuses a `ty` line
+  whose drops say `d` for any other type (`topOk`; the translator refuses
+  a value of such a type, a destructor A2's translation does not see), so
+  the two sets are the same. Stricter: `X` must be a name
+  (`[A-Za-z0-9_]`, not empty) and `%X` a struct's name of the subset other
+  than `%String` (`dtorKeyB`). With that, on every type `tyOf` takes the
+  translator's `__is_dtor` is `CloTab.dtorF`'s lookup: the only such types
+  without a `%` are the number types, and `%` and a number's name is no
+  struct's. (The translator takes any name: a program's `drop__i64` makes
+  it read every `i64` as a destructor value.)
+- **Fail closed.** Each check the translator makes on these is made too,
+  each with a kernel witness of its refusal and of its well-formed
+  neighbour (formal/C/Elab.lean, "step 8"): a destructor value a call hands
+  back (`let x call …`, a library call included), a destructor binding
+  assigned, a destructor value handed back (a function's result), a
+  destructor parameter `sink` or `inout` (by its flags or the walk's
+  summary, `Ctx.flags`), a destructor type with no fields or no `ty` line,
+  and a field of a destructor type in a destructor struct. Where the
+  translator takes more, `elabIR` refuses (stricter, never laxer):
+  - a destructor type inside another type (a struct's field, an option's
+    payload: the translator takes them, `.prod (.dtor …) …`; a `Vec` of
+    them is no `Vec` of the subset either);
+  - a closure in a destructor struct's field (the translator takes one in
+    a struct of one field, and numbers its closure type as it goes);
+  - a destructor value bound from a call through a closure (`let x
+    callind …`; the translator binds it by `.callc`, no `letd`), and a
+    closure type taking or handing back a destructor type (`cloArgTy`
+    reads it through `tyR`, which takes none);
+  - a closure's code with a variable of a destructor type (the translator
+    checks only its parameters' modes);
+  - the `drop__X` names above, and the padding's own name, `(padding)`,
+    as a field (the translator reads it as the padding).
+  The type checks run for every variable and result of every function, as
+  the translator's `__fn_init`.
+- **The skip before Lean.** `ELAB_CTORS` takes `.letd .dtor`; it is still
+  read off `elabIR`'s codomain, so it stays exact. `ELAB_CLO_CTORS` is
+  unchanged (`.callc .pack`).
+- **Which programs.** Over tools/ncore/certify, 55 programs are in the
+  subset (51 at step 7): all 4 destructor programs
+  (`destructor_frame_left_by_an_early_return`,
+  `destructor_frame_left_by_an_early_return_after_its_source_moved_refused`,
+  `destructor_reads_a_view_of_a_live_source`,
+  `destructor_reads_a_view_of_a_moved_source_refused`). The 2 the checker
+  accepts get Elab.lean, 32 bundles in all (the selftest requires exactly
+  these 32); the 2 `*_refused` ones have no Claims.lean, so no Elab.lean.
+  Outside stay the channel and thread programs (A3) and nothing else. The
+  selftest's tamper bundle, a program outside the subset, is a channel
+  program now (`chan_int_sent_and_received`), and its outside-the-subset
+  check names that one. `elab_dtor` (formal/Check.lean) builds
+  `destructor_frame_left_by_an_early_return`'s term in the kernel.
+- **Parity** (`tools/ncore/elab_parity.sh`, 10 new fixtures in
+  `tools/ncore/elab/`, `dtor_*`: a destructor binding moved into another,
+  a frame left by a `break`, one in an `if` arm, one lent to a reader, one
+  made in each round of a loop, a struct of one number field padded, one
+  owning a `String` field, one of two fields read, and two the checker
+  refuses: a destructor reading a view of a source given a new value, and
+  of a source freed in a loop): of 4593 programs nurlc makes a core IR of
+  4388. tolean.nu translates 313 of those, and `elabIR` answers a term for
+  243 (the 55 certify programs, the 84 fixtures, 104 hole probes; 224 at
+  step 7, none of them lost), every one exactly tolean.nu's term (each also
+  by `decide +kernel`). It answers `none` for the other 4145, and a term
+  for no program tolean.nu refuses; the same on the words as on every line
+  for all 4388. The new matches are the 4 destructor programs, the 10
+  fixtures and 5 hole probes.
+- **Cost** (certify over the 62 certify programs, best of 3 alternated
+  runs, against step 7's tip; peak RSS of certify's process tree, the
+  lower of 2 runs):
+  - 77.2 s against 76.7 s (+0.7 %): the 4 destructor programs +1.39 s,
+    +0.20 to +0.45 s each, their Elab.lean part (the 2 the checker refuses
+    spend it too); the other 58 −0.83 s (the 30
+    with Elab.lean −0.05 s, the 28 without −0.78 s, within noise);
+    `joins_each_freeing_a_different_vec` 18.66 → 18.78 s.
+  - The Elab.lean part of a small program is 0.2–0.3 s of kernel time,
+    the destructor programs' within it (0.27–0.33 s against 0.23–0.26 s
+    for a raw-text or a struct program of the same size): no rule of step
+    8 is dear, they are 4 more bundles the kernel checks. Measured by
+    splitting `elabIR` into its stages, each `decide +kernel` on its own:
+    no stage dominates; each pass over the IR's lines costs the kernel
+    20–30 ms, whatever it does.
+  - Won back: `wordGo` reads a word's bytes lazily, first to last, each
+    the head of a cons whose tail is not yet read, where it built them all
+    in reverse and reversed them; a prefix test (`startsB f.file
+    stdlibB`, on a file path's word of ≈ 100 bytes) reads 7 bytes, a
+    comparison stops at the first byte that differs. `wordOf_encB` is
+    unchanged; `wordGo_encB` loses its accumulator.
+  - Peak RSS: the largest the same (2587.9 against 2587.1 MiB); the sum
+    +0.03 %, the 4 new programs +23 to +47 MiB each, the other 58 −0.3 %.
+  - AGORA-1029 as a whole, against main before step 6 (the earlier steps'
+    measurements): certify time −0.9 % (step 6), ≈ 0 (step 7), +0.7 %
+    (step 8); the sum of the peaks −1.1 %, +0.2 %, +0.03 %.
+  - Not this step's, measured on the way: certify's `lake env` costs
+    ≈ 45 ms a Lean run before Lean starts (`lake env lean` against `lean`
+    with the same `LEAN_PATH`), 2.8 s over the 62 programs.
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
 rules over words. Done: the claims rest on `elabIR` for the subset of
 numbers (steps 2 and 3), buffers of numbers (step 4), views, slices,
-`foreach` and changes through a borrow (step 5), closures (step 6) and
-structs and options (step 7), and `verify` checks the words against
-`Program.core`. Then:
-- the subset widened rule by rule (destructors; threads);
+`foreach` and changes through a borrow (step 5), closures (step 6),
+structs and options (step 7) and destructor frames (step 8), and `verify`
+checks the words against `Program.core`. Then:
+- the subset widened rule by rule (channels and threads, A3);
 - the per-encoding rows above replace `translation`;
 - kernel time is measured on the corpus;
 - `elab`'s parity with the NURL translator is shown over the sweep.

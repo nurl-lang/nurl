@@ -233,25 +233,27 @@ $ `words.nu`
 // `go`, `rhsS`, `intrP`, `editS`, `callAny`, `letcallS`, `readP`,
 // `operandE`, `operandP`, `fieldTemp`, `retR`, `modeOf`, `fnElab`, `elabIR`;
 // step 6's `callindS`, `cloLitS`, `pairUp`, `capBinds`, `cloFnElab`,
-// `envTy`, `ifaceFn`; step 7's `tyR`, `sndChain`), as the translator writes
-// them:
-//   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop .push .free .edit .callc
+// `envTy`, `ifaceFn`; step 7's `tyR`, `sndChain`; step 8's `dtorU`, `tyOf`
+// and `go`'s `.letd`), as the translator writes them:
+//   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop .push .free .edit .callc .letd
 //   Rhs   .expr .new .var .borrow .at .view .sat .pack .pair .fst .snd .inl .inr .getr
 //   Expr  .any .lit .var .add .lt .len .slen .isl
 //   Edit  .push .trunc
 //   PMode .inp .sink .inout
 //   Eff   .replace .drop .realloc .dropIn
-//   Ty    .int .vec .slice .prod .sum .fn
+//   Ty    .int .vec .slice .prod .sum .fn .dtor
 //   Cross .any (a closure's class; the same word as Expr's)
 // and the Bools of `resOwn := false` / `true` (a buffer, a struct or an
 // option handed back) and of `.edit true` (a change through a borrow). A
 // new constructor elabIR emits goes into this list too (Elab.lean says so
 // above `elabIR`); the selftest's sweep fails if a certify program in the
 // subset loses its Elab.lean.
+// (Step 8 adds `.letd` and `.dtor`, which elabIR builds for a value of a
+// destructor type of the program's own, and its type.)
 // Of those, the ones elabIR builds for closures alone (step 6; step 7's
 // structs build `.prod .pair .fst .snd` too).
 : s ELAB_CLO_CTORS `callc pack`
-: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc expr new var borrow at view sat pack pair fst snd inl inr getr any lit add lt len slen isl trunc inp sink inout replace drop realloc dropIn int vec slice prod sum fn`
+: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc letd expr new var borrow at view sat pack pair fst snd inl inr getr any lit add lt len slen isl trunc inp sink inout replace drop realloc dropIn int vec slice prod sum fn dtor`
 
 // Can Program.lean's term be `elabIR`'s at all? F when it holds a
 // constructor outside ELAB_CTORS: `elabIs` compares the two terms
