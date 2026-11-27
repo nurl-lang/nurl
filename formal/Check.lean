@@ -1081,6 +1081,8 @@ import D
 #print axioms C.Elab.elab_opt
 -- AGORA-1029 step 8: destructor frames (stmtBeq_sound covers `letd`)
 #print axioms C.Elab.elab_dtor
+-- AGORA-1029 step 9: channels (a library type's `d` line no longer refuses the program)
+#print axioms C.Elab.elab_chan
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided

@@ -20,7 +20,7 @@ $ `certify.nu`
     String bundle
     String binary
     String formal
-    String lake
+    String lean
     b rebuild
     String nurlc
     String stdlib
@@ -205,7 +205,7 @@ $ `certify.nu`
         // (`cert_lean_check`: the bundle's modules, combined).
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
-        : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data . o formal ) bundle ( string_data work ) elab )
+        : LeanRun lr ( cert_lean_check ( string_data . o lean ) ( string_data . o formal ) bundle ( string_data work ) elab )
         : b clean & . lr ran ! ( cert_lean_has_error . lr log )
         ( __vf_check t clean `Lean checks Program.lean and Claims.lean` ( string_data ( __vf_first . lr log ) ) )
         // The term is the kernel's: Lean proves Cert.elab again, in the same

@@ -38,7 +38,9 @@ accepted
   field by field, and structs with a `% Drop` of the program's own of
   those fields but closures, raw text a view, each value bound in a function's
   destructor frame and not handed back, assigned, returned by a call,
-  given to a `sink` or `inout` parameter or held in another value);
+  given to a `sink` or `inout` parameter or held in another value, and
+  channels of numbers, Strings or Vecs of numbers, made, shared, sent on,
+  received from and closed, outside a program that spawns a thread);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
 - `manifest.json`, with:
@@ -70,7 +72,8 @@ closures and channels in part. Threads and globals are not covered yet.
 
 Needs:
 - `nurlc`;
-- Lean's `lake` on `PATH`;
+- `lean` on `PATH` (elan's: run inside `formal/`, it picks `formal/`'s
+  toolchain), or `--lean PATH` / `$LEAN`;
 - `formal/` built (`cd formal && lake build C.Cert C.Cert3 C.Elab`).
 
 `verify` needs only Lean.

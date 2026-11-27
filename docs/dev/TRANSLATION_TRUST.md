@@ -1190,9 +1190,108 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   - AGORA-1029 as a whole, against main before step 6 (the earlier steps'
     measurements): certify time −0.9 % (step 6), ≈ 0 (step 7), +0.7 %
     (step 8); the sum of the peaks −1.1 %, +0.2 %, +0.03 %.
-  - Not this step's, measured on the way: certify's `lake env` costs
-    ≈ 45 ms a Lean run before Lean starts (`lake env lean` against `lean`
-    with the same `LEAN_PATH`), 2.8 s over the 62 programs.
+  - Measured on the way: certify's `lake env` costs ≈ 45 ms a Lean run
+    before Lean starts (`lake env lean` against `lean` with the same
+    `LEAN_PATH`), 2.8 s over the 62 programs; step 9 starts Lean without
+    it.
+
+## Route (b), step 9: channels (AGORA-1029)
+
+- `elabIR` covers the translator's **channels**, in a program that spawns
+  no thread (A2's checker; a program that spawns is A3's, next). A
+  `Channel T` (`%Channel__T`) is A2's lock share whose payload is its
+  queue and its closed flag, `.lk (.prod (.vec T) .int)` (`__lean_ty`,
+  A3.4), its element a number, a `String` or a `Vec` of numbers
+  (`chanElemB`, `__chan_elem`). The constructors it builds beyond step 8's
+  are `.lockNew .lockClone .chanSend .chanRecv .chanClose` (Rhs) and `.lk`
+  (Ty). They are tolean.nu's rules (`__intrinsic_`, `intrP`) for:
+  - `chan_new__T` of no argument: a fresh queue (`.new T`), a 0 flag, their
+    pair, and `.lockNew` of it into the call's variable;
+  - `Channel_share__T`: `.lockClone` of the channel (a new share);
+  - `chan_send__T`: `.chanSend` of the channel and the value, which moves
+    into the queue (an untracked number a temporary of its own, as
+    `vec_push`'s);
+  - `chan_recv__T` and `chan_try_recv__T`: `.chanRecv` (`true`: it waits),
+    the head moved out as an owned option;
+  - `chan_close__T`: `.chanClose`.
+  A channel is moved by `use` (`.var`, one owner: the alias rule of
+  AGORA-1020), lent to a read-only parameter (`.inp`) and handed back
+  owned, as any buffer.
+- **The library's destructor types.** `stdlib/std/channel.nu` brings `ty`
+  lines whose drops say `d` for library types (`%RawBlock`,
+  `%MutexImpl`, `%RcBox__…`). Step 8 refused a program with any such
+  line for a type with no destructor of the program's own, stricter than
+  the translator, which refuses only a value of one ("with a destructor
+  A2's translation does not see"); that kept every channel program out.
+  Now each is a destructor type with none for its destructor (`dOnlyOf`,
+  the `dts` table's `none`): `tyR` refuses a value of one wherever it
+  meets it, a variable's type or a struct's field, as the translator does,
+  and the line itself refuses nothing. Stricter: the name is `%` and a
+  name (`identB`), a struct's name of the subset other than `%String`, so
+  `__is_dtor`'s `%t` meets no type `tyOf` takes without its `%`.
+- **Fail closed.** Each check the translator makes is made too, each with
+  a kernel witness of its refusal and of its well-formed neighbour
+  (formal/C/Elab.lean, "step 9"): a channel of raw text, of a struct or of
+  a channel (`__chan_elem`), a channel call on a literal (its rule needs a
+  variable; no other rule takes the call), a `chan_new` given an
+  argument, a send of an element type no channel holds. Where the
+  translator takes more, `elabIR` refuses (stricter, never laxer): a
+  channel inside another type (an option's payload, a struct's field) or
+  a closure type, and an element named by one letter (`i`, `u`, `b`,
+  which nurlc does not print there).
+- **The skip before Lean.** `ELAB_CTORS` takes `.lockNew .lockClone
+  .chanSend .chanRecv .chanClose .lk` (a `true` is no constructor); it is
+  still read off `elabIR`'s codomain, so it stays exact.
+- **Which programs.** Over tools/ncore/certify, 58 programs are in the
+  subset (55 at step 8): all 3 channel programs
+  (`chan_int_sent_and_received`, `chan_string_sent_and_received`,
+  `chan_string_read_after_its_send_refused`). The 2 the checker accepts
+  get Elab.lean, 34 bundles in all (the selftest requires exactly these
+  34). Outside stay the 4 thread programs (A3) and nothing else; the
+  selftest's tamper bundle, a program outside the subset, is a thread
+  program now (`thread_spawned_with_a_number_capture`). `elab_chan`
+  (formal/Check.lean) builds `chan_int_sent_and_received`'s term in the
+  kernel, a library type's `d` line in its IR.
+- **Parity** (`tools/ncore/elab_parity.sh`, 7 new fixtures in
+  `tools/ncore/elab/`, `chan_*`: a channel of `Vec`s, a receive that does
+  not wait on an empty channel, a channel lent to a sender, one made by a
+  function and handed back, a share sent on, sends and receives in loops,
+  and one the checker refuses: a `Vec` pushed after it was sent): of 4600
+  programs nurlc makes a core IR of 4391. tolean.nu translates 320 of
+  those, and `elabIR` answers a term for 254 (the 58 certify programs, the
+  91 fixtures, 105 hole probes; 243 at step 8, none of them lost), every
+  one exactly tolean.nu's term (each also by `decide +kernel`). It answers
+  `none` for the other 4137, and a term for no program tolean.nu refuses;
+  the same on the words as on every line for all 4391.
+- **The selftest's program outside the subset** is its own now,
+  `packages/nurl-cert/tests/outside_elab.nu` (a `Vec` of `String`s: the
+  checker accepts it, `elabIR` refuses it): its tamper checks edit an A2
+  bundle's claims, and every A2 certify program is in the subset.
+- **Cost** (certify over the 62 certify programs, best of 3 alternated
+  runs, against step 8's tip; peak RSS of certify's process tree, the
+  lower of 2 runs; both `formal/` trees built from scratch: one built up
+  incrementally takes ≈ 30 MB less on `import C.Cert`, with the same
+  `.olean` sizes, which the first run here mistook for this step's):
+  - 76.5 s against 76.8 s (−0.3 %): the 3 channel programs +1.86 s, +0.47
+    to +0.75 s each, their Elab.lean part; the other 59 −2.09 s, 35 ms
+    each: Lean starts without `lake env`.
+  - **Lean without `lake`.** Certify and verify ran `lake env lean`; they
+    run `env LEAN_PATH=<formal>/.lake/build/lib/lean lean --json …` inside
+    `formal/` now, the same path, ≈ 45 ms less a run. elan's `lean`, run
+    inside `formal/`, picks `formal/`'s toolchain as its `lake` did; an
+    inherited `LEAN_PATH` is replaced. `--lake` is `--lean` (a breaking
+    change of nurl-cert 0.4.0's command line, in its changelog).
+  - The channel programs' Elab.lean part is dear because
+    `stdlib/std/channel.nu` brings ≈ 56 `ty` lines, each pass of `elabIR`
+    over them costing the kernel. `dOnlyOf` reads them in one pass, no
+    accumulator: a fold whose accumulator is read twice a step cost the
+    kernel ≈ 3× as much.
+  - Peak RSS: the largest 2513 against 2618 MiB, the sum −12.8 %: `lake`
+    no longer waits in the process tree while Lean runs; the channel
+    programs −39 to −57 MiB each.
+  - AGORA-1029 as a whole (each step against the one before): certify time
+    −0.9 % (step 6), ≈ 0 (step 7), +0.7 % (step 8), −0.3 % (step 9); the
+    sum of the peaks −1.1 %, +0.2 %, +0.03 %, −12.8 %.
 
 ## Next
 
@@ -1200,9 +1299,10 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
 rules over words. Done: the claims rest on `elabIR` for the subset of
 numbers (steps 2 and 3), buffers of numbers (step 4), views, slices,
 `foreach` and changes through a borrow (step 5), closures (step 6),
-structs and options (step 7) and destructor frames (step 8), and `verify`
-checks the words against `Program.core`. Then:
-- the subset widened rule by rule (channels and threads, A3);
+structs and options (step 7), destructor frames (step 8) and channels
+(step 9), and `verify` checks the words against `Program.core`. Then:
+- the subset widened to the programs that spawn (threads, A3's checker,
+  `Cert3`);
 - the per-encoding rows above replace `translation`;
 - kernel time is measured on the corpus;
 - `elab`'s parity with the NURL translator is shown over the sweep.

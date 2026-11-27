@@ -113,11 +113,12 @@ want_elab=$(printf '%s\n' cursor_over_a_vec int_recursion_early_return joins_eac
     clo_string_captured_and_read_after clo_two_captures_passed_to_a_function \
     struct_field_handed_to_a_reader struct_fields_read vec_moved_into_a_struct option_built_and_matched \
     destructor_frame_left_by_an_early_return destructor_reads_a_view_of_a_live_source \
+    chan_int_sent_and_received chan_string_sent_and_received \
     | sort | tr '\n' ' ')
-if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 32 accepted certify programs in the subset have Elab.lean (Cert.elab)"
-else bad "exactly the 32 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
-if grep -qx "ok chan_int_sent_and_received accepted (translator)" "$TMP/progs.txt"; then ok "chan_int_sent_and_received (outside the subset): no Elab.lean, and it verifies"
-else bad "chan_int_sent_and_received (outside the subset): no Elab.lean, and it verifies"; fi
+if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 34 accepted certify programs in the subset have Elab.lean (Cert.elab)"
+else bad "exactly the 34 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
+if grep -qx "ok thread_spawned_with_a_number_capture accepted (translator)" "$TMP/progs.txt"; then ok "thread_spawned_with_a_number_capture (outside the subset): no Elab.lean, and it verifies"
+else bad "thread_spawned_with_a_number_capture (outside the subset): no Elab.lean, and it verifies"; fi
 
 echo "== 1b. one Lean file, and the module way"
 # certify and verify check a bundle in one Lean file (Program.lean's
@@ -193,7 +194,8 @@ for n in moved_on_one_branch_then_read_refused owner_moved_in_a_loop_without_ret
     clo_returned_over_a_parameter_then_called_after_its_free_refused \
     clo_string_capture_rebound_then_called_refused \
     destructor_frame_left_by_an_early_return_after_its_source_moved_refused \
-    destructor_reads_a_view_of_a_moved_source_refused; do
+    destructor_reads_a_view_of_a_moved_source_refused \
+    chan_string_read_after_its_send_refused; do
     pl="$TMP/progs/$n/$n.cert/Program.lean"
     c=$(python3 - "$pl" "$ctors" <<'EOF2'
 import re, sys
@@ -204,7 +206,7 @@ EOF2
 )
     if [ "$c" = yes ] && grep -qx "ok $n refused" "$TMP/progs.txt"; then nref=$((nref + 1)); else badref="$badref $n"; fi
 done
-[ "$nref" = 21 ] && ok "the 21 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
+[ "$nref" = 22 ] && ok "the 22 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
     || bad "the refused programs in the subset are refused:$badref"
 R="$TMP/rv"; rm -rf "$R"; cp -r "$TMP/progs/vec_push_len/vec_push_len.cert" "$R"
 cp "$TMP/progs/use_after_move_refused/use_after_move_refused.cert/Program.lean" "$R/Program.lean"
@@ -221,19 +223,19 @@ if [ "$vrc" != 0 ] && printf '%s\n' "$out" | grep -Eq "FAIL  Lean checks Program
     ok "a refused program's term in a bundle with Elab.lean: verify fails on the claims"
 else bad "a refused program's term in a bundle with Elab.lean: verify fails on the claims (rc $vrc)"; printf '%s\n' "$out" | sed 's/^/        /' | head -12; fi
 
-# A Lean run that ends abnormally (here: a lake that dies, exit 137, on any
+# A Lean run that ends abnormally (here: a lean that dies, exit 137, on any
 # file with an Elab.lean part) costs the optional Cert.elab only: certify
 # checks the claims again alone and keeps them; verify of a bundle that holds
 # Elab.lean still fails on Cert.elab.
-KL="$TMP/killlake"; cat > "$KL" <<'EOF2'
+KL="$TMP/killlean"; cat > "$KL" <<'EOF2'
 #!/usr/bin/env bash
 for a in "$@"; do case "$a" in *.lean) grep -q '^import C.Elab$' "$a" && exit 137;; esac; done
-exec lake "$@"
+exec lean "$@"
 EOF2
 chmod +x "$KL"
 K="$TMP/kl"; rm -rf "$K"; mkdir -p "$K"; cp tools/ncore/certify/vec_push_len.nu "$K/p.nu"
-"$C" certify "$K/p.nu" "${CA[@]}" --lake "$KL" > "$K/out" 2>&1; krc=$?
-kv=$("$C" verify "$TMP/progs/vec_push_len/vec_push_len.cert" --formal "$ROOT/formal" --lake "$KL" 2>&1); kvrc=$?
+"$C" certify "$K/p.nu" "${CA[@]}" --lean "$KL" > "$K/out" 2>&1; krc=$?
+kv=$("$C" verify "$TMP/progs/vec_push_len/vec_push_len.cert" --formal "$ROOT/formal" --lean "$KL" 2>&1); kvrc=$?
 if [ "$krc" = 0 ] && grep -q "M.safe proved" "$K/out" && grep -q "M.leak proved" "$K/out" && [ ! -e "$K/p.cert/Elab.lean" ] \
     && grep -q "Cert.elab not proved: the Lean run ended abnormally (exit 137)" "$K/out" \
     && "$C" verify "$K/p.cert" --formal "$ROOT/formal" > /dev/null 2>&1 \
@@ -242,15 +244,19 @@ if [ "$krc" = 0 ] && grep -q "M.safe proved" "$K/out" && grep -q "M.leak proved"
 else bad "a Lean run that dies in the Elab.lean part (certify rc $krc, verify rc $kvrc)"; head -8 "$K/out"; fi
 
 echo "== 2. tampering"
-# (a program outside C.Elab's subset, a channel's since step 8 took the
-# destructor programs in: its bundle's term is the translator's, and its
-# ledger row the one a downgraded bundle must have, part 2b)
+# (a program outside C.Elab's subset, of A2's checker: its bundle's term is
+# the translator's, and its ledger row the one a downgraded bundle must
+# have, part 2b. Since step 9 every certify program of A2's is in the
+# subset, so it is the selftest's own: tests/outside_elab.nu, a Vec of
+# Strings)
 P="$TMP/t"; mkdir -p "$P"
-cp tools/ncore/certify/chan_int_sent_and_received.nu "$P/prog.nu"
+cp packages/nurl-cert/tests/outside_elab.nu "$P/prog.nu"
 "$ROOT/nurl.sh" "$P/prog.nu" "$P/prog" > /dev/null 2>&1 || bad "the program builds"
 cp "$P/prog" "$P/other"; printf 'x' >> "$P/other"
 "$C" certify "$P/prog.nu" "${CA[@]}" --binary "$P/prog" > /dev/null 2>&1 || bad "certify the tamper program"
 B="$P/prog.cert"
+if [ -e "$B/Claims.lean" ] && [ ! -e "$B/Elab.lean" ]; then ok "the tamper program (outside the subset) is accepted, with no Elab.lean"
+else bad "the tamper program (outside the subset) is accepted, with no Elab.lean"; fi
 fresh() { rm -rf "$P/w"; cp -r "$B" "$P/w"; cp "$P/prog.nu" "$P/prog.keep"; }
 restore() { cp "$P/prog.keep" "$P/prog.nu"; }
 # expect_fail NAME CHECK-TEXT [verify args…]: verify fails and its FAIL line names the check.

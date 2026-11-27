@@ -50,7 +50,9 @@ and `cert3_leak` give A3's claim on every interleaving from the entry.
 reader, in the kernel, the first part of building the term inside it;
 step 2, `C.Elab.elabIR`: the term of a scalar program built from those
 words, tolean.nu's rules for that subset (`elabIs_sound`, `elab_while`),
-widened by steps 4 to 8 to buffers, views, closures (`elab_clo`), structs
-(`elab_struct`), options (`elab_opt`) and destructor frames (`elab_dtor`:
+widened by steps 4 to 9 to buffers, views, closures (`elab_clo`), structs
+(`elab_struct`), options (`elab_opt`), destructor frames (`elab_dtor`:
 a type with a `% Drop` of the program's own is A2's `.dtor f u`, its
-values bound by `.letd`). -/
+values bound by `.letd`) and channels (`elab_chan`: a `Channel T` is A2's
+lock share of its queue and closed flag, its calls `.lockNew`,
+`.lockClone`, `.chanSend`, `.chanRecv`, `.chanClose`). -/

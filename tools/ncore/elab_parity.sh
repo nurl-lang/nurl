@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # elab_parity.sh: the Lean translation of the subset of numbers, buffers of
-# numbers, views, closures, structs, options and destructor frames
-# (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps 2 and 4 to 8)
+# numbers, views, closures, structs, options, destructor frames and channels
+# (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps 2 and 4 to 9)
 # against the NURL translator (`nurl-cert translate`,
 # packages/nurl-cert/src/tolean.nu), over every certify program, every hole
 # probe, and the programs of tools/ncore/elab/ (written for this test: each
@@ -80,7 +80,8 @@ EXPECT_CERTIFY="cursor_over_a_vec int_recursion_early_return joins_each_freeing_
     struct_field_handed_to_a_reader struct_field_read_after_the_struct_moved_refused struct_fields_read
     vec_moved_into_a_struct vec_moved_into_a_struct_then_pushed_refused option_built_and_matched
     destructor_frame_left_by_an_early_return destructor_frame_left_by_an_early_return_after_its_source_moved_refused
-    destructor_reads_a_view_of_a_live_source destructor_reads_a_view_of_a_moved_source_refused"
+    destructor_reads_a_view_of_a_live_source destructor_reads_a_view_of_a_moved_source_refused
+    chan_int_sent_and_received chan_string_sent_and_received chan_string_read_after_its_send_refused"
 
 # (the list is copied aside first: it may be the work directory's own
 # progs.txt from an earlier run)
