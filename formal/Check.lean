@@ -1083,6 +1083,10 @@ import D
 #print axioms C.Elab.elab_dtor
 -- AGORA-1029 step 9: channels (a library type's `d` line no longer refuses the program)
 #print axioms C.Elab.elab_chan
+-- AGORA-1029 step 10: threads (A3's programs, elabIR3)
+#print axioms C.Elab.elab_thread
+#print axioms C.Elab.elabIs3_sound
+#print axioms C.Elab.dOnlyOf_topOk
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided

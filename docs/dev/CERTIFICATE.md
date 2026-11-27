@@ -176,9 +176,12 @@ prog.cert/
   the program's own whose fields are of those types (raw text in a field
   a view), each value bound by a destructor frame (`.letd`) in a
   function's body: not handed back, assigned, returned by a call, given to
-  a `sink` or `inout` parameter or held in another value;
-  `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2 and 4 to 8). It is a
-  pure function of
+  a `sink` or `inout` parameter or held in another value; channels of
+  numbers, `String`s and `Vec`s of numbers; and threads, A3's programs:
+  spawned closures holding those by value, their spawns, joins and
+  results, `C.Elab.elabIR3`, which builds the spawn wrappers too;
+  `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2 and 4 to 10). Every
+  certify program is in it. It is a pure function of
   Program.core (`cert_elab_lean`, `packages/nurl-cert/src/claims.nu`):
 
   ```lean
@@ -192,6 +195,9 @@ prog.cert/
   #print axioms Cert.«elab»
   ```
 
+  A threaded program's (its Program.lean names its `spawns`) is
+  `theorem «elab» : C.Elab.elabIR3 ir = some (P, spawns, entry) :=
+  C.Elab.elabIs3_sound _ _ _ _ (by decide +kernel)`.
   (`elab` is a keyword of Lean, hence `«elab»`; Lean prints the name
   `Cert.elab`.)
   - The words are `nurl-cert words` (`packages/nurl-cert/src/words.nu`).

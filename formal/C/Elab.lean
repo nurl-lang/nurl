@@ -519,6 +519,13 @@ structure CloTab where
       (step 9) each other type whose `ty` line's drops say `d`, with none
       (`dOnlyOf`: a destructor the translation does not see). -/
   dts : List (W × Option Nat)
+  /-- (step 10) Does the program spawn (`threaded`: `thread_spawn_owned` in
+      a function of its own)? Then threads, results and spawned closures
+      are read as A3's. -/
+  thr : Bool
+  /-- (step 10) The closure codes a spawn runs, by name, in the order the
+      translator first meets them (`spawned`): wrapper `j` runs code `j`. -/
+  spawned : List W
 
 def indexOfB (xs : List (List Nat)) (x : List Nat) : Option Nat :=
   match xs with
@@ -696,6 +703,79 @@ example : chanElemB (bytesOf "i64") = some .int ∧ chanElemB (bytesOf "String")
     chanElemB (bytesOf "%Vec__i64") = some (.vec .int) ∧ chanElemB (bytesOf "Vec__str") = none ∧
     chanElemB (bytesOf "%W") = none ∧ chanElemB (bytesOf "%i64") = none := by decide +kernel
 
+/-! #### Threads (step 10)
+
+A program that spawns (`thread_spawn_owned` in a function of its own) is
+A3's (`C.certOK3B P spawns entry 1`): a thread's handle and its error are
+numbers, a result `{ i1, T, E }` is `.sum E T` (the error the first variant,
+as an option's `None`), a spawned closure is of class `send`. -/
+
+def kSpawnW : W := 0x164656e776f5f6e776170735f646165726874
+def kJoinW : W := 0x16e696f6a5f646165726874
+def kThreadW : W := 0x164616572685425
+def kThreadErrW : W := 0x172724564616572685425
+/-- A spawned closure's interface key (`__clo_index_send`: `send:` and the
+    closure type). -/
+def sendB : List Nat := [115, 101, 110, 100, 58]
+example : kSpawnW = enc "thread_spawn_owned" ∧ kJoinW = enc "thread_join" ∧ kThreadW = enc "%Thread" ∧
+    kThreadErrW = enc "%ThreadErr" ∧ sendB = bytesOf "send:" := by decide +kernel
+
+/-- A result's members (`__result_split`): the place of the comma between
+    them at the top level, followed by a space; none for an option's one
+    member. The depth is the translator's signed one, `up - down`: the
+    brackets opened and closed so far, two numbers (an `Int` would bring
+    `Classical.choice` into every proof that reads a type). -/
+def resultSplitGo : List Nat → Nat → Nat → Nat → Option Nat
+  | [], _, _, _ => none
+  | c :: rest, up, down, k =>
+    let up' := if c == 123 || c == 40 then up + 1 else up
+    let down' := if c == 125 || c == 41 then down + 1 else down
+    if up' == down' && c == 44 && (match rest with | 32 :: _ => true | _ => false) then some k
+    else resultSplitGo rest up' down' (k + 1)
+
+/-- A result type (`__is_result`): `{ i1, T, E }`. -/
+def isResultB (cs : List Nat) : Bool :=
+  prefixN optHeadB cs && prefixN optTailRevB cs.reverse && (resultSplitGo (optInner cs) 0 0 0).isSome
+
+/-- The last `ty` line of type `t`. -/
+def lastTyLine (tyls : List (List W)) (t : W) : Option (List W) :=
+  tyls.foldl (fun acc l => match l with
+    | kTy :: name :: _ => if name == t then some l else acc
+    | _ => acc) none
+
+/-- `n` variants' payload types (each a name, a count and that many types). -/
+def varTysGo : Nat → List W → Option (List W)
+  | 0, _ => some []
+  | n + 1, _ :: kc :: rest => do
+    let k ← natOf kc
+    if rest.length < k then none
+    let more ← varTysGo n (rest.drop k)
+    pure (rest.take k ++ more)
+  | _ + 1, _ => none
+
+/-- `%ThreadErr` (`__scalar_enum`): an enum of no fields whose variants carry
+    only numbers (stricter: the translator also takes the one-letter
+    names). -/
+def scalarEnumB (tyls : List (List W)) (t : W) : Bool :=
+  match lastTyLine tyls t with
+  | some (kTy :: _ :: _ :: _ :: _ :: rest) =>
+    let fs := match rest with
+      | kA :: na :: more => more.drop ((natOf na).getD 0)
+      | _ => rest
+    match fs with
+    | kF :: nf :: r =>
+      if natOf nf != some 0 then false
+      else match r with
+        | kVV :: nv :: vs => match natOf nv with
+          | some k => match varTysGo k vs with
+            | some ts => ts.all intTy
+            | none => false
+          | none => false
+        | [] => true
+        | _ => false
+    | _ => false
+  | _ => false
+
 /-- A type of the subset as A2's (`__lean_ty`): `tyR`'s, a closure type of
     the program's (`.fn [σ] .any`, step 6), a destructor type of the
     program's (`.dtor f u`, step 8), and a channel (`.lk (.prod (.vec T)
@@ -707,26 +787,43 @@ def tyOf (cl : CloTab) (t : W) : Option Ty :=
   if intTy t || t == kI8p || t == kString then tyR cl.tyls cl.dts tyFuel [] t
   else match wordOf t with
     | cs@(123 :: _) =>
-      if optB cs then tyR cl.tyls cl.dts tyFuel [] t
+      -- (step 10) a result, where the program spawns: `.sum E T`, each
+      -- member a thread's handle or error, or a type `tyR` takes
+      if cl.thr && !cloShaped cs && isResultB cs then
+        match resultSplitGo (optInner cs) 0 0 0 with
+        | some k =>
+          let inner := optInner cs
+          let mem : List Nat → Option Ty := fun m =>
+            let w := encB m
+            if w == kThreadW then some .int
+            else if w == kThreadErrW then (if scalarEnumB cl.tyls w then some .int else none)
+            else tyR cl.tyls cl.dts tyFuel [] w
+          match mem (inner.drop (k + 2)), mem (inner.take k) with
+          | some e, some a => some (.sum e a)
+          | _, _ => none
+        | none => none
+      else if optB cs then tyR cl.tyls cl.dts tyFuel [] t
       else (indexOfB cl.tys cs).map fun k => .fn [cl.base + k] .any
     | cs =>
-      if prefixN chanTyB cs then (chanElemB (cs.drop 10)).map fun el => .lk (.prod (.vec el) .int)
+      if cl.thr && t == kThreadW then some .int
+      else if cl.thr && t == kThreadErrW then (if scalarEnumB cl.tyls t then some .int else none)
+      else if prefixN chanTyB cs then (chanElemB (cs.drop 10)).map fun el => .lk (.prod (.vec el) .int)
       else match cl.dtorF t with
       | some f => (dtorU cl.tyls cl.dts t).map (.dtor f)
       | none => tyR cl.tyls cl.dts tyFuel [] t
 
-example : tyOf ⟨0, [], [], []⟩ (enc "%Vec__str") = some (.vec (.slice .int)) ∧
-    tyOf ⟨0, [], [], []⟩ (enc "%Slice__u8") = some (.slice .int) ∧
-    tyOf ⟨0, [], [], []⟩ (enc "%Slice__str") = none ∧ tyOf ⟨0, [], [], []⟩ (enc "%Vec__String") = none := by decide +kernel
+example : tyOf ⟨0, [], [], [], false, []⟩ (enc "%Vec__str") = some (.vec (.slice .int)) ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (enc "%Slice__u8") = some (.slice .int) ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (enc "%Slice__str") = none ∧ tyOf ⟨0, [], [], [], false, []⟩ (enc "%Vec__String") = none := by decide +kernel
 
 /-- (step 9) A channel of numbers, of `String`s, of `Vec`s of numbers; none
     of raw text, of a struct, of a channel; none inside an option. -/
-example : tyOf ⟨0, [], [], []⟩ (enc "%Channel__i64") = some (.lk (.prod (.vec .int) .int)) ∧
-    tyOf ⟨0, [], [], []⟩ (enc "%Channel__String") = some (.lk (.prod (.vec (.vec .int)) .int)) ∧
-    tyOf ⟨0, [], [], []⟩ (enc "%Channel__Vec__i64") = some (.lk (.prod (.vec (.vec .int)) .int)) ∧
-    tyOf ⟨0, [], [], []⟩ (enc "%Channel__str") = none ∧ tyOf ⟨0, [], [], []⟩ (enc "%Channel__W") = none ∧
-    tyOf ⟨0, [], [], []⟩ (enc "%Channel__Channel__i64") = none ∧
-    tyOf ⟨0, [], [], []⟩ (enc "{ i1, %Channel__i64 }") = none := by decide +kernel
+example : tyOf ⟨0, [], [], [], false, []⟩ (enc "%Channel__i64") = some (.lk (.prod (.vec .int) .int)) ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (enc "%Channel__String") = some (.lk (.prod (.vec (.vec .int)) .int)) ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (enc "%Channel__Vec__i64") = some (.lk (.prod (.vec (.vec .int)) .int)) ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (enc "%Channel__str") = none ∧ tyOf ⟨0, [], [], [], false, []⟩ (enc "%Channel__W") = none ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (enc "%Channel__Channel__i64") = none ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (enc "{ i1, %Channel__i64 }") = none := by decide +kernel
 
 /-- `i64` inside `n` options, as its bytes (`{ i1, ` … ` }` `n` times; built
     from the bytes, no string literal for the kernel to build). -/
@@ -736,14 +833,14 @@ def nestOpt : Nat → List Nat
 
 /-- `tyFuel`'s bound: a number inside 31 options is read, inside 32 it is
     refused (fail closed; the translator follows any depth). -/
-example : (tyOf ⟨0, [], [], []⟩ (encB (nestOpt 31))).isSome = true ∧
-    tyOf ⟨0, [], [], []⟩ (encB (nestOpt 32)) = none ∧
-    tyOf ⟨0, [], [], []⟩ (encB (nestOpt 2)) = some (.sum .int (.sum .int .int)) := by decide +kernel
+example : (tyOf ⟨0, [], [], [], false, []⟩ (encB (nestOpt 31))).isSome = true ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (encB (nestOpt 32)) = none ∧
+    tyOf ⟨0, [], [], [], false, []⟩ (encB (nestOpt 2)) = some (.sum .int (.sum .int .int)) := by decide +kernel
 
 /-- `%String` is no struct (a place `v/ctl` of a String is refused), though
     a struct may hold one. -/
 example : structNameB stringTyB = false ∧ structNameB (bytesOf "%P") = true ∧
-    tyOf ⟨0, [], strs [["ty", "%P", "1", "0-----", "P", "A", "0", "F", "2", "x", "i64", "s", "%String", "V", "0"]], []⟩
+    tyOf ⟨0, [], strs [["ty", "%P", "1", "0-----", "P", "A", "0", "F", "2", "x", "i64", "s", "%String", "V", "0"]], [], false, []⟩
       (enc "%P") = some (.prod .int (.vec .int)) := by decide +kernel
 
 /-- A closure type's result or argument as A2's type: `tyOfB`'s, or a
@@ -790,6 +887,24 @@ def cloAdd (tyls : List (List W)) (dts : List (W × Option Nat)) (acc : List (Li
     order an id first appears: `elabIR` requires the ids increasing.) -/
 def cloScan (tyls : List (List W)) (dts : List (W × Option Nat)) (prog : List CoreFn) : List (List Nat) :=
   prog.foldl (fun acc f => cloAdd tyls dts (f.vars.foldl (fun a v => cloAdd tyls dts a v.2.2.2) acc) f.ret) []
+
+/-- (step 10) The closure types with the interfaces of class `send` of a
+    program that spawns: after each function's own (`cloScan`'s), the one
+    its spawned closure values are of (`elabL` takes at most one a
+    function), as the translator meets it while it translates the body. -/
+def cloScan3 (tyls : List (List W)) (dts : List (W × Option Nat)) :
+    List (CoreFn × List (Nat × W)) → List (List Nat) → List (List Nat)
+  | [], acc => acc
+  | (f, sv) :: r, acc =>
+    let a := cloAdd tyls dts (f.vars.foldl (fun a v => cloAdd tyls dts a v.2.2.2) acc) f.ret
+    let a' := match sv.head? with
+      | some (k, _) => match f.vars.reverse.find? (·.1 == k) with
+        | some (_, _, _, t) =>
+          let cs := wordOf t
+          if cloShaped cs && !a.contains (sendB ++ cs) && (cloTysB tyls dts cs).isSome then a ++ [sendB ++ cs] else a
+        | none => a
+      | none => a
+    cloScan3 tyls dts r a'
 
 example : cloSigB (bytesOf "{ i64 (i8*, i64, %Vec__i64)*, i8* }") =
       some (["i64", "i64", "%Vec__i64"].map bytesOf) ∧
@@ -1156,6 +1271,9 @@ structure St where
   next : Nat
   lits : List Nat
   depth : Nat
+  /-- (step 10) Each spawn translated: its wrapper's place among the
+      spawned codes and the interface its closure is of (`wsig`). -/
+  wsig : List (Nat × Nat)
 
 def M (α : Type) : Type := St → Option (α × St)
 
@@ -1176,6 +1294,8 @@ def M.fresh : M Nat := fun s => some (s.next, { s with next := s.next + 1 })
 def M.litTemp : M Nat := fun s => some (s.next, { s with next := s.next + 1, lits := s.next :: s.lits })
 
 def M.depth : M Nat := fun s => some (s.depth, s)
+
+def M.spawnAt (j σ : Nat) : M Unit := fun s => some ((), { s with wsig := (j, σ) :: s.wsig })
 
 def M.addDepth (n : Nat) : M Unit := fun s => some ((), { s with depth := s.depth + n })
 
@@ -1349,6 +1469,9 @@ structure Ctx where
   rslot : Nat
   vmap : Option (List (Nat × Nat))
   tops : List (List W)
+  /-- (step 10) The closure values the function's spawns take, each with
+      the spawned code's name (`sendv`, `sendc`). -/
+  sv : List (Nat × W)
 
 /-- Variable `k`'s type, or `d` where it has no `v` line (`__vtyd`). -/
 def tyD (vs : List (Nat × Nat × Nat × W)) (k : Nat) (d : W) : W :=
@@ -1394,12 +1517,18 @@ def Ctx.ty (c : Ctx) (k : Nat) : Option Ty :=
 
 /-- Variable `k`'s A2 type where it is read (`__vlean`): raw text that
     holds a view (`views`) is a slice. -/
-def vlOf (cl : CloTab) (vs : List (Nat × Nat × Nat × W)) (views : List Nat) (k : Nat) : Option Ty :=
+def vlOf (cl : CloTab) (vs : List (Nat × Nat × Nat × W)) (views : List Nat) (sv : List Nat) (k : Nat) : Option Ty :=
   match lastVar vs k with
-  | some (_, _, _, t) => if t == kI8p && views.contains k then some (.slice .int) else tyOf cl t
+  | some (_, _, _, t) =>
+    if t == kI8p && views.contains k then some (.slice .int)
+    -- (step 10) a closure value a spawn takes: of class `send`, its own
+    -- interface (`__vlean`, `__clo_index_send`)
+    else if cl.thr && sv.contains k && cloShaped (wordOf t) then
+      (indexOfB cl.tys (sendB ++ wordOf t)).map fun j => .fn [cl.base + j] .send
+    else tyOf cl t
   | none => none
 
-def Ctx.vl (c : Ctx) (k : Nat) : Option Ty := vlOf c.cl c.vars c.views k
+def Ctx.vl (c : Ctx) (k : Nat) : Option Ty := vlOf c.cl c.vars c.views (c.sv.map (·.1)) k
 
 /-- Is variable `k` a number (`__int_ty` of its type, `i64` without a `v`
     line)? -/
@@ -1461,9 +1590,9 @@ def fieldAt (c : CloTab) (vs : List (Nat × Nat × Nat × W)) (w : W) :
 /-- A place of a String (`v0/ctl`, its handle: the IR's `ty %String` line
     has one field) is refused; the same place of a struct of one number
     field is read. -/
-example : fieldAt ⟨0, [], strs [["ty", "%String", "1", "0-----", "String", "A", "0", "F", "1", "ctl", "i8*", "V", "0"]], []⟩
+example : fieldAt ⟨0, [], strs [["ty", "%String", "1", "0-----", "String", "A", "0", "F", "1", "ctl", "i8*", "V", "0"]], [], false, []⟩
       [(0, 0, 0, enc "%String")] (enc "v0/ctl") = none ∧
-    (fieldAt ⟨0, [], strs [["ty", "%S", "1", "0-----", "S", "A", "0", "F", "1", "ctl", "i64", "V", "0"]], []⟩
+    (fieldAt ⟨0, [], strs [["ty", "%S", "1", "0-----", "S", "A", "0", "F", "1", "ctl", "i64", "V", "0"]], [], false, []⟩
       [(0, 0, 0, enc "%S")] (enc "v0/ctl")).isSome = true := by decide +kernel
 
 /-- Field `i` of a struct of `n` fields, of A2 type `t` (its fields nested
@@ -1626,7 +1755,10 @@ def rhsS (c : Ctx) (ws : List W) (dest : Option Nat) (asg : Bool) :
     match dest with
     | none => M.fail
     | some d =>
-      if w1 == kT || w1 == kF then
+      -- (step 10) a result's literal, where the program spawns, is refused
+      -- (as the translator refuses it)
+      if c.cl.thr && (w1 == kT || w1 == kF) && isResultB (wordOf (tyD c.vars d kEmpty)) then M.fail
+      else if w1 == kT || w1 == kF then
         match c.ty d with
         | some (.sum .int pay) =>
           if w1 == kF then do
@@ -1677,6 +1809,14 @@ def rhsS (c : Ctx) (ws : List W) (dest : Option Nat) (asg : Bool) :
   | kPayload :: w :: kT :: z :: _ =>
     -- (step 7) an option's payload where its `T` arm matched, lent
     if z == kZero then M.lift ((vref w).map fun y => ([], .getr (c.var y))) else M.fail
+  | kPayload :: w :: kF :: z :: _ =>
+    -- (step 10) a result's error, its first variant's payload, lent, where
+    -- the program spawns
+    if z == kZero && c.cl.thr then
+      match vref w with
+      | some y => if isResultB (wordOf (tyD c.vars y kEmpty)) then pure ([], .getl (c.var y)) else M.fail
+      | none => M.fail
+    else M.fail
   | _ => M.fail
 
 /-- A call's arguments (`__call`): an untracked number is a temporary of
@@ -2023,6 +2163,37 @@ def intrP (c : Ctx) (f : W) (ops : List W) (x0 : Option Nat) (rest : Stmt) :
         let (fp, y) ← rdF c o0
         pure (fp, .letv x (.chanClose y) rest)
     | _ => M.fail
+  else if c.cl.thr && f == kSpawnW then
+    -- (step 10) a spawn is a call of the closure code's spawn wrapper (A3
+    -- runs a call of a spawned function as a new thread, the call's
+    -- temporary set to 0); the closure moves to it (its `sink` parameter),
+    -- and the result is the ok variant around a handle (a number)
+    match ops with
+    | [op] => do
+      let id ← M.lift (vref op)
+      let (_, code) ← M.lift (c.sv.find? (·.1 == id))
+      let wj ← M.lift (indexOf c.cl.spawned code)
+      let σ ← M.lift (match c.vl id with | some (.fn [σ] .send) => some σ | _ => none)
+      M.spawnAt wj σ
+      let tt ← M.fresh
+      let w := c.cl.base + c.cl.tys.length + wj
+      match x0 with
+      | none => pure ([], .letcall tt w [c.var id] rest)
+      | some x => do
+        let u ← M.fresh
+        let e ← M.lift (tyOf c.cl kThreadErrW)
+        pure ([], .letcall tt w [c.var id] (.letv u (.expr (.lit 0)) (.letv x (.inr e u) rest)))
+    | _ => M.fail
+  else if c.cl.thr && f == kJoinW then
+    -- a join reads the handle (a number) and answers a number
+    match ops with
+    | [op] => do
+      let y ← M.lift ((vref op).map c.var)
+      let u ← M.fresh
+      match x0 with
+      | none => pure ([], .letv u (.expr (.var y)) rest)
+      | some x => pure ([], .letv u (.expr (.var y)) (.letv x (.expr .any) rest))
+    | _ => M.fail
   else M.fail
 
 def intrS (c : Ctx) (f : W) (ops : List W) (x0 : Option Nat) (rest : Stmt) : M Stmt := do
@@ -2055,6 +2226,16 @@ def capTy : Option Ty → Option Ty
   | some (.vec .int) => some (.vec .int)
   | _ => none
 
+/-- (step 10) A spawned closure code's capture may also be a channel's share
+    (`__cap_ty`: `lk …`, where the program spawns and the code is spawned). -/
+def capTyS (sp : Bool) (t : Option Ty) : Option Ty :=
+  match capTy t with
+  | some x => some x
+  | none => if sp then (match t with | some (.lk u) => some (.lk u) | _ => none) else none
+
+/-- Is closure code `q` one a spawn runs? -/
+def CloTab.sp (cl : CloTab) (q : CoreFn) : Bool := cl.thr && cl.spawned.contains q.name
+
 /-- The calls that change the buffer they are handed first (`__changes`):
     `vec_push__…`, `vec_clear__…`, `vec_truncate__…`, `vec_reserve__…`,
     `vec_shrink_to_fit__…`, `string_push_str…` (prefixes). -/
@@ -2073,7 +2254,7 @@ def changesB (body : List (List W)) (k : Nat) : Bool :=
     `drop`, of a buffer only. -/
 def capModeOf (cl : CloTab) (q : CoreFn) (k : Nat) : Option PMode :=
   if !bitB (baseFlags q.vars k) 3 && !changesB q.body k then some .inp
-  else match capTy (varTy cl q.vars k) with
+  else match capTyS (cl.sp q) (varTy cl q.vars k) with
     | some (.vec _) => some (.inout .drop)
     | _ => none
 
@@ -2081,7 +2262,7 @@ def capModeOf (cl : CloTab) (q : CoreFn) (k : Nat) : Option PMode :=
     moves it in (`__named_cap`)? A buffer is, unless its environment owns it
     (`CORE_VF_ENVOWN`, flag 2048). -/
 def namedCapOf (cl : CloTab) (q : CoreFn) (k : Nat) : Option Bool := do
-  let t ← capTy (varTy cl q.vars k)
+  let t ← capTyS (cl.sp q) (varTy cl q.vars k)
   pure ((match t with | .int => false | _ => true) && !bitB (baseFlags q.vars k) 11)
 
 /-- The literals of closure code `code` among a body's lines, each with the
@@ -2134,12 +2315,13 @@ def capSplit (c : Ctx) (q : CoreFn) : Nat → List (Nat × Nat) →
       let vl ← c.vl y
       pure (vals, (c.var y, md, vl) :: cs)
     else
-      let ct ← capTy (c.ty y)
+      let ct ← capTyS (c.cl.sp q) (c.ty y)
       pure ((c.var y, ct) :: vals, cs)
 
 /-- The interface a closure value is of (`__fn_sigma`). -/
 def sigmaOf : Option Ty → Option Nat
   | some (.fn [σ] .any) => some σ
+  | some (.fn [σ] .send) => some σ
   | _ => none
 
 /-- `closure f n caps…` bound to `dest` (`__closure_lit`): the captures by
@@ -2160,6 +2342,8 @@ def cloLitS (c : Ctx) (ws : List W) (dest : Nat) : M (List (Nat × Rhs) × Rhs) 
       let ck := (q.vars.filter (·.2.1 == 3)).map (·.1)
       if ck.length != ys.length then M.fail
       let (vals, cs) ← M.lift (capSplit c q 0 (ys.zip ck))
+      -- (step 10) a spawned closure (class `send`) holds nothing by name
+      if c.cl.sp q && !cs.isEmpty then M.fail
       let σ ← M.lift (sigmaOf (c.vl dest))
       let (pre, y) ← (match vals.reverse with
         | [] => do
@@ -2378,7 +2562,7 @@ def modeOf (cl : CloTab) (sm : Summary) (fn : CoreFn) (views : List Nat) (j : Na
     | none => 0
   if bitB base 2 || (sinkP sm j && !bitB base 1) then .sink
   else if bitB base 1 then .inout .replace
-  else match vlOf cl fn.vars views j with
+  else match vlOf cl fn.vars views [] j with
     | some (.vec _) =>
       match changeOf sm j with
       | some e => .inout e
@@ -2488,13 +2672,13 @@ def capBinds (c : Ctx) : Nat → List Nat → M (List (Nat × Rhs))
     buffer it does not own, unless every literal moves it in), then the
     result slot; its other variables after that, in id order, one number
     left out (the translator's numbering). -/
-def cloFnElab (c0 : Ctx) (fn : CoreFn) (items : List Item) (rt : Ty) (own : Bool) : Option Fn := do
+def cloFnElab (c0 : Ctx) (fn : CoreFn) (items : List Item) (rt : Ty) (own : Bool) : Option (Fn × List (Nat × Nat)) := do
   let caps := (fn.vars.filter (·.2.1 == 3)).map (·.1)
   let prms := (fn.vars.filter (·.2.1 == 0)).map (·.1)
   if prms.length != fn.np then none
   -- every capture's type and mode as the translator reads them, the
   -- parameters neither `sink` nor `inout`
-  if !(caps.all fun k => (capTy (c0.ty k)).isSome && (capModeOf c0.cl fn k).isSome) then none
+  if !(caps.all fun k => (capTyS (c0.cl.sp fn) (c0.ty k)).isSome && (capModeOf c0.cl fn k).isSome) then none
   if prms.any fun k => bitB (c0.flags k) 1 || bitB (c0.flags k) 2 then none
   let ids := fn.vars.map (·.1)
   if !(namesDeclared ids fn.body) then none
@@ -2506,24 +2690,27 @@ def cloFnElab (c0 : Ctx) (fn : CoreFn) (items : List Item) (rt : Ty) (own : Bool
     (idxFrom (fn.np + 1) named).map (fun e => (e.2, e.1)) ++
     (idxFrom (rslot + 1) others).map (fun e => (e.2, e.1))
   let c : Ctx := { c0 with rslot := rslot, vmap := some vm }
-  let envT := envTy (← caps2.mapM fun k => capTy (c.ty k))
+  -- (step 10) a spawned closure code holds nothing by name
+  if c.cl.sp fn && !named.isEmpty then none
+  let envT := envTy (← caps2.mapM fun k => capTyS (c.cl.sp fn) (c.ty k))
   let ps ← prms.mapM fun k => (c.vl k).map (PMode.inp, ·)
   let ns ← named.mapM fun k => do
     let md ← capModeOf c.cl fn k
     let vl ← c.vl k
     pure (md, vl)
   let tail : Stmt := if fn.ret == kVoid then .assign rslot (.expr (.lit 0)) else .skip
-  let s0 : St := ⟨rslot + 1 + others.length + 1, [], 0⟩
+  let s0 : St := ⟨rslot + 1 + others.length + 1, [], 0, []⟩
   let (inner, s) ← go c (4 * fn.body.length + 4) true items tail s0
   if !s.lits.isEmpty then none
   let (binds, s') ← capBinds c 0 caps2 s
-  pure { params := (.inp, envT) :: ps ++ ns, resTy := rt, resOwn := own, lends := [], rholds := [],
-         outHolds := [], body := .block (wrapPre binds inner), nvars := s'.next + 1 }
+  pure ({ params := (.inp, envT) :: ps ++ ns, resTy := rt, resOwn := own, lends := [], rholds := [],
+          outHolds := [], body := .block (wrapPre binds inner), nvars := s'.next + 1 }, s'.wsig)
 
 /-- A function of the subset as A2's `Fn` (`__fn_init`, `__lean`): its
     variables, parameters and result numbers, buffers, views or closures
     (`tyOf`); a closure's code by `cloFnElab`. -/
-def fnElab (tops : List (List W)) (prog : List CoreFn) (cl : CloTab) (fn : CoreFn) : Option Fn := do
+def fnElab (tops : List (List W)) (prog : List CoreFn) (cl : CloTab) (fn : CoreFn) (sv : List (Nat × W)) :
+    Option (Fn × List (Nat × Nat)) := do
   if !(fn.vars.all fun v => (tyOf cl v.2.2.2).isSome && v.1 ≤ idMax) then none
   let rt ← tyOf cl fn.ret
   -- (a slice handed back is not in the subset: it views what it is handed)
@@ -2545,7 +2732,7 @@ def fnElab (tops : List (List W)) (prog : List CoreFn) (cl : CloTab) (fn : CoreF
     | some (its, .eof, _) => some its
     | _ => none
   let c : Ctx := ⟨fn.np, fn.vars, prog, sm, fn.body, views, eachIds fn.body, viewEdges fn.body fn.vars views, cl,
-    fn.np, none, tops⟩
+    fn.np, none, tops, sv⟩
   -- (step 8) a closure's code with a variable of a destructor type is
   -- refused (stricter: the translator checks its parameters' modes only)
   if startsB fn.name closureB then
@@ -2557,13 +2744,13 @@ def fnElab (tops : List (List W)) (prog : List CoreFn) (cl : CloTab) (fn : CoreF
     if (List.range fn.np).any (fun j => (cl.dtorF (tyD fn.vars j kEmpty)).isSome &&
         (bitB (c.flags j) 1 || bitB (c.flags j) 2)) then none
     let params ← (List.range fn.np).mapM fun j =>
-      (vlOf cl fn.vars views j).map (modeOf cl sm fn views j, ·)
+      (vlOf cl fn.vars views [] j).map (modeOf cl sm fn views j, ·)
     let tail : Stmt := if fn.ret == kVoid then .assign fn.np (.expr (.lit 0)) else .skip
-    let s0 : St := ⟨max (fn.np + 1) (topNext fn.vars), [], 0⟩
+    let s0 : St := ⟨max (fn.np + 1) (topNext fn.vars), [], 0, []⟩
     let (inner, s) ← go c (4 * fn.body.length + 4) true items tail s0
     if !s.lits.isEmpty then none
-    pure { params := params, resTy := rt, resOwn := own, lends := [], rholds := [],
-           outHolds := [], body := .block inner, nvars := s.next + 1 }
+    pure ({ params := params, resTy := rt, resOwn := own, lends := [], rholds := [],
+            outHolds := [], body := .block inner, nvars := s.next + 1 }, s.wsig)
 
 /-- Drop exactly `n` elements, or fail if there are fewer. -/
 def dropN {α : Type} : Nat → List α → Option (List α)
@@ -2618,11 +2805,13 @@ def tyOk : List W → Bool
 
 /-- The top-level lines the reader would refuse (a `sum` line without its
     function, a `ty` line of another shape) are outside the subset. -/
-def topOk (tops : List (List W)) : Bool :=
-  tops.all fun l => match l with
-    | [kSum] => false
-    | kTy :: _ => tyOk l
-    | _ => true
+def topLineOk (l : List W) : Bool :=
+  match l with
+  | [kSum] => false
+  | kTy :: _ => tyOk l
+  | _ => true
+
+def topOk (tops : List (List W)) : Bool := tops.all topLineOk
 
 /-- A byte of a name (`[A-Za-z0-9_]`). -/
 def identB (c : Nat) : Bool :=
@@ -2655,6 +2844,18 @@ def dtorsOf : List (Nat × CoreFn) → Option (List (W × Option Nat))
       pure ((encB k, some i) :: rest)
     else pure rest
 
+/-- A `ty` line's name, where its drops say `d`. -/
+def dName (l : List W) : Option W :=
+  match l with
+  | kTy :: name :: _ :: drops :: _ => if (wordOf drops).contains 100 then some name else none
+  | _ => none
+
+/-- A name of `%` and a name, a struct's of the subset other than `%String`. -/
+def dNameOk (name : W) : Bool :=
+  let cs := wordOf name
+  let x := cs.drop 1
+  !x.isEmpty && x.all identB && structNameB cs && cs != stringTyB
+
 /-- (step 9) The other types the translator takes for destructor types
     (`__emit`'s `dtor`): each type whose `ty` line's drops say `d` and that
     has no `drop__` of the program's (a library's: `%RawBlock`,
@@ -2664,7 +2865,9 @@ def dtorsOf : List (Nat × CoreFn) → Option (List (W × Option Nat))
     see"); the line itself is not. Stricter (none refuses the program): the
     name is `%` and a name (`identB`, not empty), a struct's name
     (`structNameB`) other than `%String`, so `__is_dtor`'s `%t` meets no
-    type `tyOf` takes without its `%` (a number's). They follow the
+    type `tyOf` takes without its `%` (a number's). It reads every top
+    line in the same pass as `topOk` (none where `topOk` is false: so
+    `elabLT` makes one pass over them, not two). They follow the
     program's own in the table, so a type with both a `drop__` and a `d`
     is the program's (`CloTab.dtorF` reads the first). One pass, no
     accumulator: a fold whose accumulator is read twice a step costs the
@@ -2672,16 +2875,28 @@ def dtorsOf : List (Nat × CoreFn) → Option (List (W × Option Nat))
 def dOnlyOf : List (List W) → Option (List (W × Option Nat))
   | [] => some []
   | l :: ls =>
-    match l with
-    | kTy :: name :: _ :: drops :: _ =>
-      if (wordOf drops).contains 100 then
-        let cs := wordOf name
-        let x := cs.drop 1
-        if !x.isEmpty && x.all identB && structNameB cs && cs != stringTyB then
-          (dOnlyOf ls).map ((name, none) :: ·)
-        else none
-      else dOnlyOf ls
-    | _ => dOnlyOf ls
+    -- (`topOk`'s check of the line, in the same pass)
+    if !topLineOk l then none
+    else match dName l with
+      | some name => if dNameOk name then (dOnlyOf ls).map ((name, none) :: ·) else none
+      | none => dOnlyOf ls
+
+/-- The one pass refuses every program `topOk` refuses: `elabLT` reads no
+    top line `topOk` would not. -/
+theorem dOnlyOf_topOk : ∀ tops : List (List W), (dOnlyOf tops).isSome = true → topOk tops = true
+  | [], _ => rfl
+  | l :: ls, h => by
+    unfold dOnlyOf at h
+    simp only [topOk, List.all_cons, Bool.and_eq_true]
+    by_cases hl : topLineOk l = true
+    · simp only [hl, Bool.not_true, Bool.false_eq_true, ite_false] at h
+      refine ⟨hl, dOnlyOf_topOk ls ?_⟩
+      split at h
+      · split at h
+        · cases hd : dOnlyOf ls <;> simp_all
+        · simp at h
+      · exact h
+    · simp [hl] at h
 
 /-- Each id below the next one's: every variable has one `v` line, in id
     order. -/
@@ -2728,7 +2943,9 @@ example : cloTysB (strs [["ty", "%W", "3", "1-d---", "W", "A", "0", "F", "2", "x
     never run (a call runs the package's code), so it is one that
     type-checks, a result of the type made fresh: a number, or an empty
     buffer of numbers (any other result stops the translator). -/
-def ifaceFn (tyls : List (List W)) (dts : List (W × Option Nat)) (σ : Nat) (cs : List Nat) : Option Fn := do
+def ifaceFn (tyls : List (List W)) (dts : List (W × Option Nat)) (σ : Nat) (cs0 : List Nat) : Option Fn := do
+  -- (step 10) a spawned closure's interface: of class `send`
+  let (cls, cs) : Cross × List Nat := if prefixN sendB cs0 then (.send, cs0.drop 5) else (.any, cs0)
   let tys ← cloTysB tyls dts cs
   match tys with
   | [] => none
@@ -2738,9 +2955,120 @@ def ifaceFn (tyls : List (List W)) (dts : List (W × Option Nat)) (σ : Nat) (cs
       | .vec .int => some (.new .int)
       | _ => none
     let ns := tys.length
-    pure { params := (.inp, .fn [σ] .any) :: args.map (.inp, ·), resTy := rt,
+    pure { params := (.inp, .fn [σ] cls) :: args.map (.inp, ·), resTy := rt,
            resOwn := (match rt with | .int => false | _ => true), lends := [], rholds := [],
            outHolds := [], body := .block (.seq (.assign ns made) (.exit 0)), nvars := ns + 1 }
+
+/-! #### The spawn scan (step 10) -/
+
+/-- The closure operand of a spawn on line `l` (`__spawn_scan`): word 5 of
+    `let x call thread_spawn_owned n op`, word 4 of `eval call …`. -/
+def spawnOp (l : List W) : Option W :=
+  match l with
+  | kLet :: _ :: kCall :: f :: _ :: op :: _ => if f == kSpawnW then some op else none
+  | kEval :: kCall :: f :: _ :: op :: _ => if f == kSpawnW then some op else none
+  | _ => none
+
+/-- The first line that binds `id` (`let <id> …`, three words or more). -/
+def bindLine (body : List (List W)) (id : Nat) : Option (Nat × List W) :=
+  (idxFrom 0 body).find? fun e => match e.2 with
+    | kLet :: x :: _ :: _ => decIs (wordOf x) id
+    | _ => false
+
+/-- The chain of bindings from a spawn's operand back to its closure
+    literal (`__spawn_scan`): each binding's id and line, the literal's
+    code; a `let y use vX` of four words goes on to `X`. Fuel: the body's
+    length (the translator's bound). -/
+def chainOf (body : List (List W)) : Nat → Nat → List (Nat × Nat) × Option W
+  | 0, _ => ([], none)
+  | f + 1, id =>
+    match bindLine body id with
+    | none => ([], none)
+    | some (d, l) =>
+      match l with
+      | [_, _, kUse, w] => match vIdOf (wordOf w) with
+        | some y => let r := chainOf body f y; ((id, d) :: r.1, r.2)
+        | none => ([(id, d)], none)
+      | _ :: _ :: kClosure :: code :: _ => ([(id, d)], some code)
+      | _ => ([(id, d)], none)
+
+/-- Is a binding of the chain given another value (`assign v<k> …`)? -/
+def chainAssigned (body : List (List W)) (chain : List Nat) : Bool :=
+  body.any fun l => match l with
+    | kAssign :: pl :: _ => chain.any fun k => vIdOf (wordOf pl) == some k
+    | _ => false
+
+/-- The blocks open at the end of `lines` (`__opener`'s words pushed, `end`
+    pops one). -/
+def openStack : List (List W) → List W → List W
+  | [], st => st
+  | l :: ls, st => match l with
+    | w :: _ =>
+      if [kScope, kIf, kLoop, kMatch, kForeach, kDefer].contains w then openStack ls (w :: st)
+      else if w == kEnd then openStack ls st.tail
+      else openStack ls st
+    | [] => openStack ls st
+
+/-- Does word `w` name variable `k`, whole or as a place's root? -/
+def namesV (w : W) (k : Nat) : Bool := vIdOf ((wordOf w).takeWhile (· != 47)) == some k
+
+/-- Is the spawn on line `sl` the closure's only use (`__spawn_uses`)? No
+    loop opened between its literal and the spawn is still open there, and
+    no line names a binding of the chain but the spawn (the chain's first)
+    and each copy line (its source). Stricter: every word of every line is
+    read, not the operands alone. -/
+def spawnUsesOk (body : List (List W)) (chain dl : List Nat) (sl : Nat) : Bool :=
+  let lit := dl.getLast?.getD 0
+  let st := openStack ((body.drop (lit + 1)).take (sl - (lit + 1))) []
+  !(st.contains kLoop || st.contains kForeach) &&
+  (idxFrom 0 body).all fun e =>
+    e.2.all fun w => (idxFrom 0 chain).all fun ck =>
+      !namesV w ck.2 || (e.1 == sl && ck.1 == 0) || (ck.1 > 0 && dl[ck.1 - 1]? == some e.1)
+
+/-- A function's spawns (`__spawn_scan`): the closure values they take
+    (each binding of a chain) with the spawned code's name, in line order;
+    none where a spawn's closure is used other than by its spawn (`serr`:
+    the translator refuses the function). A chain given another value, or
+    one that does not end in a literal of the program's code, adds
+    nothing (that spawn is then not translated). -/
+def spawnsGo (names : List W) (body : List (List W)) : List (Nat × List W) → Option (List (Nat × W))
+  | [] => some []
+  | (sl, l) :: rest => do
+    let r ← spawnsGo names body rest
+    match spawnOp l with
+    | none => pure r
+    | some op =>
+      match vIdOf (wordOf op) with
+      | none => pure r
+      | some id =>
+        let ch := chainOf body body.length id
+        match ch.2 with
+        | some cw =>
+          let ids := ch.1.map (·.1)
+          if !names.contains cw || chainAssigned body ids then pure r
+          else if spawnUsesOk body ids (ch.1.map (·.2)) sl then pure (ids.map (·, cw) ++ r)
+          else none
+        | none => pure r
+
+/-- The spawned codes, in the order first met (`spawned`). -/
+def spawnedOf : List (List (Nat × W)) → List W → List W
+  | [], acc => acc
+  | sv :: r, acc => spawnedOf r (sv.foldl (fun a e => if a.contains e.2 then a else a ++ [e.2]) acc)
+
+/-- A spawn wrapper (`__emit`): it takes the closure over (`sink`, of
+    class `send`) and calls it, with no arguments. -/
+def wrapperFn (σ : Nat) : Fn :=
+  { params := [(.sink, .fn [σ] .send)], resTy := .int, resOwn := false, lends := [], rholds := [],
+    outHolds := [], body := .block (.seq (.callc 2 0 0 σ [] .skip) (.seq (.assign 1 (.expr (.lit 0))) (.exit 0))),
+    nvars := 3 }
+
+/-- Each spawned code's interface, from the spawns translated (`wsig`):
+    one, the same at every spawn (the translator refuses a code spawned at
+    two closure types, or one no translated spawn names). -/
+def wsigOf (recs : List (Nat × Nat)) : Nat → Option Nat
+  | j => match recs.filter (·.1 == j) with
+    | [] => none
+    | (_, σ) :: r => if r.all (·.2 == σ) then some σ else none
 
 /-- The program and its entry statement (`__emit`): the functions whose
     file is not the standard library's, in order, and a call of `main`.
@@ -2757,21 +3085,29 @@ def ifaceFn (tyls : List (List W)) (dts : List (W × Option Nat)) (σ : Nat) (cs
     the constructors `elabIR` emits (`ELAB_CTORS`,
     packages/nurl-cert/src/claims.nu): a new constructor elabIR emits goes
     into nurl-cert's list too. -/
-def elabL (ls : Lines) : Option (Prog × Stmt) := do
+def elabLT (ls : Lines) : Option (Bool × Prog × List Nat × Stmt) := do
   let fns ← fnsOfL ls
   let tops := topLines ls false
   let prog := fns.filter fun f => !startsB f.file stdlibB
   -- (step 8) the program's destructor types, and every `ty` line's
   let dts0 ← dtorsOf (idxFrom 0 prog)
   let dts := dts0 ++ (← dOnlyOf tops)
-  if !(topOk tops) then none
   let names := prog.map (·.name)
   if !(nodupB names) then none
   -- a function of the program named like a library call the translator
   -- lowers to an A2 construct, called or not
   if names.any intrinsicName then none
   let mi ← indexOf names kMain
-  let cl : CloTab := ⟨prog.length, cloScan tops dts prog, tops, dts⟩
+  -- (step 10) a program that spawns: its spawned closure values and codes
+  let thr := prog.any fun f => f.body.any fun l => (spawnOp l).isSome
+  let svs ← prog.mapM fun f => if thr then spawnsGo names f.body (idxFrom 0 f.body) else some []
+  -- (a function's spawned closures of one closure type, stricter)
+  if !(prog.zip svs).all (fun e => match e.2 with
+      | [] => true
+      | (k, _) :: r => r.all fun x => (lastVar e.1.vars x.1).map (·.2.2.2) == (lastVar e.1.vars k).map (·.2.2.2)) then none
+  let spawned := spawnedOf svs []
+  let cl : CloTab := ⟨prog.length, (if thr then cloScan3 tops dts (prog.zip svs) [] else cloScan tops dts prog),
+    tops, dts, thr, spawned⟩
   -- (step 6: where the program has closures, the translator reads each
   -- function's variables in id order; `elabIR` reads them in the order of
   -- their `v` lines, and requires the two the same)
@@ -2779,12 +3115,33 @@ def elabL (ls : Lines) : Option (Prog × Stmt) := do
   -- a closure's code where the program has no closure type, which no
   -- literal can pack (stricter: the translator translates it)
   if cl.tys.isEmpty && names.any (startsB · closureB) then none
-  let P ← prog.mapM (fnElab tops prog cl)
+  let PW ← (prog.zip svs).mapM fun e => fnElab tops prog cl e.1 e.2
   let I ← (idxFrom cl.base cl.tys).mapM fun e => ifaceFn cl.tyls cl.dts e.1 e.2
-  pure (P ++ I, .letcall 0 mi [] .skip)
+  -- (step 10) one spawn wrapper per spawned code, after the interfaces
+  let recs := (PW.map (·.2)).flatten
+  let W ← (List.range spawned.length).mapM fun j => (wsigOf recs j).map wrapperFn
+  let wb := cl.base + cl.tys.length
+  pure (thr, PW.map (·.1) ++ I ++ W, (List.range spawned.length).map (wb + ·), .letcall 0 mi [] .skip)
+
+/-- The program and its entry statement, from the words, of a program that
+    spawns no thread (A2's checker). -/
+def elabL (ls : Lines) : Option (Prog × Stmt) :=
+  match elabLT ls with
+  | some (false, P, _, e) => some (P, e)
+  | _ => none
+
+/-- (step 10) The program, its spawn wrappers and its entry statement, of a
+    program that spawns (A3's checker, `C.certOK3B P spawns entry 1`). -/
+def elabL3 (ls : Lines) : Option (Prog × List Nat × Stmt) :=
+  match elabLT ls with
+  | some (true, P, sp, e) => some (P, sp, e)
+  | _ => none
 
 /-- The program and its entry statement, from the IR's words. -/
 def elabIR (ir : IR) : Option (Prog × Stmt) := elabL ir
+
+/-- (step 10) The same, for a program that spawns. -/
+def elabIR3 (ir : IR) : Option (Prog × List Nat × Stmt) := elabL3 ir
 
 /-! ### Comparing terms
 
@@ -2952,6 +3309,22 @@ theorem elabLIs_sound (ls : Lines) (P : Prog) (e : Stmt) (h : elabLIs ls P e = t
   · rename_i Q e' heq
     simp only [Bool.and_eq_true] at h
     rw [heq, progBeq_sound _ _ h.1, stmtBeq_sound _ _ h.2]
+  · simp at h
+
+/-- (step 10) `elabIs` for a program that spawns: its spawn wrappers too. -/
+@[irreducible] def elabIs3 (ir : IR) (P : Prog) (sp : List Nat) (e : Stmt) : Bool :=
+  match elabIR3 ir with
+  | some (Q, sq, e') => progBeq Q P && sq == sp && stmtBeq e' e
+  | none => false
+
+theorem elabIs3_sound (ir : IR) (P : Prog) (sp : List Nat) (e : Stmt) (h : elabIs3 ir P sp e = true) :
+    elabIR3 ir = some (P, sp, e) := by
+  unfold elabIs3 at h
+  split at h
+  · rename_i Q sq e' heq
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h
+    rw [heq, progBeq_sound _ _ h1, h2, stmtBeq_sound _ _ h3]
   · simp at h
 
 theorem elabIs_sound (ir : IR) (P : Prog) (e : Stmt) (h : elabIs ir P e = true) :
@@ -3832,6 +4205,86 @@ example : (elabS (irCh "i64" [["eval", "call", "chan_send__str", "2", "v0", "c"]
 example : (elabS (irM [["v", "0", "1", "1", "0", "1", "-1", "a", "%Channel__i64"],
     ["v", "1", "1", "1", "0", "1", "-1", "b", "%Channel__i64"]]
     [["let", "0", "call", "chan_new__i64", "0"], ["let", "1", "call", "Channel_share__i64", "1", "v0"], ["ret", "c"]] [])).isSome := by
+  decide +kernel
+
+/-! ### Witnesses (step 10: threads) -/
+
+/-- `tools/ncore/certify/thread_spawned_with_a_number_capture.nu`'s core IR
+    (its program's functions, `%ThreadErr`'s `ty` line; the file `a.nu`). -/
+def thrCode : SIR := [
+  ["fn", "__closure_1", "void", "0", "6", "a.nu", "0", ""],
+  ["v", "0", "3", "0", "0", "6", "-1", "n", "i64"], ["v", "1", "1", "2", "0", "5", "-1", "m", "i64"],
+  ["scope"], ["scope"], ["eval", "scalar", "2", "v0", "c"], ["let", "1", "use", "c"], ["end"], ["end"], ["endfn"]]
+def thrVs : SIR := [
+  ["v", "0", "1", "1", "0", "4", "-1", "n", "i64"], ["v", "1", "2", "1", "0", "5", "-1", "", "{ void (i8*)*, i8* }"],
+  ["v", "2", "1", "1", "0", "5", "-1", "body", "{ void (i8*)*, i8* }"],
+  ["v", "3", "2", "1", "0", "6", "-1", "", "{ i1, %Thread, %ThreadErr }"],
+  ["v", "4", "1", "1", "4096", "6", "-1", "r", "{ i1, %Thread, %ThreadErr }"],
+  ["v", "5", "2", "1", "0", "7", "-1", "", "i64"], ["v", "6", "1", "2", "0", "7", "-1", "t", "%Thread"],
+  ["v", "7", "1", "2", "0", "7", "-1", "_", "%ThreadErr"]]
+def thrSpawn : SIR := [
+  ["let", "0", "use", "c"], ["let", "1", "closure", "__closure_1", "1", "v0"], ["let", "2", "use", "v1"], ["drop", "1"],
+  ["let", "3", "call", "thread_spawn_owned", "1", "v2"], ["let", "4", "use", "v3"], ["drop", "3"]]
+def thrMatch : SIR := [
+  ["let", "5", "none"], ["match", "v4"], ["arm", "T"], ["scope"], ["let", "6", "payload", "v4", "T", "0"],
+  ["eval", "call", "thread_join", "1", "v6"], ["end"], ["arm", "F"], ["scope"], ["let", "7", "payload", "v4", "F", "0"],
+  ["end"], ["end"], ["ret", "c"], ["drop", "5"]]
+def thrErrTy : SIR := [["ty", "%ThreadErr", "1", "0-----", "ThreadErr", "A", "0", "F", "0", "V", "2", "ThreadCreate", "0",
+  "ThreadOther", "0"]]
+/-- The program: the closure code, then `main` with variables `vs`, the
+    statements `body`, then the lines `extra`. -/
+def irThrW (vs body extra : SIR) : SIR :=
+  thrCode ++ [["fn", "main", "i64", "0", "3", "a.nu", "0", ""]] ++ vs ++ [["scope"]] ++ body ++ [["end"], ["endfn"]] ++ extra
+def irThr : SIR := irThrW thrVs (thrSpawn ++ thrMatch) thrErrTy
+
+/-- The term `nurl-cert translate` prints for it, written out: the closure
+    code (its number capture read out of its environment), `main` (the
+    literal packed at the spawned closure's interface, of class `send`;
+    the spawn a call of the wrapper, its result the ok variant around a
+    handle; the match on `isl`, the error arm first, `getl` its payload),
+    the closure type's interface at class `any` and at class `send`, and
+    the spawn wrapper, which takes the closure over and calls it. -/
+def pThr : Prog := [
+  { params := [(.inp, .int)], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.letv 2 (.expr (.var 0)) (.seq (.letv 5 (.expr (.add .any (.lt (.add (.add (.lit 0) (.var 2)) .any)
+      (.lit 0)))) (.letv 3 (.expr .any) .skip)) (.assign 1 (.expr (.lit 0))))), nvars := 7 },
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 1 (.expr .any) (.letv 2 (.pack [0] .int [3] 1 []) (.letv 3 (.var 2)
+      (.letcall 10 4 [3] (.letv 11 (.expr (.lit 0)) (.letv 4 (.inr .int 11) (.letv 5 (.var 4) (.letv 6 (.expr .any)
+      (.seq (.ite (.isl 5) (.letv 8 (.getl 5) .skip) (.letv 7 (.getr 5) (.letv 9 (.expr (.var 7)) .skip)))
+        (.assign 0 (.expr .any))))))))))) (.exit 0)), nvars := 13 },
+  { params := [(.inp, .fn [2] .any)], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.assign 1 (.expr (.lit 0))) (.exit 0)), nvars := 2 },
+  { params := [(.inp, .fn [3] .send)], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.assign 1 (.expr (.lit 0))) (.exit 0)), nvars := 2 },
+  { params := [(.sink, .fn [3] .send)], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.callc 2 0 0 3 [] .skip) (.seq (.assign 1 (.expr (.lit 0))) (.exit 0))), nvars := 3 }]
+
+theorem elab_thread : elabIR3 (encIR irThr) = some (pThr, [4], .letcall 0 1 [] .skip) :=
+  elabIs3_sound _ _ _ _ (by decide +kernel)
+
+/-- A program that spawns is A3's: `elabIR` (A2's) answers none for it. -/
+example : elabL (strs irThr) = none := by decide +kernel
+
+def elabS3 (l : SIR) : Option (Prog × List Nat × Stmt) := elabL3 (strs l)
+
+/-- Refused as the translator refuses them: a spawned closure used again
+    after its spawn (here spawned twice), a `%ThreadErr` whose variants
+    carry more than numbers, a result's literal; stricter: a function's
+    spawned closures of two closure types. Their neighbours are in the
+    subset. -/
+example : (elabS3 irThr).isSome := by decide +kernel
+example : (elabS3 (irThrW thrVs (thrSpawn ++ [["eval", "call", "thread_spawn_owned", "1", "v2"]] ++ thrMatch)
+    thrErrTy)).isNone := by decide +kernel
+example : (elabS3 (irThrW thrVs (thrSpawn ++ thrMatch) [["ty", "%ThreadErr", "1", "0-----", "ThreadErr", "A", "0",
+    "F", "0", "V", "2", "ThreadCreate", "1", "%String", "ThreadOther", "0"]])).isNone := by decide +kernel
+example : (elabS3 (irThrW (thrVs ++ [["v", "8", "1", "1", "0", "7", "-1", "e", "{ i1, %Thread, %ThreadErr }"]])
+    (thrSpawn ++ [["let", "8", "agg", "F", "1", "c"]] ++ thrMatch) thrErrTy)).isNone := by decide +kernel
+example : (elabS3 (irThrW (thrVs ++ [["v", "8", "1", "1", "0", "7", "-1", "e", "{ i1, i64 }"]])
+    (thrSpawn ++ [["let", "8", "agg", "F", "1", "c"]] ++ thrMatch) thrErrTy)).isSome := by decide +kernel
+/-- …and a result type where the program spawns no thread (A2's
+    translation reads it as an option of two members, which it is not). -/
+example : (elabL (strs (irM [["v", "0", "1", "1", "0", "1", "-1", "r", "{ i1, i64, i64 }"]] [["ret", "c"]] []))).isNone := by
   decide +kernel
 
 end C.Elab

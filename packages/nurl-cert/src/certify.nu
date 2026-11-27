@@ -307,8 +307,13 @@ $ `stdlib/std/random.nu`
     `a claim means what these definitions say; formal/CLAIM.md is their review document`
     `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` mc ) )
     ? elab {
-        ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term, the part the kernel does not check: nurlc --emit-core, and the core IR as words (packages/nurl-cert/src/words.nu); the term itself is checked by the kernel (Elab.lean, theorem Cert.elab: C.Elab.elabIR builds P and entry from the words)`
-        `nothing proves that the core IR is the source's, nor that C.Elab.elabIR's rules (formal/C/Elab.lean) give a core IR its meaning; verify makes Elab.lean, words and all, again from Program.core and compares it byte for byte`
+        // (a program that spawns: Cert.elab is about C.Elab.elabIR3, which
+        // builds the spawn wrappers too)
+        : String what ( string_from `the translation from source to the Lean term, the part the kernel does not check: nurlc --emit-core, and the core IR as words (packages/nurl-cert/src/words.nu); the term itself is checked by the kernel (Elab.lean, theorem Cert.elab: ` )
+        ( string_push_str what ? threads `C.Elab.elabIR3 builds P, its spawn wrappers (spawns) and entry` `C.Elab.elabIR builds P and entry` )
+        ( string_push_str what ` from the words)` )
+        ( json_arr_push L ( mj_row `translation` ( string_data what )
+        `nothing proves that the core IR is the source's, nor that C.Elab's rules (formal/C/Elab.lean: elabIR, and elabIR3 for a program that spawns) give a core IR its meaning; verify makes Elab.lean, words and all, again from Program.core and compares it byte for byte`
         `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/words.nu, formal/C/Elab.lean` `nurlc (untrusted, tested by the hole corpus) and nurl-cert's words (re-made by verify); the term: the Lean kernel` mc ) )
     } {
         ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
@@ -502,7 +507,7 @@ $ `stdlib/std/random.nu`
         // core IR that is not UTF-8 has no words.
         : ~ b try_elab F
         ? ( cert_elab_candidate ( string_data . tr lean ) ) {
-            ?? ( cert_elab_lean . r1 out ) {
+            ?? ( cert_elab_lean . r1 out threads ) {
                 T el → { = try_elab ( nc_write ( string_data elab_path ) ( string_data el ) ) }
                 F → {}
             }

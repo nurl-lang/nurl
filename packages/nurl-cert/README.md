@@ -40,7 +40,9 @@ accepted
   destructor frame and not handed back, assigned, returned by a call,
   given to a `sink` or `inout` parameter or held in another value, and
   channels of numbers, Strings or Vecs of numbers, made, shared, sent on,
-  received from and closed, outside a program that spawns a thread);
+  received from and closed, and threads: spawned closures holding numbers,
+  buffers of numbers and channel shares by value, joined, their results
+  matched);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
 - `manifest.json`, with:
@@ -68,7 +70,8 @@ Fail closed:
   reason is in the manifest.
 
 Today the translation covers integers, `Vec`, strings, options, structs,
-closures and channels in part. Threads and globals are not covered yet.
+closures, channels and threads in part (every certify program; the kernel
+builds each one's term, `Elab.lean`). Globals are not covered yet.
 
 Needs:
 - `nurlc`;

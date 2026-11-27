@@ -1293,16 +1293,116 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
     −0.9 % (step 6), ≈ 0 (step 7), +0.7 % (step 8), −0.3 % (step 9); the
     sum of the peaks −1.1 %, +0.2 %, +0.03 %, −12.8 %.
 
+## Route (b), step 10: threads (AGORA-1029)
+
+- `elabIR3` (formal/C/Elab.lean) covers the translator's **programs that
+  spawn** (`thread_spawn_owned` in a function of the program's own), A3's
+  (`C.certOK3B P spawns entry 1`): the program, its spawn wrappers, and the
+  entry, `elabIR3 ir = some (P, spawns, entry)` (`elabIs3_sound`).
+  `elabIR`, A2's, answers none for such a program, so no A2 bundle's term
+  changes. The constructors it builds beyond step 9's are `.getl` (Rhs)
+  and the class `.send` (Cross). They are tolean.nu's rules (`__spawn_scan`,
+  `__intrinsic_`, `__vlean`, `__lean_ty` and `__emit` in threaded mode):
+  - **The spawn scan** (`spawnsGo`, `chainOf`): each spawn's operand
+    followed back through its `let y use vX` copies to the closure literal
+    that made it; the chain's bindings are the closure values the spawn
+    takes, the literal's code a spawned code (`spawned`, in the order first
+    met). A chain given another value, or one that ends elsewhere, adds
+    nothing (that spawn is then not translated).
+  - **A spawned closure** is of class `send`: its chain's bindings are of
+    type `.fn [σ] .send` (`vlOf`), `σ` an interface of its own (the
+    `send:` key, `__clo_index_send`; `cloScan3` places it after the
+    function's own closure types, where the translator meets it), whose
+    first parameter is `.fn [σ] .send`. Its code holds nothing by name, and
+    may hold a channel's share by value (`capTyS`).
+  - **A spawn** (`thread_spawn_owned`) is a call of the code's wrapper; the
+    closure moves to it, and the result is the ok variant around a handle:
+    `.letcall tt W [c] (.letv u (.expr (.lit 0)) (.letv x (.inr E u) …))`.
+    A join (`thread_join`) reads the handle and answers a number.
+  - **A result** `{ i1, T, E }` is `.sum E T` (the error the first variant);
+    its match is an option's, its error `payload v F 0` is `.getl`, its
+    literal refused. A thread's handle `%Thread` and its error `%ThreadErr`
+    (an enum of numbers, `scalarEnumB`) are numbers.
+  - **One wrapper per spawned code**, after the interfaces: it takes the
+    closure over (`sink`, of class `send`) and calls it; `spawns` lists the
+    wrappers. Its interface is the one every translated spawn of the code
+    names (`wsigOf`, each spawn recorded in the state as it is translated):
+    a code spawned at two closure types, or none translated (a spawn after
+    a `ret`), is refused, as the translator refuses it.
+- **Fail closed.** Each check the translator makes is made too: a spawned
+  closure used again after its spawn, or a spawn repeated by a loop open
+  between the literal and the spawn (`spawnUsesOk`), passed on or read in
+  any other way; a spawned closure capturing anything by name; a
+  `%ThreadErr` whose variants carry more than numbers; a result's literal.
+  Each has a kernel witness of its refusal beside its well-formed
+  neighbour (formal/C/Elab.lean, "step 10"). Stricter: every word of every
+  line is read for a use of the chain (the translator reads the operands);
+  a function's spawned closures of two closure types; a result or a
+  thread's handle inside another type (the translator nests them).
+- **The certificate.** A threaded bundle's `Elab.lean` states
+  `C.Elab.elabIR3 ir = some (P, spawns, entry)` (`cert_elab_lean`, the
+  program's `threads`), checked by the kernel as A2's are; `verify` writes
+  it again from Program.core and compares.
+- **The skip before Lean.** `ELAB_CTORS` takes `.getl .send`; it is still
+  read off `elabIR`'s and `elabIR3`'s codomain, so it stays exact.
+- **Which programs.** Every one of the 62 certify programs is in the
+  subset now (58 at step 9): the 4 thread programs. The 2 the checker
+  accepts get Elab.lean, 36 bundles in all (the selftest requires exactly
+  these 36, and that no accepted certify program keeps the translator's
+  term). `elab_thread` (formal/Check.lean) builds
+  `thread_spawned_with_a_number_capture`'s term in the kernel.
+- **Parity** (`tools/ncore/elab_parity.sh`, 5 new fixtures in
+  `tools/ncore/elab/`, `thread_*`: two closure codes spawned and joined (two
+  wrappers), a spawn inside a function of the program's, a result matched
+  with its error arm first, a String sent on a channel share a spawned
+  closure owns, a spawned closure owning a `Vec` it captured): of 4605
+  programs nurlc makes a core IR of 4396. tolean.nu translates 325 of
+  those, and `elabIR` or `elabIR3` answers a term for 263 (the 62 certify
+  programs, the 96 fixtures, 105 hole probes; 254 at step 9, none of them
+  lost), every one exactly tolean.nu's term, spawns included (each also by
+  `decide +kernel`). It answers `none` for the other 4133, and a term for
+  no program tolean.nu refuses; the same on the words as on every line for
+  all 4396 (the runner compares `elabIR3` too).
+- **The axioms.** A first version counted the result split's bracket depth
+  in an `Int`, whose arithmetic brought `Classical.choice` into every proof
+  that reads a type, `Cert.elab` included (the selftest pins `Cert.elab` to
+  `propext` and `Quot.sound`, and caught it). The depth is two numbers now,
+  brackets opened and closed; `Cert.elab` rests on `propext` and
+  `Quot.sound` again.
+- **One pass over the top lines.** `dOnlyOf` makes `topOk`'s check of each
+  line in the same pass (`dOnlyOf_topOk`: it refuses every program `topOk`
+  refuses), so `elabLT` reads them once.
+- **Cost** (certify over the 62 certify programs, best of 3 alternated
+  runs, against step 9's tip; peak RSS of certify's process tree, the
+  lower of 2 runs):
+  - 80.9 s against 76.5 s (+5.7 %): the 4 thread programs +4.06 s, +0.85
+    to +1.41 s each, their Elab.lean part; the other 58 the same (+0.34 s
+    in all, within noise).
+  - A thread program's Elab.lean part is ≈ 1 s of kernel time, twice a
+    channel program's: `stdlib/std/thread.nu`'s ≈ 62 `ty` lines take ≈ 0.2 s
+    of it (the IR with them filtered out: 0.83 s against 1.04 s); the rest
+    is spread (`set_option diagnostics true`: `List.rec`, `Bool.rec`,
+    `decide` at the top, and `readVar`'s `getLast?` read again ≈ 2600
+    times, the kernel reducing a function's `v` lines again on every read
+    of its variables). Sharing those reads is a change of how `elabIR`
+    holds what it reads, for every step, not this one's.
+  - Peak RSS: the largest 2487 against 2513 MiB; a thread program +18 to
+    +70 MiB.
+  - AGORA-1029 as a whole (each step against the one before): certify time
+    −0.9 % (step 6), ≈ 0 (step 7), +0.7 % (step 8), −0.3 % (step 9),
+    +5.7 % (step 10), for every certify bundle's term the kernel's; the
+    sum of the peaks −1.1 %, +0.2 %, +0.03 %, −12.8 % (step 9, `lake`
+    out of the process tree).
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
 rules over words. Done: the claims rest on `elabIR` for the subset of
 numbers (steps 2 and 3), buffers of numbers (step 4), views, slices,
 `foreach` and changes through a borrow (step 5), closures (step 6),
-structs and options (step 7), destructor frames (step 8) and channels
-(step 9), and `verify` checks the words against `Program.core`. Then:
-- the subset widened to the programs that spawn (threads, A3's checker,
-  `Cert3`);
+structs and options (step 7), destructor frames (step 8), channels
+(step 9) and threads (step 10, `elabIR3`): every certify program; and
+`verify` checks the words against `Program.core`. Then:
 - the per-encoding rows above replace `translation`;
 - kernel time is measured on the corpus;
 - `elab`'s parity with the NURL translator is shown over the sweep.

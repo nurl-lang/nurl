@@ -5,7 +5,7 @@
 #  nurl-cert end-to-end tests (AGORA-1019).
 #
 #  Run from anywhere in a checkout:  packages/nurl-cert/tests/nurl-cert_test.sh
-#  Needs: build/nurlc, Lean's lake on PATH, formal/ built (lake build C.Cert C.Cert3 C.Elab).
+#  Needs: build/nurlc, Lean's lean (and lake) on PATH, formal/ built (lake build C.Cert C.Cert3 C.Elab).
 #  Env:   NURL_CERT  a built nurl-cert (default: build it into build/)
 #         JOBS       parallel certify runs (default: nproc)
 #
@@ -114,11 +114,14 @@ want_elab=$(printf '%s\n' cursor_over_a_vec int_recursion_early_return joins_eac
     struct_field_handed_to_a_reader struct_fields_read vec_moved_into_a_struct option_built_and_matched \
     destructor_frame_left_by_an_early_return destructor_reads_a_view_of_a_live_source \
     chan_int_sent_and_received chan_string_sent_and_received \
+    thread_sends_on_a_channel_main_receives thread_spawned_with_a_number_capture \
     | sort | tr '\n' ' ')
-if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 34 accepted certify programs in the subset have Elab.lean (Cert.elab)"
-else bad "exactly the 34 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
-if grep -qx "ok thread_spawned_with_a_number_capture accepted (translator)" "$TMP/progs.txt"; then ok "thread_spawned_with_a_number_capture (outside the subset): no Elab.lean, and it verifies"
-else bad "thread_spawned_with_a_number_capture (outside the subset): no Elab.lean, and it verifies"; fi
+if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 36 accepted certify programs in the subset have Elab.lean (Cert.elab)"
+else bad "exactly the 36 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
+# (since step 10 every certify program is in the subset: none keeps the
+# translator's term; the selftest's own program outside it is part 2's)
+if ! grep -q "accepted (translator)" "$TMP/progs.txt"; then ok "every accepted certify program has Elab.lean (no term the translator's)"
+else bad "every accepted certify program has Elab.lean: $(grep 'accepted (translator)' "$TMP/progs.txt" | tr '\n' ' ')"; fi
 
 echo "== 1b. one Lean file, and the module way"
 # certify and verify check a bundle in one Lean file (Program.lean's
@@ -195,7 +198,8 @@ for n in moved_on_one_branch_then_read_refused owner_moved_in_a_loop_without_ret
     clo_string_capture_rebound_then_called_refused \
     destructor_frame_left_by_an_early_return_after_its_source_moved_refused \
     destructor_reads_a_view_of_a_moved_source_refused \
-    chan_string_read_after_its_send_refused; do
+    chan_string_read_after_its_send_refused \
+    thread_body_reads_a_vec_after_its_move_refused thread_channel_read_after_an_alias_took_it_refused; do
     pl="$TMP/progs/$n/$n.cert/Program.lean"
     c=$(python3 - "$pl" "$ctors" <<'EOF2'
 import re, sys
@@ -206,7 +210,7 @@ EOF2
 )
     if [ "$c" = yes ] && grep -qx "ok $n refused" "$TMP/progs.txt"; then nref=$((nref + 1)); else badref="$badref $n"; fi
 done
-[ "$nref" = 22 ] && ok "the 22 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
+[ "$nref" = 24 ] && ok "the 24 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
     || bad "the refused programs in the subset are refused:$badref"
 R="$TMP/rv"; rm -rf "$R"; cp -r "$TMP/progs/vec_push_len/vec_push_len.cert" "$R"
 cp "$TMP/progs/use_after_move_refused/use_after_move_refused.cert/Program.lean" "$R/Program.lean"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # elab_parity.sh: the Lean translation of the subset of numbers, buffers of
-# numbers, views, closures, structs, options, destructor frames and channels
-# (`C.Elab.elabIR`, formal/C/Elab.lean, AGORA-1029 steps 2 and 4 to 9)
+# numbers, views, closures, structs, options, destructor frames, channels and
+# threads (`C.Elab.elabIR`, `C.Elab.elabIR3`, formal/C/Elab.lean, AGORA-1029
+# steps 2 and 4 to 10)
 # against the NURL translator (`nurl-cert translate`,
 # packages/nurl-cert/src/tolean.nu), over every certify program, every hole
 # probe, and the programs of tools/ncore/elab/ (written for this test: each
@@ -81,7 +82,9 @@ EXPECT_CERTIFY="cursor_over_a_vec int_recursion_early_return joins_each_freeing_
     vec_moved_into_a_struct vec_moved_into_a_struct_then_pushed_refused option_built_and_matched
     destructor_frame_left_by_an_early_return destructor_frame_left_by_an_early_return_after_its_source_moved_refused
     destructor_reads_a_view_of_a_live_source destructor_reads_a_view_of_a_moved_source_refused
-    chan_int_sent_and_received chan_string_sent_and_received chan_string_read_after_its_send_refused"
+    chan_int_sent_and_received chan_string_sent_and_received chan_string_read_after_its_send_refused
+    thread_body_reads_a_vec_after_its_move_refused thread_channel_read_after_an_alias_took_it_refused
+    thread_sends_on_a_channel_main_receives thread_spawned_with_a_number_capture"
 
 # (the list is copied aside first: it may be the work directory's own
 # progs.txt from an earlier run)
@@ -154,6 +157,7 @@ def r : Rhs → String
   | .inl y t => s!".inl {y} {repr t}"
   | .inr t y => s!".inr {repr t} {y}"
   | .getr y => s!".getr {y}"
+  | .getl y => s!".getl {y}"
   | .pack fs te ms y cs => s!".pack {fs} {repr te} {ms} {y} {repr cs}"
   | _ => "?rhs"
 def ed : Edit → String
@@ -194,11 +198,20 @@ for k in $(sed -n 's|^.*/\([0-9][0-9]*\)\.json some$|\1|p' "$W/run.txt"); do
         sed -e '/^import /d' -e '/^open /d' -e '/^#eval /d' "$W/r/$k.tl"   # the translator's term
         echo "end T"; echo
         cat "$W/r/$k.words"; echo; echo
+        if grep -q '^def spawns ' "$W/r/$k.tl"; then
+        # (step 10) a program that spawns: elabIR3, its spawn wrappers too
+        echo "#eval IO.println (if C.Elab.elabIs3 ir T.P T.spawns T.entry then \"match\" else"
+        echo "  match C.Elab.elabIR3 ir with"
+        echo "  | some (Q, sq, e) => \"DIFF\\n\" ++ \"\\n\".intercalate (Q.map Show.fn) ++ \"\\nspawns \" ++ toString sq ++ \"\\nentry \" ++ Show.s e"
+        echo "  | none => \"none\")"
+        [ "$KERNEL" = 1 ] && echo "theorem same : C.Elab.elabIR3 ir = some (T.P, T.spawns, T.entry) := C.Elab.elabIs3_sound _ _ _ _ (by decide +kernel)"
+        else
         echo "#eval IO.println (if C.Elab.elabIs ir T.P T.entry then \"match\" else"
         echo "  match C.Elab.elabIR ir with"
         echo "  | some (Q, e) => \"DIFF\\n\" ++ \"\\n\".intercalate (Q.map Show.fn) ++ \"\\nentry \" ++ Show.s e"
         echo "  | none => \"none\")"
         [ "$KERNEL" = 1 ] && echo "theorem same : C.Elab.elabIR ir = some (T.P, T.entry) := C.Elab.elabIs_sound _ _ _ (by decide +kernel)"
+        fi
     } > "$f"
     out=$(cd "$ROOT/formal" && lake env lean "$f" 2>&1); lrc=$?
     v=$(printf '%s\n' "$out" | head -1)
