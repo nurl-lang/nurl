@@ -194,6 +194,14 @@ and on every hand-vouched place (`unsafe-<n>`: an `unsafe` function may
 call anything). Enforcing a proved absence by the platform (seccomp,
 Landlock, a wasm import list) is AGORA-1025.
 
+**A conditional bundle** (AGORA-1033) holds a stub at each assumed
+function, which names the functions the real one calls. `Cert.n_cap` is
+then about the program with its stubs, and N.cap is `assumed`, as its M
+claims are, on each assumed function's row (`assumed-fn:<name>`). The
+assumed function's own classes are read off its real calls in the core
+IR, as any other's are, so a program with a call the translation does not
+cover (a `nurl_print`, a file write) still gets the class of it.
+
 For every class, `capabilities.classes` gives one shortest chain of calls
 from a function of the list to the runtime function that has it, each
 step `name (file:line)` of its call, so a reader sees why a class is
