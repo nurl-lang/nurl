@@ -10,6 +10,8 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/std/sysinfo.nu`
+$ `stdlib/std/path.nu`
 
 @ nc_join s a s b → String {
     : String out ( string_from a )
@@ -18,11 +20,78 @@ $ `stdlib/ext/env.nu`
     ^ out
 }
 
-// `path` made absolute against the working directory.
+// Does this host take a backslash for a path separator (Windows)?
+@ nc_backslash_sep → b { ^ == ( sys_os ) SYS_OS_WINDOWS }
+
+@ __nc_sep i c → b { ^ | == c 47 & == c 92 ( nc_backslash_sep ) }
+
+// Is `path` fully qualified, the same file from any working directory:
+// `/…`; on Windows instead a drive's `X:/…` or `X:\…` and a share's
+// `\\host\…` (elsewhere a backslash is a file name's byte). A Windows
+// `\x` or `/x` names x on the working directory's drive: not qualified.
+@ nc_is_abs s path → b {
+    : i c0 ( nurl_str_get path 0 )
+    ? ! ( nc_backslash_sep ) { ^ == c0 47 } {}
+    ? & ( __nc_sep c0 ) ( __nc_sep ( nurl_str_get path 1 ) ) { ^ T } {}
+    : b letter | & >= c0 65 <= c0 90 & >= c0 97 <= c0 122
+    ? & letter == ( nurl_str_get path 1 ) 58 { ^ ( __nc_sep ( nurl_str_get path 2 ) ) } {}
+    ^ F
+}
+
+@ __nc_upper i c → i { ^ ? & >= c 97 <= c 122 - c 32 c }
+
+// The root of Windows directory `d`: its drive `X:`, or the share
+// `\\host\share` it lies under; empty for any other.
+@ __nc_root String d → String {
+    : i n ( string_len d )
+    ? & >= n 2 == ( string_get d 1 ) 58 { ^ ( string_substr d 0 2 ) } {}
+    ? | < n 2 | ! ( __nc_sep ( string_get d 0 ) ) ! ( __nc_sep ( string_get d 1 ) ) { ^ ( string_new ) } {}
+    // past `\\`, the host, its separator, then the share
+    : ~ i k 2
+    : ~ i seps 0
+    ~ & < k n < seps 2 {
+        ? ( __nc_sep ( string_get d k ) ) { = seps + seps 1 } {}
+        ? < seps 2 { = k + k 1 } {}
+    }
+    ^ ( string_substr d 0 k )
+}
+
+// `path` made absolute against the working directory (on Windows, a path
+// rooted on no drive, `\x`, against the working directory's drive), so a
+// later change of directory or drive does not change the file it names.
 @ nc_abs s path → String {
-    ? == 47 ( nurl_str_get path 0 ) { ^ ( string_from path ) } {}
+    ? ( nc_is_abs path ) { ^ ( string_from path ) } {}
+    // (Windows resolves a path that exists itself: a drive-relative
+    // `D:rel` against D:'s own current directory, which only the system
+    // knows; what follows is for a path not made yet, as a bundle's)
+    ? ( nc_backslash_sep ) {
+        ?? ( path_canonical @ Path { ( string_from path ) } ) {
+            T p → { ^ ( string_from ( path_str p ) ) }
+            F → {}
+        }
+    } {}
     ^ ?? ( env_cwd ) {
-        T cwd → ( nc_join ( string_data cwd ) path )
+        T cwd → {
+            // (a drive-relative `X:rel`, on the working directory's drive:
+            // under the working directory; on another drive it keeps its
+            // drive, and nothing here knows that drive's directory)
+            : i p0 ( nurl_str_get path 0 )
+            ? & & ( nc_backslash_sep ) == ( nurl_str_get path 1 ) 58 | & >= p0 65 <= p0 90 & >= p0 97 <= p0 122 {
+                : String r ( __nc_root cwd )
+                ? & == ( string_len r ) 2 == ( __nc_upper ( string_get r 0 ) ) ( __nc_upper p0 ) {
+                    : String rest ( string_from path )
+                    ^ ( nc_join ( string_data cwd ) ( string_data ( string_substr rest 2 - ( string_len rest ) 2 ) ) )
+                } {}
+                ^ ( string_from path )
+            } {}
+            ? ( __nc_sep ( nurl_str_get path 0 ) ) {
+                // (the root of the working directory before `\x`: `C:` of
+                // `C:\work`, `\\host\share` of `\\host\share\work`)
+                : String o ( __nc_root cwd )
+                ( string_push_str o path )
+                o
+            } { ( nc_join ( string_data cwd ) path ) }
+        }
         F _ → ( string_from path )
     }
 }

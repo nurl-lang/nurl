@@ -252,7 +252,7 @@ $ `stdlib/ext/json.nu`
 // Check `bundle/Program.lean` and `bundle/Claims.lean` (and with `elab`,
 // `bundle/Elab.lean`) in one Lean process: the file `__lt_combined` makes,
 // in `work`, run by `lean --json` inside formal/ with formal/'s build on
-// `LEAN_PATH` (`env LEAN_PATH=<formal>/.lake/build/lib/lean lean …`, so
+// `LEAN_PATH` (`<formal>/.lake/build/lib/lean`, set in the environment, so
 // that `import C.Cert` is formal/'s). Each message is the claims' (`log`) or Elab.lean's
 // (`elab_log`) by its own position, not by where it comes in the output: a
 // message of the file from the Elab.lean part's first line on is Elab.lean's,
@@ -304,15 +304,22 @@ $ `stdlib/ext/json.nu`
     // (`lake env lean` set the same `LEAN_PATH` and cost ≈ 45 ms a run
     // before Lean started, AGORA-1029 step 9; `lean` adds its own library
     // itself. Run inside formal/, elan's `lean` picks formal/'s toolchain,
-    // as its `lake` did; `LEAN_PATH` is set, not inherited.)
-    : String lp ( string_from `LEAN_PATH=` )
-    ( string_push_str lp formal )
+    // as its `lake` did; `LEAN_PATH` is set, not inherited: nurl-cert sets
+    // it in its own environment, which Lean inherits, so no `env` program
+    // stands between (there is none on a Windows PATH, AGORA-1031).)
+    : String lp ( string_from formal )
     ( string_push_str lp `/.lake/build/lib/lean` )
-    ( vec_push [String] a1 lp )
-    ( vec_push [String] a1 ( string_from lean ) )
+    ?? ( env_set `LEAN_PATH` ( string_data lp ) ) {
+        T _ → {}
+        F _ → {
+            ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
+            ( string_push_str log `cannot set LEAN_PATH for Lean` )
+            ^ @ LeanRun { F log F ( string_new ) }
+        }
+    }
     ( vec_push [String] a1 ( string_from `--json` ) )
     ( vec_push [String] a1 ( string_clone all ) )
-    : Run r ( nc_run `env` a1 )
+    : Run r ( nc_run lean a1 )
     ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     : b has_elab ?? etext { T _ → T F → F }
     : ~ String elog ( string_new )
