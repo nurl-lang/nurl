@@ -660,13 +660,21 @@ def cloArgTy (tyls : List (List W)) (b : List Nat) : Option Ty :=
   | some t => some t
   | none => if structNameB b then tyR tyls tyFuel [] (encB b) else none
 
+/-- A nested or pointer type in a closure type (`__clo_sig`): one that
+    holds a `{` or a `(`, or a `*` and is not `i8*`. -/
+def nestedOrPtrB (x : List Nat) : Bool :=
+  x.contains 123 || x.contains 40 || (x.contains 42 && x != i8pB)
+
 /-- A closure type's result and arguments as A2's types: no raw string
     among them (the translator refuses one: owned text or a view by its use,
-    which a closure type does not say), each a type `cloArgTy` takes (the
-    translator's refusal of a nested or pointer type included). -/
+    which a closure type does not say), no nested or pointer type (the
+    translator refuses one, before it reads a type: so a `%P*` is no struct
+    here even where the IR has a `ty %P*` line), each a type `cloArgTy`
+    takes. -/
 def cloTysB (tyls : List (List W)) (cs : List Nat) : Option (List Ty) := do
   let sig ← cloSigB cs
   if sig.any (· == i8pB) then none
+  if sig.any nestedOrPtrB then none
   sig.mapM (cloArgTy tyls)
 
 /-- The closure types `t` adds, met as a variable's or a result's type: a
@@ -2440,6 +2448,18 @@ example : cloTysB (strs [["ty", "%P", "1", "0-----", "P", "A", "0", "F", "2", "x
       (bytesOf "{ i64 (i8*, %Q)*, i8* }") = none ∧
     cloTysB (strs [["ty", "%P", "1", "0-----", "P", "A", "0", "F", "2", "x", "i64", "y", "i64", "V", "0"]])
       (bytesOf "{ i64 (i8*, %R)*, i8* }") = none := by decide +kernel
+
+/-- A pointer to a struct is no argument of a closure type, though the IR
+    has a `ty` line for it (`%P*`, one field `*` of type `%P`), nor is a
+    nested type; the struct itself is. -/
+example : cloTysB (strs [["ty", "%P*", "2", "0-----", "", "A", "0", "F", "1", "*", "%P", "V", "0"],
+        ["ty", "%P", "1", "0-----", "P", "A", "0", "F", "1", "x", "i64", "V", "0"]])
+      (bytesOf "{ i64 (i8*, %P*)*, i8* }") = none ∧
+    cloTysB (strs [["ty", "%P*", "2", "0-----", "", "A", "0", "F", "1", "*", "%P", "V", "0"],
+        ["ty", "%P", "1", "0-----", "P", "A", "0", "F", "1", "x", "i64", "V", "0"]])
+      (bytesOf "{ i64 (i8*, %P)*, i8* }") = some [.int, .int] ∧
+    cloTysB [] (bytesOf "{ i64 (i8*, { i1, i64 })*, i8* }") = none ∧
+    cloTysB [] (bytesOf "{ { i1, i64 } (i8*, i64)*, i8* }") = none := by decide +kernel
 
 /-- The interface of closure type `cs`, the program's function `σ`
     (`__emit`): the closure (lent), then the type's arguments; its body is

@@ -952,7 +952,10 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   the program's `ty` lines, as the translator's `__lean_ty` reads it), so a
   closure taking a struct is in the subset; its interface takes the struct
   lent (`.inp`), as the translator's. A struct holding raw text, or a name
-  with no `ty` line, is refused there as everywhere.
+  with no `ty` line, is refused there as everywhere; so is a nested or
+  pointer type (`nestedOrPtrB`: a `{`, a `(`, or a `*` other than `i8*`'s),
+  which the translator refuses before it reads the type: a `%P*` is no
+  struct, though the IR has a `ty %P*` line for it.
 - **A struct of one number field** is A2's `.int`. Where the translator
   asks the IR type (`__is_int`: a `use`, a `ret`) it is no number and
   moves; where it asks the A2 type (`__lean_ty`: a `drop`, a `none` slot)
