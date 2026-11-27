@@ -1,10 +1,10 @@
 // elem_lend_grow_keeps_other_views.nu — growing ONE element of a
 // Vec through a value a call lends out of it, `( string_push_str ( vec_at
-// vs 0 ) … )`, moves that element's buffer alone (AGORA-374). A view of
-// another element, by its index literal, stays: `( vec_at vs 1 )`'s data,
-// its bytes. So does a view of the Vec's own block, a slice of it, read
-// after the push, in a loop over each element, and through a forwarder.
-// Every one runs clean under AddressSanitizer.
+// vs 0 ) … )`, changes what is inside that element and moves no byte of
+// the Vec's own block (AGORA-374; A2's `Eff.dropIn`,
+// formal/A2/DropInWitness.lean). A view of the block, a slice of the Vec,
+// stays: read after the push, in a loop over each element, and through a
+// forwarder. Every one runs clean under AddressSanitizer.
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
@@ -16,20 +16,6 @@ $ `stdlib/core/slice.nu`
     ( vec_push [String] vs ( string_from `short` ) )
     ( vec_push [String] vs ( string_from `second element string long enough for the heap` ) )
     ^ vs
-}
-
-@ other_element → v {
-    : ( Vec String ) vs ( two )
-    : s d1 ( string_data ( vec_at [String] vs 1 ) )
-    ( string_push_str ( vec_at [String] vs 0 ) `a long tail that grows the buffer several times over` )
-    ( nurl_println d1 )
-}
-
-@ other_element_bytes → v {
-    : ( Vec String ) vs ( two )
-    : ( Slice u8 ) by ( string_bytes ( vec_at [String] vs 1 ) )
-    ( string_push_str ( vec_at [String] vs 0 ) `a long tail that grows the buffer several times over` )
-    ( nurl_println_int ( slice_len [u8] by ) )
 }
 
 @ slice_of_the_vec → v {
@@ -59,8 +45,6 @@ $ `stdlib/core/slice.nu`
 }
 
 @ main → i {
-    ( other_element )
-    ( other_element_bytes )
     ( slice_of_the_vec )
     ( each_element_in_a_loop )
     ( through_a_forwarder )
