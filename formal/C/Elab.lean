@@ -486,15 +486,6 @@ def cloSigB (cs : List Nat) : Option (List (List Nat)) :=
         | [] :: ps => (ps.mapM cloArgB).map (head.take k :: ·)
         | _ => none
 
-/-- A closure type's result and arguments as A2's types: no raw string
-    among them (the translator refuses one: owned text or a view by its use,
-    which a closure type does not say), each a type `tyOfB` takes (the
-    translator's refusal of a nested or pointer type included). -/
-def cloTysB (cs : List Nat) : Option (List Ty) := do
-  let sig ← cloSigB cs
-  if sig.any (· == i8pB) then none
-  sig.mapM tyOfB
-
 /-- The program's closure types, in the order the translator first meets
     them, each as its bytes: closure type `k` is A2's `.fn [base + k] .any`,
     its interface the program's function `base + k` (after the program's
@@ -540,14 +531,17 @@ def optInner (cs : List Nat) : List Nat := (cs.drop 6).take (cs.length - 8)
 
 /-- A name `__lean_ty` reads as a struct's (its `ty` line's fields): it
     starts `%` and is none of the types the translator takes before it
-    (`%Vec__…`, `%Channel__…`, `%str`, `%Slice__…`; `%String` is taken
-    earlier here too), nor a number type behind its `%`s (the translator
-    takes `%i64` for a number; `elabIR` refuses it, stricter). -/
+    (`%Vec__…`, `%Channel__…`, `%str`, `%Slice__…`, `%String`), nor a
+    number type behind its `%`s (the translator takes `%i64` for a number;
+    `elabIR` refuses it, stricter). `%String` is no struct here either,
+    though the IR has a `ty` line for it (`ctl i8*`): a place `v/ctl` of a
+    String, which the translator would read as the whole String (one field,
+    read without its name), is refused (stricter, as a `Vec`'s handle). -/
 def structNameB (cs : List Nat) : Bool :=
   match cs with
   | 37 :: _ =>
     !prefixN vecTyB cs && !prefixN sliceTyB cs && !prefixN chanTyB cs && cs != strTyB &&
-    !intTyB (cs.dropWhile (· == 37))
+    cs != stringTyB && !intTyB (cs.dropWhile (· == 37))
   | _ => false
 
 /-- `n` name–type pairs. -/
@@ -589,7 +583,9 @@ def nodupB : List W → Bool
 
 /-- How deep `tyR` follows types inside types (an option's payload, a
     struct's field): deeper is refused (stricter than the translator, which
-    follows any depth; fail closed). -/
+    follows any depth; fail closed). Every type `tyR` reads counts, the
+    innermost one too: a number inside 31 options is read (32 types), inside
+    32 it is refused (`nestOpt` below). -/
 def tyFuel : Nat := 32
 
 /-- A type of the subset as A2's (`__lean_ty`), types inside it included:
@@ -638,15 +634,50 @@ example : tyOf ⟨0, [], []⟩ (enc "%Vec__str") = some (.vec (.slice .int)) ∧
     tyOf ⟨0, [], []⟩ (enc "%Slice__u8") = some (.slice .int) ∧
     tyOf ⟨0, [], []⟩ (enc "%Slice__str") = none ∧ tyOf ⟨0, [], []⟩ (enc "%Vec__String") = none := by decide +kernel
 
+/-- `i64` inside `n` options, as its bytes (`{ i1, ` … ` }` `n` times; built
+    from the bytes, no string literal for the kernel to build). -/
+def nestOpt : Nat → List Nat
+  | 0 => [105, 54, 52]
+  | n + 1 => optHeadB ++ nestOpt n ++ optTailRevB.reverse
+
+/-- `tyFuel`'s bound: a number inside 31 options is read, inside 32 it is
+    refused (fail closed; the translator follows any depth). -/
+example : (tyOf ⟨0, [], []⟩ (encB (nestOpt 31))).isSome = true ∧
+    tyOf ⟨0, [], []⟩ (encB (nestOpt 32)) = none ∧
+    tyOf ⟨0, [], []⟩ (encB (nestOpt 2)) = some (.sum .int (.sum .int .int)) := by decide +kernel
+
+/-- `%String` is no struct (a place `v/ctl` of a String is refused), though
+    a struct may hold one. -/
+example : structNameB stringTyB = false ∧ structNameB (bytesOf "%P") = true ∧
+    tyOf ⟨0, [], strs [["ty", "%P", "1", "0-----", "P", "A", "0", "F", "2", "x", "i64", "s", "%String", "V", "0"]]⟩
+      (enc "%P") = some (.prod .int (.vec .int)) := by decide +kernel
+
+/-- A closure type's result or argument as A2's type: `tyOfB`'s, or a
+    struct of the subset's (`tyR`, through the program's `ty` lines, as the
+    translator's `__lean_ty` reads it). -/
+def cloArgTy (tyls : List (List W)) (b : List Nat) : Option Ty :=
+  match tyOfB b with
+  | some t => some t
+  | none => if structNameB b then tyR tyls tyFuel [] (encB b) else none
+
+/-- A closure type's result and arguments as A2's types: no raw string
+    among them (the translator refuses one: owned text or a view by its use,
+    which a closure type does not say), each a type `cloArgTy` takes (the
+    translator's refusal of a nested or pointer type included). -/
+def cloTysB (tyls : List (List W)) (cs : List Nat) : Option (List Ty) := do
+  let sig ← cloSigB cs
+  if sig.any (· == i8pB) then none
+  sig.mapM (cloArgTy tyls)
+
 /-- The closure types `t` adds, met as a variable's or a result's type: a
     well-formed one not met before. (Any other type that starts `{` is
     none of `tyOf`'s.) -/
-def cloAdd (acc : List (List Nat)) (t : W) : List (List Nat) :=
+def cloAdd (tyls : List (List W)) (acc : List (List Nat)) (t : W) : List (List Nat) :=
   if intTy t then acc
   else
     let cs := wordOf t
     match cs with
-    | 123 :: _ => if acc.contains cs || (cloTysB cs).isNone then acc else acc ++ [cs]
+    | 123 :: _ => if acc.contains cs || (cloTysB tyls cs).isNone then acc else acc ++ [cs]
     | _ => acc
 
 /-- The program's closure types, in the order the translator meets them:
@@ -655,18 +686,18 @@ def cloAdd (acc : List (List Nat)) (t : W) : List (List Nat) :=
     no other closure type on a program it translates (`__fn_init`). (In the
     order of the `v` lines, where the translator reads them by id, in the
     order an id first appears: `elabIR` requires the ids increasing.) -/
-def cloScan (prog : List CoreFn) : List (List Nat) :=
-  prog.foldl (fun acc f => cloAdd (f.vars.foldl (fun a v => cloAdd a v.2.2.2) acc) f.ret) []
+def cloScan (tyls : List (List W)) (prog : List CoreFn) : List (List Nat) :=
+  prog.foldl (fun acc f => cloAdd tyls (f.vars.foldl (fun a v => cloAdd tyls a v.2.2.2) acc) f.ret) []
 
 example : cloSigB (bytesOf "{ i64 (i8*, i64, %Vec__i64)*, i8* }") =
       some (["i64", "i64", "%Vec__i64"].map bytesOf) ∧
     cloSigB (bytesOf "{ void (i8*)*, i8* }") = some [bytesOf "void"] ∧
-    cloTysB (bytesOf "{ i64 (i8*, i64, %Vec__i64)*, i8* }") = some [.int, .int, .vec .int] := by
+    cloTysB [] (bytesOf "{ i64 (i8*, i64, %Vec__i64)*, i8* }") = some [.int, .int, .vec .int] := by
   decide +kernel
 /-- Refused: a raw string argument (the translator refuses it); an argument
     list spelled other than nurlc prints it (stricter: the translator splits
     it at its commas); no ` (i8*` in the head (the translator refuses it). -/
-example : cloTysB (bytesOf "{ i64 (i8*, i8*)*, i8* }") = none ∧
+example : cloTysB [] (bytesOf "{ i64 (i8*, i8*)*, i8* }") = none ∧
     cloSigB (bytesOf "{ i64 (i8*,i64)*, i8* }") = none ∧
     cloSigB (bytesOf "{ i64 (i8*, , i64)*, i8* }") = none ∧
     cloSigB (bytesOf "{ (i8*)*, i8* }") = none := by decide +kernel
@@ -1295,6 +1326,14 @@ def fieldAt (c : CloTab) (vs : List (Nat × Nat × Nat × W)) (w : W) :
   let t ← tyOf c bt
   let ft ← nth? fs i
   pure (b, i, fs.length, t, ft.2)
+
+/-- A place of a String (`v0/ctl`, its handle: the IR's `ty %String` line
+    has one field) is refused; the same place of a struct of one number
+    field is read. -/
+example : fieldAt ⟨0, [], strs [["ty", "%String", "1", "0-----", "String", "A", "0", "F", "1", "ctl", "i8*", "V", "0"]]⟩
+      [(0, 0, 0, enc "%String")] (enc "v0/ctl") = none ∧
+    (fieldAt ⟨0, [], strs [["ty", "%S", "1", "0-----", "S", "A", "0", "F", "1", "ctl", "i64", "V", "0"]]⟩
+      [(0, 0, 0, enc "%S")] (enc "v0/ctl")).isSome = true := by decide +kernel
 
 /-- Field `i` of a struct of `n` fields, of A2 type `t` (its fields nested
     in pairs to the right): its own A2 type (`__flean`: `__lean_ty` of the
@@ -2392,13 +2431,23 @@ def idsInc : List (Nat × Nat × Nat × W) → Bool
   | [] => true
   | a :: r => idsAbove a.1 r
 
+/-- A closure type's argument may be a struct of the subset (its `ty` line
+    read as a variable's type is), not a struct holding raw text, nor a
+    struct with no `ty` line. -/
+example : cloTysB (strs [["ty", "%P", "1", "0-----", "P", "A", "0", "F", "2", "x", "i64", "y", "i64", "V", "0"]])
+      (bytesOf "{ i64 (i8*, %P)*, i8* }") = some [.int, .prod .int .int] ∧
+    cloTysB (strs [["ty", "%Q", "1", "0-----", "Q", "A", "0", "F", "2", "x", "i64", "s", "i8*", "V", "0"]])
+      (bytesOf "{ i64 (i8*, %Q)*, i8* }") = none ∧
+    cloTysB (strs [["ty", "%P", "1", "0-----", "P", "A", "0", "F", "2", "x", "i64", "y", "i64", "V", "0"]])
+      (bytesOf "{ i64 (i8*, %R)*, i8* }") = none := by decide +kernel
+
 /-- The interface of closure type `cs`, the program's function `σ`
     (`__emit`): the closure (lent), then the type's arguments; its body is
     never run (a call runs the package's code), so it is one that
     type-checks, a result of the type made fresh: a number, or an empty
     buffer of numbers (any other result stops the translator). -/
-def ifaceFn (σ : Nat) (cs : List Nat) : Option Fn := do
-  let tys ← cloTysB cs
+def ifaceFn (tyls : List (List W)) (σ : Nat) (cs : List Nat) : Option Fn := do
+  let tys ← cloTysB tyls cs
   match tys with
   | [] => none
   | rt :: args =>
@@ -2438,7 +2487,7 @@ def elabL (ls : Lines) : Option (Prog × Stmt) := do
   -- lowers to an A2 construct, called or not
   if names.any intrinsicName then none
   let mi ← indexOf names kMain
-  let cl : CloTab := ⟨prog.length, cloScan prog, tops⟩
+  let cl : CloTab := ⟨prog.length, cloScan tops prog, tops⟩
   -- (step 6: where the program has closures, the translator reads each
   -- function's variables in id order; `elabIR` reads them in the order of
   -- their `v` lines, and requires the two the same)
@@ -2447,7 +2496,7 @@ def elabL (ls : Lines) : Option (Prog × Stmt) := do
   -- literal can pack (stricter: the translator translates it)
   if cl.tys.isEmpty && names.any (startsB · closureB) then none
   let P ← prog.mapM (fnElab tops prog cl)
-  let I ← (idxFrom cl.base cl.tys).mapM fun e => ifaceFn e.1 e.2
+  let I ← (idxFrom cl.base cl.tys).mapM fun e => ifaceFn cl.tyls e.1 e.2
   pure (P ++ I, .letcall 0 mi [] .skip)
 
 /-- The program and its entry statement, from the IR's words. -/

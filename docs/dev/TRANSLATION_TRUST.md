@@ -934,17 +934,25 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   - a struct whose fields' names repeat (the translator reads a field by
     its first name in `__field_temp` and by its last in `__field_ix`);
   - a field of a type that is no struct of the subset (the translator reads
-    the `ty` line of any type, a `Vec`'s handle `ctl` included), and a field
+    the `ty` line of any type, a `Vec`'s or a `String`'s handle `ctl`
+    included: `v/ctl` of a `%String` would be the whole String), and a field
     of a struct of one field named other than its field (the translator does
     not read the name there);
   - a struct named like a number behind its `%` (`%i64`: the translator
     takes it for a number) or like a channel, and a type nested deeper than
-    `tyFuel` (32);
+    `tyFuel` (32 types, the innermost counted: a number inside 31 options is
+    read, inside 32 refused, both witnessed);
   - a field root other than `v` and digits, and a `match` of more than two
     arms (the translator takes repeated names, the last block of each).
   A program that spawns is outside the subset as before: its spawn is a
   call `intrS` has no rule for, so the translator's threaded readings
   (results, `%Thread`) never meet `elabIR`'s.
+- **Closure types over structs.** A closure type's argument may be a
+  struct of the subset (`cloArgTy`: step 6's `tyOfB`, else `tyR` through
+  the program's `ty` lines, as the translator's `__lean_ty` reads it), so a
+  closure taking a struct is in the subset; its interface takes the struct
+  lent (`.inp`), as the translator's. A struct holding raw text, or a name
+  with no `ty` line, is refused there as everywhere.
 - **A struct of one number field** is A2's `.int`. Where the translator
   asks the IR type (`__is_int`: a `use`, a `ret`) it is no number and
   moves; where it asks the A2 type (`__lean_ty`: a `drop`, a `none` slot)
@@ -971,22 +979,22 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   subset, is a destructor program now
   (`destructor_frame_left_by_an_early_return`), and its outside-the-subset
   check names that one.
-- **Parity** (`tools/ncore/elab_parity.sh`, 16 new fixtures in
+- **Parity** (`tools/ncore/elab_parity.sh`, 17 new fixtures in
   `tools/ncore/elab/`: three fields read through nested pairs, a struct
   made by a function and handed back, a struct of one field, a struct
   holding a String measured, viewed and grown through its field, a Vec
   field indexed, sliced and cut back, a struct inside a struct, a struct
   given a new literal in a loop, a struct handed `inout`, an option matched
   `None` first, an option holding a Vec, an option of a literal given
-  another value, options made and matched in a loop, and two the checker
-  refuses: a Vec moved into an option then pushed, a struct read after it
-  was handed to a sink): of 4582 programs nurlc makes a core IR of 4377.
-  tolean.nu translates 302 of those, and `elabIR` answers a term for 223
-  (the 51 certify programs, the 73 fixtures, 99 hole probes; 166 at step
+  another value, options made and matched in a loop, a closure taking a
+  struct, and two the checker refuses: a Vec moved into an option then
+  pushed, a struct read after it was handed to a sink): of 4583 programs nurlc makes a core IR of 4378.
+  tolean.nu translates 303 of those, and `elabIR` answers a term for 224
+  (the 51 certify programs, the 74 fixtures, 99 hole probes; 166 at step
   6, none of them lost), every one exactly tolean.nu's term (each also by
   `decide +kernel`). It answers `none` for the other 4154, and a term for
   no program tolean.nu refuses; the same on the words as on every line for
-  all 4377. The new matches are the 6 certify programs, the 16 fixtures and
+  all 4378. The new matches are the 6 certify programs, the 17 fixtures and
   35 hole probes (options and their payloads, struct literals, cursors in
   literals). The baseline run on main 986339c9 found 166 matches of 4356
   core IRs; 5 hole probes that import `stdlib/ext/sqlite.nu` had no core
