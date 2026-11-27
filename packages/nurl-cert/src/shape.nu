@@ -228,16 +228,14 @@ $ `stdlib/core/slice.nu`
             ? == line 2 {
                 ? ! ( __sh_line_is t a z `open A2 C` ) { ^ ( __sh_bad `the second line is not 'open A2 C'` line ) } {}
             } {
-                // the deep term's bound, exactly the one its depth asks for
+                // the deep term's bound, exactly the one its depth asks for:
+                // the line compared byte for byte with the one `need` makes, so
+                // no literal is parsed (a number past 64 bits would wrap to
+                // `need`, and Lean would read the big one)
                 ? & == line 3 ( __sh_starts t a z `set_option maxRecDepth ` ) {
-                    : ~ i k + a 23
-                    : i d0 k
-                    : ~ i v 0
-                    ~ & < k z ( __sh_is_digit ( slice_byte t k ) ) {
-                        = v + * v 10 - ( slice_byte t k ) 48
-                        = k + k 1
-                    }
-                    ? | | == k d0 != k z | == need 0 != v need {
+                    : String want ( string_from `set_option maxRecDepth ` )
+                    ( string_push_int want need )
+                    ? | == need 0 ! ( __sh_line_is t a z ( string_data want ) ) {
                         ^ ( __sh_bad `set_option maxRecDepth is not the bound the term's depth asks for` line )
                     } {}
                     = have_depth T
