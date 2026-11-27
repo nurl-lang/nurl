@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ts_dyn_store_methodless_impl_reaches_handle.nu:31:9: error: this stores a value into '( Channel Pet )' (a handle shared across threads) that holds — directly or through a closure's captures — '( Channel Pet )', which leads back to it: a cycle of counts that nothing frees, since thread-shared handles are not collected (docs/MEMORY.md §7.7). Point back without owning: an ArcWeak, a raw back-pointer the owner outlives (stdlib/ext/http3_server.nu), or pass the handle in as an argument instead of capturing it.
+        T p → { ( chan_send [Pet] ch p ) }
+        ^

@@ -105829,6 +105829,12 @@ unsafe @ __cc_walk_r s ty i syms → s {
 // an Rc's and a Weak's too, as what a value may hold, not what crosses a
 // thread.
 : ~ i g_ts_all 0
+// 1 once every impl of the program is registered (after the signature scan,
+// verify_super_obligations): a `% Trait` object is then what the types
+// implementing its trait can hold (__ts_walk_dyn, AGORA-248), not "any
+// node". (Asked before, it is "any node": an answer memoised then is the
+// conservative one.)
+: ~ i g_impls_final 0
 
 unsafe @ __ts_walk s ty i syms → s {
     = g_ts_seen ( __seen_begin )
@@ -105839,7 +105845,10 @@ unsafe @ __ts_walk_r s ty i syms → s {
     : i n ( nurl_str_len ty )
     ? | < n 2 ! ( __seen_add g_ts_seen ( nurl_str_cat `ts|` ty ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? ( __is_closure_ty ty ) { ^ ( nurl_str_cat `*` `` ) } {}
-    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( nurl_str_cat `*` `` ) } {}
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) {
+        ? != 0 g_impls_final { ^ ( __ts_walk_dyn ty syms ) } {}
+        ^ ( nurl_str_cat `*` `` )
+    } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s a ( __ts_walk_r ( __wrap_part ty 0 ) syms )
@@ -105895,6 +105904,26 @@ unsafe @ __ts_walk_r s ty i syms → s {
         : s e ( __ts_walk_r ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms )
         = out ( __bar_union out e )
         = fi + fi 1
+    }
+    ^ out
+}
+
+// A `% Trait` object (`%dyn.T`), once every impl is registered: it boxes a
+// value of one of the types implementing the trait (its `__impls`, every
+// impl the signature scan met, methods or none), so it holds what any of
+// them holds, as an enum holds what its variants do. (With them, the types
+// the dispatch list names, __dyn_impl_tys — those of its methods and its
+// supertraits': no fewer.) The program is compiled whole: a trait no type
+// implements has no object, and holds nothing.
+unsafe @ __ts_walk_dyn s ty i syms → s {
+    // (a name that is no trait's: any node)
+    : s tn ( __dyn_trait_of ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) )
+    ? == 0 ( nurl_str_len tn ) { ^ ( nurl_str_cat `*` `` ) } {}
+    : ~ s lls ( __bar_union ( __dyn_impl_tys ty ) ( nurl_sym_get2 g_trait_syms tn `__impls` ) )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len lls ) {
+        : s ll ( __bar_first lls ) = lls ( __bar_rest lls )
+        = out ( __bar_union out ( __ts_walk_r ll syms ) )
     }
     ^ out
 }
@@ -118063,7 +118092,15 @@ unsafe @ scan_impl_decl i lex i syms → v {
         : s impl_mangle ( mangle_type impl_llvm )
         // Record that `tname` is implemented for this LLVM type, so a
         // generic bound `A: tname` can be verified at instantiation.
-        ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
+        // (…and list it, once, among the trait's impls, `__impls`: what a
+        // trait object of it may box — a trait with no methods has no
+        // `implsof##` row to find them by; __ts_walk_dyn, AGORA-248.)
+        : s __tik ( nurl_str_cat3 tname `##` impl_llvm )
+        ? == 0 ( nurl_sym_len g_trait_syms __tik ) {
+            : s __til ( nurl_sym_get2 g_trait_syms tname `__impls` )
+            ( nurl_sym_set g_trait_syms ( nurl_str_cat tname `__impls` ) ? == 0 ( nurl_str_len __til ) ( nurl_str_cat impl_llvm `` ) ( nurl_str_cat3 __til `|` impl_llvm ) )
+        } {}
+        ( nurl_sym_def g_trait_syms __tik `1` )
         ? ( seq tname `Frozen` ) { = g_frozen_impls 1 } {}
         ( __marker_impl_gate lex tname impl_nurl decl_unsafe )
         // Park a supertrait obligation: after every impl in the program is
@@ -124784,6 +124821,8 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
     // Every impl across the program is now registered — enforce that each
     // implemented subtrait's supertraits are implemented for the same type.
     ( verify_super_obligations syms )
+    // …and a trait object holds what its impls hold (__ts_walk_dyn).
+    = g_impls_final 1
     // Dynamic trait objects (docs/spec.md §4.9): collect every trait used as a
     // `%Trait` object (body-aware, after __istrait markers exist) and emit the
     // `%dyn.<T>` fat-pointer type defs + synthesized Drop functions at module
