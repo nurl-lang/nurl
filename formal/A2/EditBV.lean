@@ -122,6 +122,24 @@ theorem DtorSafe.of_dropIn_true {Γ : Ctx} {x : Var} (h : DtorSafe Γ .dropIn tr
   have := h v E hE hd hos
   simpa [hitsMem, Eff.kills_dropIn_true] using this
 
+/-- AGORA-1037: where the elements hold views, a change inside one element
+    ends what `.drop` ends, as `.dropIn` does. -/
+theorem Eff.kills_dropInAt_true (j : Nat) (k : Kind) : Eff.kills (.dropInAt j) true k = Eff.kills .drop true k := by
+  cases k <;> simp [Eff.kills]
+
+theorem killE_dropInAt_true (j : Nat) (x : Var) (E : Entry) : killE (.dropInAt j) true x E = killE .drop true x E := by
+  unfold killE hits; simp only [Eff.kills_dropInAt_true]
+
+theorem kill_dropInAt_true (j : Nat) (x : Var) (Γ : Ctx) : A2.kill (.dropInAt j) true x Γ = A2.kill .drop true x Γ := by
+  have h : killE (.dropInAt j) true x = killE .drop true x := funext (killE_dropInAt_true j x)
+  funext v; simp only [A2.kill, h]
+
+theorem DtorSafe.of_dropInAt_true {Γ : Ctx} {x : Var} {j : Nat} (h : DtorSafe Γ (.dropInAt j) true x) :
+    DtorSafe Γ .drop true x := by
+  intro v E hE hd hos
+  have := h v E hE hd hos
+  simpa [hitsMem, Eff.kills_dropInAt_true] using this
+
 /-- A frame owner allows `.drop` if it allows any change: it is no
     `inout` parameter (`MInv.noInout`). -/
 theorem MInv.canDo_drop {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {o : Var} {Eo : Entry} (ho : Γ o = some Eo)
@@ -136,9 +154,10 @@ theorem effAt_dropV {op : Edit} {k : Kind} {s rv : Bool} {Γ : Ctx} {x : Var}
     (hre : op.effAt k s rv ≠ .realloc) :
     A2.kill (op.effAt k s rv) true x Γ = A2.kill .drop true x Γ ∧
       (DtorSafe Γ (op.effAt k s rv) true x → DtorSafe Γ .drop true x) := by
-  rcases Edit.effAt_not_realloc hre with h | ⟨h, _⟩ <;> rw [h]
+  rcases Edit.effAt_not_realloc hre with h | ⟨h, _⟩ | ⟨j, h, _⟩ <;> rw [h]
   · exact ⟨rfl, id⟩
   · exact ⟨kill_dropIn_true x Γ, DtorSafe.of_dropIn_true⟩
+  · exact ⟨kill_dropInAt_true j x Γ, DtorSafe.of_dropInAt_true⟩
 
 /-- The kills of a change through a borrow are below `.replace`, on roots
     the change allows (`ThruOK`), so none is lent out. -/

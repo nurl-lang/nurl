@@ -767,7 +767,7 @@ def thruOKRB (D : List Var) (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (Ps
     | some Er =>
       (Er.live || decide (Er.mode = .region)) &&
       (canDoB2 Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ||
-        (decide (Er.mode = .region) && !((op.effAt d.kind (decide (Er.ty = tx)) Er.rvec).kills false .view))) &&
+        (decide (Er.mode = .region) && decide (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec = .dropIn))) &&
       dtorSafeB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root &&
       decide (d.kind ≠ .share) &&
       heldOKB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) d.root

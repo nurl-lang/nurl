@@ -1346,6 +1346,63 @@ theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
   · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn,
       hsh.of_blk hb⟩
 
+/-! ### AGORA-1037: what lies inside element `i` stays when element `i` does
+
+A change strictly inside element `j` leaves every other element of the
+root's node as it was (`es'[i]? = es[i]?`): a dependency inside element
+`i ≠ j` lands where it landed. -/
+
+section KeepAt
+variable {m m' : Mem} {o : Var} {u : Ty} {c d d' : Nat} {es es' : List Val} {i : Nat}
+
+theorem landsAt_keep (hei : es'[i]? = es[i]?) {N : Val}
+    (h : Lands (.innerAt i) N (.node u c d es)) : Lands (.innerAt i) N (.node u c d' es') := by
+  rcases h with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨i', hk, ty, c0, d0, es0, e, heq, he, hs⟩
+  · cases h1
+  · cases h1
+  · cases h1
+  · cases hk; cases heq
+    exact Or.inr (Or.inr (Or.inr ⟨i, rfl, _, _, _, _, e, rfl, by rw [hei]; exact he, hs⟩))
+
+theorem landedAt_keep (hT : m.st o = some ⟨true, some (.node u c d es)⟩)
+    (hT' : m'.st o = some ⟨true, some (.node u c d' es')⟩) (hei : es'[i]? = es[i]?) {N : Val}
+    (h : Landed m ⟨o, .innerAt i⟩ N) : Landed m' ⟨o, .innerAt i⟩ N := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hk, _⟩
+  · have := rootNode_node hT hr; subst this
+    exact Or.inl ⟨_, Or.inl ⟨_, hT', Top.refl _⟩, landsAt_keep hei hl⟩
+  · cases hk
+
+theorem vkeepAt (hT : m.st o = some ⟨true, some (.node u c d es)⟩)
+    (hT' : m'.st o = some ⟨true, some (.node u c d' es')⟩) (hei : es'[i]? = es[i]?) :
+    VKeep m m' ⟨o, .innerAt i⟩ := by
+  intro dd o' l s ⟨c', es2, hks, hla, hl, hw⟩
+  exact ⟨c', es2, hks, landedAt_keep hT hT' hei hla, hl, hw⟩
+
+theorem hkeepAt (hT : m.st o = some ⟨true, some (.node u c d es)⟩)
+    (hT' : m'.st o = some ⟨true, some (.node u c d' es')⟩) (hei : es'[i]? = es[i]?) :
+    HKeep m m' ⟨o, .innerAt i⟩ := by
+  refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hla, hw, hv, hn, hsh⟩ => ?_, fun k2 p2 _ hla => ?_,
+    fun k2 hla => ?_⟩
+  · exact ⟨d2, es2, landedAt_keep hT hT' hei hla, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
+  · rcases hla with ⟨n0, hr, hl⟩ | ⟨hk, _⟩
+    · have := rootNode_node hT hr; subst this
+      exact Or.inl ⟨_, Or.inl ⟨_, hT', Top.refl _⟩, landsAt_keep hei hl⟩
+    · cases hk
+  · obtain ⟨n0, hr, hl⟩ := hla
+    have := rootNode_node hT hr; subst this
+    exact ⟨_, Or.inl ⟨_, hT', Top.refl _⟩, landsAt_keep hei hl⟩
+
+end KeepAt
+
+/-- Every index but the middle one sees the same element. -/
+theorem getElem?_mid_ne {α : Type} (pre post : List α) (a b : α) {i : Nat} (h : i ≠ pre.length) :
+    (pre ++ b :: post)[i]? = (pre ++ a :: post)[i]? := by
+  rcases Nat.lt_or_gt_of_ne h with h | h
+  · rw [List.getElem?_append_left h, List.getElem?_append_left h]
+  · rw [List.getElem?_append_right (by omega), List.getElem?_append_right (by omega)]
+    obtain ⟨k, hk⟩ : ∃ k, i - pre.length = k + 1 := ⟨i - pre.length - 1, by omega⟩
+    rw [hk]; rfl
+
 /-- Shrinking (`vec_pop`): only a borrow of the whole handle survives, and
     only of a container that holds no views. -/
 theorem Evolve.self_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}

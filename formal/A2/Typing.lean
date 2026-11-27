@@ -1725,7 +1725,12 @@ theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
     AGORA-937). A struct's field is lent `.inner` too (`projDeps`) but lies
     at the struct's top, so a root of any other type gets `.drop`. -/
 def Edit.inEff (k : Kind) (rvec : Bool) : Eff :=
-  if k = .inner ∧ rvec = true then .dropIn else .drop
+  if k = .inner ∧ rvec = true then .dropIn else
+  -- AGORA-1037: through a borrow inside element `i` of a `Vec` root, the
+  -- change is strictly inside element `i`
+  match k, rvec with
+  | .innerAt i, true => .dropInAt i
+  | _, _ => .drop
 
 def Edit.effAt : Edit → Kind → Bool → Bool → Eff
   | .push _, k, sameTy, rvec => if k = .self ∧ sameTy = true then .realloc else Edit.inEff k rvec
@@ -1740,14 +1745,16 @@ def Edit.stored : Edit → Option Var
   | .set _ y => some y
 
 theorem Edit.inEff_cases (k : Kind) (rv : Bool) :
-    Edit.inEff k rv = .drop ∨ (Edit.inEff k rv = .dropIn ∧ k = .inner ∧ rv = true) := by
+    Edit.inEff k rv = .drop ∨ (Edit.inEff k rv = .dropIn ∧ k = .inner ∧ rv = true) ∨
+      (∃ i, Edit.inEff k rv = .dropInAt i ∧ k = .innerAt i ∧ rv = true) := by
   unfold Edit.inEff; split
-  · rename_i h; exact Or.inr ⟨rfl, h⟩
-  · exact Or.inl rfl
+  · rename_i h; exact Or.inr (Or.inl ⟨rfl, h⟩)
+  · cases k <;> cases rv <;> simp
 
 theorem Edit.effAt_cases (op : Edit) (k : Kind) (s rv : Bool) :
     op.effAt k s rv = .realloc ∨ op.effAt k s rv = .drop ∨
-      (op.effAt k s rv = .dropIn ∧ k = .inner ∧ rv = true) := by
+      (op.effAt k s rv = .dropIn ∧ k = .inner ∧ rv = true) ∨
+      (∃ i, op.effAt k s rv = .dropInAt i ∧ k = .innerAt i ∧ rv = true) := by
   cases op with
   | push =>
     simp only [Edit.effAt]; split
@@ -1757,13 +1764,13 @@ theorem Edit.effAt_cases (op : Edit) (k : Kind) (s rv : Bool) :
   | set => exact Or.inr (Edit.inEff_cases k rv)
 
 theorem Edit.effAt_ne_replace (op : Edit) (k : Kind) (s rv : Bool) : op.effAt k s rv ≠ .replace := by
-  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ <;> rw [h] <;> simp
+  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ | ⟨_, h, _⟩ <;> rw [h] <;> simp
 
 theorem Edit.effAt_ne_none (op : Edit) (k : Kind) (s rv : Bool) : op.effAt k s rv ≠ .none := by
-  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ <;> rw [h] <;> simp
+  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ | ⟨_, h, _⟩ <;> rw [h] <;> simp
 
 theorem Edit.effAt_le_drop (op : Edit) (k : Kind) (s rv : Bool) : (op.effAt k s rv).le .drop := by
-  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ <;> rw [h] <;> decide
+  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ | ⟨_, h, _⟩ <;> rw [h] <;> simp [Eff.le, Eff.leb]
 
 /-- What a change does to a root does not depend on what it is handed. -/
 @[simp] theorem Edit.effAt_rename (ρ : Var → Var) (op : Edit) (k : Kind) (s rv : Bool) :
@@ -1778,9 +1785,9 @@ theorem Edit.effAt_realloc {op : Edit} {k : Kind} {s rv : Bool} (h : op.effAt k 
     simp only [Edit.effAt] at h
     split at h
     · rename_i hk; exact ⟨⟨y, rfl⟩, hk.1, hk.2⟩
-    · rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ <;> rw [h'] at h <;> cases h
-  | trunc _ => rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ <;> simp [Edit.effAt, h'] at h
-  | set _ _ => rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ <;> simp [Edit.effAt, h'] at h
+    · rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ | ⟨_, h', _⟩ <;> rw [h'] at h <;> cases h
+  | trunc _ => rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ | ⟨_, h', _⟩ <;> simp [Edit.effAt, h'] at h
+  | set _ _ => rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ | ⟨_, h', _⟩ <;> simp [Edit.effAt, h'] at h
 
 /-- Only a push reallocates. -/
 theorem Edit.effAt_ne_realloc {op : Edit} (h : ∀ y, op ≠ .push y) (k : Kind) (s rv : Bool) :
@@ -1788,14 +1795,17 @@ theorem Edit.effAt_ne_realloc {op : Edit} (h : ∀ y, op ≠ .push y) (k : Kind)
   obtain ⟨⟨y, rfl⟩, _⟩ := Edit.effAt_realloc he
   exact h y rfl
 
-/-- Not a `.realloc`: a `.drop`, or a `.dropIn` through an `.inner`
-    borrow of a `Vec` root. -/
+/-- Not a `.realloc`: a `.drop`, a `.dropIn` through an `.inner` borrow
+    of a `Vec` root, or (AGORA-1037) a `.dropInAt i` through an `.innerAt i`
+    one. -/
 theorem Edit.effAt_not_realloc {op : Edit} {k : Kind} {s rv : Bool} (h : op.effAt k s rv ≠ .realloc) :
-    op.effAt k s rv = .drop ∨ (op.effAt k s rv = .dropIn ∧ k = .inner ∧ rv = true) := by
-  rcases Edit.effAt_cases op k s rv with h' | h' | h'
+    op.effAt k s rv = .drop ∨ (op.effAt k s rv = .dropIn ∧ k = .inner ∧ rv = true) ∨
+      (∃ i, op.effAt k s rv = .dropInAt i ∧ k = .innerAt i ∧ rv = true) := by
+  rcases Edit.effAt_cases op k s rv with h' | h' | h' | h'
   · exact absurd h' h
   · exact Or.inl h'
-  · exact Or.inr h'
+  · exact Or.inr (Or.inl h')
+  · exact Or.inr (Or.inr h')
 
 /-- A renamed change stores what it stored, renamed. -/
 @[simp] theorem Edit.drops_rename (ρ : Var → Var) (op : Edit) : (op.rename ρ).drops = op.drops := by
@@ -1844,9 +1854,10 @@ def ThruLive (Er : Entry) : Prop := Er.live = true ∨ Er.mode = .region
     region, whose effect ends no view of it. A lent parameter's view of its
     region (`regionP`) is always live (`MInv.rootbLive`), so only a change
     strictly inside the region's nodes (`.dropIn`, `Entry.rvec`) reaches
-    one. -/
+    one. (AGORA-1037: exactly `.dropIn`: a region is reached in the four
+    memory ways, so never inside one element by index, `.dropInAt`.) -/
 def ThruCanDo (Er : Entry) (e : Eff) : Prop :=
-  canDo Er.mode e ∨ (Er.mode = .region ∧ e.kills false .view = false)
+  canDo Er.mode e ∨ (Er.mode = .region ∧ e = .dropIn)
 
 theorem ThruLive.live {Er : Entry} (h : ThruLive Er) (hnr : Er.mode ≠ .region) : Er.live = true :=
   h.resolve_right hnr

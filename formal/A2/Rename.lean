@@ -6947,7 +6947,7 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
   -- each root of the change: an owner, or a region
   have hroot : ∀ d0 ∈ memDeps Ex1.path, ∃ Er, Γa1 d0.root = some Er ∧ Er.mode ≠ .rootb ∧
       (Er.mode ≠ .region → Er.live = true ∧ canDo Er.mode (op.effAt d0.kind (decide (Er.ty = Ex1.ty)) Er.rvec)) ∧
-      (Er.mode = .region → (op.effAt d0.kind (decide (Er.ty = Ex1.ty)) Er.rvec).kills false .view = false) := by
+      (Er.mode = .region → op.effAt d0.kind (decide (Er.ty = Ex1.ty)) Er.rvec = .dropIn) := by
     intro d0 hd0
     obtain ⟨_, _, Er, hEr, hlv, hcan, _, _⟩ := hthru d0 hd0
     refine ⟨Er, hEr, ?_, fun hnr => ⟨hlv.live hnr, hcan.toCanDo hnr⟩, fun hr => ?_⟩
@@ -7052,7 +7052,7 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
       rw [hab1.2.2.2.2.2 d0.root] at hp0; simp at hp0; exact hp0.1)
     have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
     simp only [f, Kind.bound, hae]
-    exact ⟨hreg hr, Edit.effAt_ne_replace _ _ _ _⟩
+    exact ⟨(by rw [hreg hr]; rfl), Edit.effAt_ne_replace _ _ _ _⟩
   have hcw := canon_weaker_sub h (hab1.killNames _) hRw
   have hcan : S.canon (A2.killNames (((memDeps Ex1.path).filter p).map f) ΓR) =
       A2.killNames (rds S.ρ (((memDeps Ex1.path).filter p).map f)) (S.canon ΓR) := by
@@ -7069,7 +7069,7 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
       · exact allowed_canDo_false hab1 hEr (hown hr).2
     · exact hnp0
     · by_cases hr : Er.mode = .region
-      · exact Or.inr (hreg hr)
+      · exact Or.inr ((by rw [hreg hr]; rfl))
       · exact Or.inl (hab1.notReg hEr hr)
   -- the call's own kills are the callee's on its roots that are no region, renamed
   have hthruD' : thruDeps (op.rename S.ρ) (S.canon Γa1) (S.liftE x Ex1).ty (S.subE (S.liftE x Ex1)).path =
@@ -7126,7 +7126,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
   -- each root of the change: an owner, or a region
   have hroot : ∀ d0 ∈ memDeps Ex1.path, ∃ Er, Γa1 d0.root = some Er ∧ Er.mode ≠ .rootb ∧
       (Er.mode ≠ .region → Er.live = true ∧ canDo Er.mode (op.effAt d0.kind (decide (Er.ty = Ex1.ty)) Er.rvec)) ∧
-      (Er.mode = .region → (op.effAt d0.kind (decide (Er.ty = Ex1.ty)) Er.rvec).kills false .view = false) := by
+      (Er.mode = .region → op.effAt d0.kind (decide (Er.ty = Ex1.ty)) Er.rvec = .dropIn) := by
     intro d0 hd0
     obtain ⟨_, _, Er, hEr, hlv, hcan, _, _⟩ := hthru d0 hd0
     refine ⟨Er, hEr, ?_, fun hnr => ⟨hlv.live hnr, hcan.toCanDo hnr⟩, fun hr => ?_⟩
@@ -7181,18 +7181,19 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
     have hk := hreg hr
     rw [hae, hrv]
     rw [hrv] at hk
-    have hie : ∀ k, (Edit.inEff k true).kills false .view = false → k = .inner ∧ Edit.inEff k true = .dropIn := by
+    have hie : ∀ k, Edit.inEff k true = .dropIn → k = .inner ∧ Edit.inEff k true = .dropIn := by
       intro k hk'
-      unfold Edit.inEff at hk' ⊢
+      refine ⟨?_, hk'⟩
+      unfold Edit.inEff at hk'
       by_cases hki : k = .inner
-      · simp [hki]
-      · simp [hki, Eff.kills] at hk'
+      · exact hki
+      · simp only [hki, false_and, ↓reduceIte] at hk'; cases k <;> simp_all
     refine ⟨?_, ?_, Er, hEr, hr⟩
     · cases op with
       | push y =>
         simp only [Edit.effAt] at hk
         split at hk
-        · simp [Eff.kills] at hk
+        · cases hk
         · exact (hie _ hk).1
       | trunc e => exact (hie _ hk).1
       | set e y => exact (hie _ hk).1
@@ -7200,7 +7201,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
       | push y =>
         simp only [Edit.effAt] at hk ⊢
         split at hk
-        · simp [Eff.kills] at hk
+        · cases hk
         · rename_i hns; rw [ite_eq_right hns]; exact (hie _ hk).2
       | trunc e => exact (hie _ hk).2
       | set e y => exact (hie _ hk).2
@@ -7352,7 +7353,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
       · exact allowed_canDo_false hab1 hEr (hown hr).2
     · exact hnp0
     · by_cases hr : Er.mode = .region
-      · exact Or.inr (hreg hr)
+      · exact Or.inr ((by rw [hreg hr]; rfl))
       · exact Or.inl (hab1.notReg hEr hr)
   -- the caller's kills: its own roots' renamed, and the roots the regions stand for
   have hthruD' : ∀ d, d ∈ thruDeps (op.rename S.ρ) (S.canon Γa1) (S.liftE x Ex1).ty (S.subE (S.liftE x Ex1)).path ↔
