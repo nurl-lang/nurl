@@ -391,6 +391,15 @@ inductive Child : Val → Val → Prop
 /-- `n` lies strictly inside `t`. -/
 def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
 
+/-- AGORA-374: `n` lies inside element `i` of the `Vec` node `t`. -/
+def BelowAt (i : Nat) (n t : Val) : Prop :=
+  ∃ ty c d es e, t = .node ty c d es ∧ es[i]? = some e ∧ Sub n e
+
+/-- …which is inside `t`. -/
+theorem BelowAt.below {i : Nat} {n t : Val} (h : BelowAt i n t) : Below n t := by
+  obtain ⟨ty, c, d, es, e, rfl, he, hs⟩ := h
+  exact ⟨e, .elem (List.mem_of_getElem? he), hs⟩
+
 /-- `n` is `v` or one of its parts through struct fields and enum payloads
     (never through a `Vec`'s elements): what a binding holds directly. -/
 inductive Top : Val → Val → Prop
@@ -438,7 +447,8 @@ def RootMem (m : Mem) (r : Var) : Prop :=
 /-- Where a value reached through a dependency of a given kind lies: the
     root's node itself, or strictly inside it. -/
 def Lands (k : Kind) (n n0 : Val) : Prop :=
-  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
+  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0 ∨
+    (∃ i, k = .innerAt i ∧ BelowAt i n n0)
 
 /-- A3.1: a value inside a live block's payload. -/
 def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd
@@ -483,12 +493,12 @@ theorem CellLanded.landed {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep 
 
 theorem CellLanded.bound {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) : dep.kind.bound = .none := by
   obtain ⟨_, _, hk⟩ := h
-  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hk, _⟩ <;> rw [hk] <;> rfl
 
 theorem CellLanded.notName {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) :
     dep.kind.isName = false := by
   obtain ⟨_, _, hk⟩ := h
-  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hk, _⟩ <;> rw [hk] <;> rfl
 
 /-- A cell share that lands off a payload lands where its root's node puts it. -/
 theorem CellLanded.of_landed {m : Mem} {dep : Dep} {k : Nat} (h : Landed m dep (.cell k))

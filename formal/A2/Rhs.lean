@@ -64,7 +64,7 @@ theorem derive_viewAt {m : Mem} {y : Var} {E : Entry} {N : Val}
 
 theorem Lands.elem {t : Ty} {c d : Nat} {es : List Val} {e : Val} (he : e ∈ es) :
     Lands .inner e (.node t c d es) :=
-  Or.inr (Or.inr ⟨rfl, e, Child.elem he, Sub.refl _⟩)
+  Or.inr (Or.inr (Or.inl ⟨rfl, e, Child.elem he, Sub.refl _⟩))
 
 theorem WFv.elem {t : Ty} {T : Val} (hw : WFv (.vec t) T) {c d : Nat} {es : List Val}
     {u : Ty} (hT : T = .node u c d es) {e : Val} (he : e ∈ es) : WFv t e := by
@@ -1601,21 +1601,21 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
         (hshv.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.prod a b) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
-      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
     | sum a b =>
       refine lend_valOK hwe hpke (fun n' hs => ?_) hi.noCellPay (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.sum a b) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
-      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
     | fn ms q =>
       refine lend_valOK hwe hpke (fun n' hs => ?_) hi.noCellPay (hvs.elem hmem) (hns.sub (names_elem hmem))
         (hshv.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.fn ms q) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
-      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
     | arc a =>
       cases hwe with
@@ -1646,7 +1646,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
         (hshv.elem hmem) (fun s h => by cases h)
       have hbor' : E.mode.isRoot = false → ∃ dep ∈ E.path, Landed m dep (.node (.dtor f a) c d es) := fun h => hbor (by
         cases hm : E.mode <;> simp_all [Mode.isRoot])
-      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
@@ -1792,21 +1792,21 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.2)))
         (hshv.elem hmem) (fun s h => by cases h)
-      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
     | sum a b =>
       refine lend_valOK hwe hpke (fun n' hs => ?_) hi.noCellPay
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.2)))
         (hshv.elem hmem) (fun s h => by cases h)
-      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
     | fn ms q =>
       refine lend_valOK hwe hpke (fun n' hs => ?_) hi.noCellPay
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.2)))
         (hshv.elem hmem) (fun s h => by cases h)
-      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
     | arc a =>
       cases hwe with
@@ -1831,7 +1831,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         (ViewsOK.none (by simpa [Ty.holdsView] using hok.2) _ _)
         (NamesIn.nil _ (hwe.names_nil (by simpa [Ty.holdsView] using hok.2)))
         (hshv.elem hmem) (fun s h => by cases h)
-      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr ⟨rfl, _, Child.elem hmem, hs⟩))
+      exact derive_lands (hroot ·) hbor'' (Or.inr (Or.inr (Or.inl ⟨rfl, _, Child.elem hmem, hs⟩)))
         (by rw [hty]; rfl)
   names hn := elemE_named (hi.names y E hy hl (Or.inl (by rw [hty]; simp))) t
   held := by
@@ -1905,7 +1905,7 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
       have hpd : projDeps y E = [⟨y, .inner⟩] := by simp [projDeps, hos]
       refine lend_valOK hwx ((hi.pkgs y _ T hT' rfl).sub (hc.sub (Sub.refl _)))
         (fun n' hs => ⟨⟨y, .inner⟩, by simp [hpd], Or.inl ⟨T, Or.inl ⟨T, hT', Top.refl _⟩,
-        Or.inr (Or.inr ⟨rfl, x, hc, hs⟩)⟩⟩) hi.noCellPay hvx ((hi.held y E _ T hy hl hT' rfl).sub (names_child hc))
+        Or.inr (Or.inr (Or.inl ⟨rfl, x, hc, hs⟩))⟩⟩) hi.noCellPay hvx ((hi.held y E _ T hy hl hT' rfl).sub (names_child hc))
         hshx (fun s hs => ?_)
       rw [projHeld_view (by rw [hs]; rfl)]
       exact ViewsOK.mono (List.subset_append_right _ _) hvx
@@ -2820,12 +2820,13 @@ theorem Covers.perm {m : Mem} (hc : Covers m) {x : Var} {t : Ty} {c d : Nat} {es
 /-! ### What depends on the owner -/
 
 theorem Evolve.perm_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : List Val}
-    (hev : Evolve m m' x t c d d es es') (hp : es.Perm es') (k : Kind) : VKeep m m' ⟨x, k⟩ := by
+    (hev : Evolve m m' x t c d d es es') (hp : es.Perm es') (k : Kind) (hnx : ∀ i, k ≠ .innerAt i) :
+    VKeep m m' ⟨x, k⟩ := by
   intro dd o l s ⟨c', es2, hks, hla, hl, hw⟩
   rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
   · have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨hv, _⟩ | ⟨hv, heq⟩ | ⟨hki, hb⟩
+    rcases hkk with ⟨hv, _⟩ | ⟨hv, heq⟩ | ⟨hki, hb⟩ | ⟨i, hia, _⟩
     · exact absurd hv hks
     · cases heq
       exact ⟨c, es', hks, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inl ⟨hv, rfl⟩)⟩,
@@ -2834,11 +2835,12 @@ theorem Evolve.perm_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : 
       cases hc with
       | elem he =>
         exact ⟨c', es2, hks, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
-          Or.inr (Or.inr ⟨hki, e, Child.elem (hp.subset he), hs⟩)⟩, hl, hw⟩
+          Or.inr (Or.inr (Or.inl ⟨hki, e, Child.elem (hp.subset he), hs⟩))⟩, hl, hw⟩
+    · exact absurd hia (hnx i)
   · exact ⟨c', es2, hks, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hev.blk]; exact hk0, hs⟩, hl, hw⟩
 
 theorem Evolve.perm_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : List Val}
-    (hev : Evolve m m' x t c d d es es') (hp : es.Perm es') (k : Kind)
+    (hev : Evolve m m' x t c d d es es') (hp : es.Perm es') (k : Kind) (hnx : ∀ i, k ≠ .innerAt i)
     (hsh' : SharesOK m' (.vec t) (.node t c d es')) : HKeep m m' ⟨x, k⟩ := by
   refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hla, hw, hv, hn, hsh⟩ => ?_, fun k2 p2 hb hla => ?_,
     fun k2 hla => ?_⟩
@@ -2846,29 +2848,31 @@ theorem Evolve.perm_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : 
   · rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _⟩
     · have := rootNode_node hev.before hr
       subst this
-      rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩
+      rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩ | ⟨i, hia, _⟩
       · cases heq
       · cases heq
       · obtain ⟨e, hc, hs⟩ := hbl
         cases hc with
         | elem he =>
           exact Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
-            Or.inr (Or.inr ⟨hin, e, Child.elem (hp.subset he), hs⟩)⟩
+            Or.inr (Or.inr (Or.inl ⟨hin, e, Child.elem (hp.subset he), hs⟩))⟩
+      · exact absurd hia (hnx i)
     · exact Or.inr ⟨hsk, RootMem.own hev.after⟩
   · obtain ⟨n0, hr, hkk⟩ := hla
     have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩
+    rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩ | ⟨i, hia, _⟩
     · cases heq
     · cases heq
     · obtain ⟨e, hc, hs⟩ := hbl
       cases hc with
       | elem he =>
-        exact ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr ⟨hin, e, Child.elem (hp.subset he), hs⟩)⟩
+        exact ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr (Or.inl ⟨hin, e, Child.elem (hp.subset he), hs⟩))⟩
+    · exact absurd hia (hnx i)
   rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
   · have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨hs, heq⟩ | ⟨hvw, heq⟩ | ⟨hin, hbl⟩
+    rcases hkk with ⟨hs, heq⟩ | ⟨hvw, heq⟩ | ⟨hin, hbl⟩ | ⟨i, hia, _⟩
     · cases heq
       exact ⟨d, es', Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨hs, rfl⟩⟩, hw.perm hp,
         (hv.keep hH (BlkLe.of_eq hb)).perm hp, hn.perm hp, hsh'⟩
@@ -2879,7 +2883,8 @@ theorem Evolve.perm_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d : Nat} {es es' : 
       cases hc with
       | elem he =>
         exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
-          Or.inr (Or.inr ⟨hin, e, Child.elem (hp.subset he), hs⟩)⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
+          Or.inr (Or.inr (Or.inl ⟨hin, e, Child.elem (hp.subset he), hs⟩))⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
+    · exact absurd hia (hnx i)
   · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn,
       hsh.of_blk hb⟩
 
@@ -2898,7 +2903,7 @@ theorem DtorSafe.none (Γ : Ctx) (hv : Bool) (x : Var) : DtorSafe Γ .none hv x 
     the same length. -/
 theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {x : Var} (hxF : x ∉ F) {t : Ty} {c d : Nat} {es es' : List Val}
-    (hT : m.st x = some ⟨true, some (.node t c d es)⟩) (hp : es.Perm es') :
+    (hT : m.st x = some ⟨true, some (.node t c d es)⟩) (hp : es.Perm es') (hnix : NoIdx Γ x) :
     MInv (m.set x ⟨true, some (.node t c d es')⟩) Γ := by
   obtain ⟨Ex, hx⟩ : ∃ Ex, Γ x = some Ex := by
     have := hi.dom x; rw [hT] at this
@@ -2944,7 +2949,7 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
     fun H _ hk hv => hv.keep_except hT hsfT (fun s w h => h.perm hp) hk ⟨_, hm'x⟩
   have h := hi.change (e := .none) (hv := false) (ox := some Ex) hanch hx hxF (hhs := HeldSpared.of_kills _ rfl rfl)
     (fun _ _ _ _ _ _ _ hk => by simp [Eff.kills] at hk) hnrb hst (hi.heap.perm hT hp) rfl
-    (fun k _ => ⟨hev.perm_vkeep hp k, hev.perm_hkeep hp k hshN⟩) ?_ (DtorSafe.none _ _ _)
+    (fun k _ hu => ⟨hev.perm_vkeep hp k (hnix k hu), hev.perm_hkeep hp k (hnix k hu) hshN⟩) ?_ (DtorSafe.none _ _ _)
     (fun h => by cases h) (fun h => by cases h)
     (fun _ Ex' hx' hl hh _ => by cases hx'; exact ⟨hl, hh⟩)
     (PkgKeep.of_pkgs hi hx hos (fun Ex' h => by cases h; exact ⟨rfl, fun _ h => h, id⟩) hT hst
@@ -3139,7 +3144,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
               · cases h1
               · exact Or.inl h1⟩
           · exact ⟨t1, d1, es1, h, fun _ _ _ h' => Or.inl h'⟩))
-    · intro k hk
+    · intro k hk _
       by_cases hn : ∃ b t, k = .name b t
       · obtain ⟨b, t, rfl⟩ := hn; exact ⟨vkeep_name _ _ _ _ _, hkeep_name _ _ _ _ _⟩
       have hk' : k = .self ∧ t'.holdsView = false := by

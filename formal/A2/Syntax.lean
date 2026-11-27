@@ -786,6 +786,10 @@ inductive Eff where
   | dropIn
   | drop
   | replace
+  /-- AGORA-374: a change strictly inside element `i` of a `Vec` root,
+      through a borrow of that element (`Kind.innerAt i`): what `dropIn`
+      ends, but a dependency strictly inside another element `j ≠ i`. -/
+  | dropInAt (i : Nat)
 deriving DecidableEq, Repr
 
 /-- The order on effects: `a` ends no borrow `b` does not (`Eff.kills_mono`).
@@ -799,13 +803,16 @@ deriving DecidableEq, Repr
   | .dropIn, .dropIn => true
   | .dropIn, .drop => true
   | .drop, .drop => true
+  | .dropInAt i, .dropInAt j => i == j
+  | .dropInAt _, .dropIn => true
+  | .dropInAt _, .drop => true
   | _, _ => false
 
 def Eff.le (a b : Eff) : Prop := a.leb b = true
 
 instance (a b : Eff) : Decidable (Eff.le a b) := inferInstanceAs (Decidable (_ = true))
 
-theorem Eff.le_refl (a : Eff) : a.le a := by cases a <;> rfl
+theorem Eff.le_refl (a : Eff) : a.le a := by cases a <;> simp [Eff.le, Eff.leb]
 
 theorem Eff.le_trans {a b c : Eff} (h1 : a.le b) (h2 : b.le c) : a.le c := by
   cases a <;> cases b <;> cases c <;> simp_all [Eff.le, Eff.leb]
@@ -819,6 +826,10 @@ theorem Eff.le_replace (a : Eff) : a.le .replace := by cases a <;> rfl
   * `self`  — the binding's own handle (a cursor, a borrowed argument);
   * `inner` — something strictly inside its elements (`vec_at` of a
               `Vec` of `Vec`s, and every borrow taken from that);
+  * `innerAt i` — AGORA-374: something strictly inside its element `i`
+              (`vec_at` of an owned `Vec` at the number `i`, and every
+              borrow taken from that): `inner`, but a change strictly
+              inside another element leaves it (`Eff.dropInAt`);
   * `view`  — its own element buffer (`slice_from_vec`, `string_data`);
   * `name b t` — the binding itself, by name: a closure that captured it,
               as a binding of type `t`, and reads it (`b = none`) or
@@ -832,6 +843,7 @@ theorem Eff.le_replace (a : Eff) : a.le .replace := by cases a <;> rfl
 inductive Kind where
   | self
   | inner
+  | innerAt (i : Nat)
   | view
   | name (b : Eff) (t : Ty)
   | share
@@ -862,14 +874,19 @@ def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
   | .none, _ => false
   | .realloc, .view => true
   | .realloc, .inner => false
+  | .realloc, .innerAt _ => true   -- AGORA-374: a push may be an insert's first step (`StmtT.insert`), which moves elements up one index
   | .realloc, .share => false
   | .realloc, .self => hv
   | .dropIn, .self => hv
   | .dropIn, .view => hv
+  | .dropInAt _, .self => hv
+  | .dropInAt _, .view => hv
+  | .dropInAt i, .innerAt j => i == j
   | .drop, .self => hv
   | .replace, _ => true
   | _, .name _ _ => false
   | .dropIn, _ => true
+  | .dropInAt _, _ => true
   | .drop, _ => true
 
 /-- Integer expressions.  They read but never move. -/
