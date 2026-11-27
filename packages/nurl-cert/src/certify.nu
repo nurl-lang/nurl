@@ -56,6 +56,8 @@ $ `stdlib/std/random.nu`
     // its reason (AGORA-1015); an empty name: the ones after the last were
     // not reached
     ( Vec TlMiss ) miss
+    // stubs emitted for assumed functions (AGORA-1033)
+    ( Vec TlStub ) stubs
 }
 
 @ __ct_reframe s text → String {
@@ -106,13 +108,14 @@ open A2 C
 @ cert_translate s core_path b all → Translated {
     : String text ?? ( nc_read core_path ) {
         T x → x
-        F → { ^ @ Translated { F ( string_new ) ( string_from `cannot read the core IR` ) ( vec_new [TlMiss] ) } }
+        F → { ^ @ Translated { F ( string_new ) ( string_from `cannot read the core IR` ) ( vec_new [TlMiss] ) ( vec_new [TlStub] ) } }
     }
     : ( Vec TlMiss ) miss ( vec_new [TlMiss] )
-    : !String String r ? all ( tolean_translate_fns ( string_data text ) miss ) ( tolean_translate ( string_data text ) )
+    : ( Vec TlStub ) stubs ( vec_new [TlStub] )
+    : !String String r ? all ( tolean_translate_fns ( string_data text ) miss stubs ) ( tolean_translate ( string_data text ) )
     ^ ?? r {
-        T lean → @ Translated { T ( __ct_depth ( __ct_reframe ( string_data lean ) ) ) ( string_new ) miss }
-        F why → @ Translated { F ( string_new ) why miss }
+        T lean → @ Translated { T ( __ct_depth ( __ct_reframe ( string_data lean ) ) ) ( string_new ) miss stubs }
+        F why → @ Translated { F ( string_new ) why miss stubs }
     }
 }
 
@@ -245,10 +248,10 @@ open A2 C
 }
 
 @ __ct_is_lib String f → b {
-    ^ | ( string_starts_with f `stdlib/` ) ( string_contains f `/stdlib/` )
+    ^ ( string_starts_with f `stdlib/` )
 }
 
-@ __ct_functions s core → ( Vec FnRow ) {
+@ cert_functions s core → ( Vec FnRow ) {
     : ( Vec FnRow ) out ( vec_new [FnRow] )
     : ( Vec String ) ls ( nc_lines core )
     : i n ( vec_len [String] ls )
@@ -291,8 +294,26 @@ open A2 C
     ^ ( __ct_first_line s )
 }
 
-@ __ct_cov_status String verdict ( Vec String ) statuses → String {
+@ __ct_cov_status String verdict ( Vec String ) statuses b cond s prof → String {
     ? ! ( nc_is verdict `accepted` ) { ^ ( string_clone verdict ) } {}
+    ? cond {
+        // In a conditional certificate, every M claim is `assumed` when Lean
+        // proved the conditional theorem; each non-assumed function was
+        // checked by fnOK2B/stmtCodesB itself, so it is `proved` (under
+        // kernel) or `validated` (under fast).
+        : i n ( vec_len [String] statuses )
+        : ~ b all_ok > n 0
+        : ~ i k 0
+        ~ < k n {
+            ?? ( vec_get [String] statuses k ) {
+                T st → { ? ! ( nc_is st `assumed` ) { = all_ok F } {} }
+                F _ → { = all_ok F }
+            }
+            = k + k 1
+        }
+        ? all_ok { ^ ( string_from ? != 0 ( nurl_str_eq prof `kernel` ) `proved` `validated` ) } {}
+        ^ ( string_from `open` )
+    } {}
     : ~ i rank 2
     : i n ( vec_len [String] statuses )
     : ~ i k 0
@@ -394,11 +415,46 @@ open A2 C
     `it reads nurlc's own borrow walk, which the certificate is meant not to need (the engine computing the summaries itself, AGORA-877, removes it)` note who mc )
 }
 
+// One assumed function's trust-ledger record (AGORA-1033).
+: AssumedRow {
+    i idx
+    String name
+    String sig
+    String callees
+    b has_thru
+    String why
+    String loc
+}
+
+@ cert_assumed_id s name → String {
+    : String id ( string_from `assumed-fn:` )
+    ( string_push_str id name )
+    ^ id
+}
+
+@ cert_assumed_row AssumedRow a → Json {
+    : String id ( cert_assumed_id ( string_data . a name ) )
+    : String what ( string_from `function ` )
+    ( string_push_str what ( string_data . a name ) )
+    ( string_push_str what ` (fn` )
+    ( string_push_int what . a idx )
+    ( string_push_str what `): completion obligations (` )
+    ( string_push_str what ( string_data . a sig ) )
+    ( string_push_str what `; callees [` )
+    ( string_push_str what ( string_data . a callees ) )
+    ( string_push_str what `]; hasThru ` )
+    ( string_push_str what ? . a has_thru `true` `false` )
+    ( string_push_str what `) and proof obligations (FnOK, codesOK)` )
+    ^ ( mj_row ( string_data id ) ( string_data what ) ( string_data . a why ) ( string_data . a loc )
+    `assumed (not translated; checked only by signature and call summary)` `M.safe M.leak` )
+}
+
 // `elab`: the bundle has Elab.lean, so the term is the kernel's
 // (`Cert.elab`): the translation is what is left of it, the core IR's
 // words (`core-ir-words`), and the encodings the term uses (`enc`,
-// cert_enc_ids), each a row (AGORA-1029).
-@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab ( Vec String ) enc b caps → Json {
+// cert_enc_ids), each a row (AGORA-1029). `assumed_rows`: one row per
+// assumed function (AGORA-1033).
+@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab ( Vec String ) enc ( Vec AssumedRow ) assumed_rows b caps → Json {
     // the claims a shared row backs: M.race too, for a threaded program
     : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
     : s muc ? threads `M.unsafe M.safe M.leak M.race` `M.unsafe M.safe M.leak`
@@ -465,6 +521,12 @@ open A2 C
             F _ → {}
         }
         = k + k 1
+    }
+    : i na ( vec_len [AssumedRow] assumed_rows )
+    : ~ i ak 0
+    ~ < ak na {
+        ( json_arr_push L ( cert_assumed_row ( vec_at [AssumedRow] assumed_rows ak ) ) )
+        = ak + ak 1
     }
     ^ L
 }
@@ -594,11 +656,13 @@ open A2 C
     : String elab_path ( nc_join out `Elab.lean` )
     : ~ i nv 0
     : ~ b threads F
+    : ~ b cond F
     ? . tr ok {
         : ShapeRes sh ( cert_shape . tr lean )
         ? . sh ok {
             = nv . sh nv
             = threads . sh threads
+            = cond > ( vec_len [i] . sh assumed ) 0
         } {
             = verdict ( string_from `unsupported` )
             = reason ( string_from `the translator's output is outside the program grammar: ` )
@@ -633,15 +697,16 @@ open A2 C
     : ~ ( Vec String ) caps_axioms ( vec_new [String] )
     : ~ String caps_status ( string_from `open` )
     ? ( nc_is verdict `accepted` ) {
-        : String claims ( cert_claims_lean prof nv threads )
+        : String claims ( cert_claims_lean prof nv threads cond )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
         // C.Elab: does the kernel build this very term from the core IR's
         // words? Lean decides, in the claims' run, for every term
         // that can be elabIR's at all (`cert_elab_candidate`: one with a
         // constructor elabIR never builds cannot, so Lean is not asked). A
-        // core IR that is not UTF-8 has no words.
+        // core IR that is not UTF-8 has no words. Conditional bundles (with
+        // stubs) get no Elab.lean in this step (AGORA-1033).
         : ~ b try_elab F
-        ? ( cert_elab_candidate ( string_data . tr lean ) ) {
+        ? & ! cond ( cert_elab_candidate ( string_data . tr lean ) ) {
             ?? ( cert_elab_lean . r1 out threads ) {
                 T el → { = try_elab ( nc_write ( string_data elab_path ) ( string_data el ) ) }
                 F → {}
@@ -675,14 +740,18 @@ open A2 C
         : LeanRun lr ( cert_lean_check2 ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab try_caps )
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
-            = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)` `the verified checker refuses the program (C.certOK2B is false)` )
+            = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)`
+            ? cond `the verified checker refuses the program (C.certOK2BA is false)`
+            `the verified checker refuses the program (C.certOK2B is false)` )
         } {
             // (Lean's explanation of the failure may itself fail on a deep
             // term: the refusal is then proved in a run of its own)
             : b failed | ! . lr ran ( cert_lean_has_error . lr log )
-            ? & failed ( cert_lean_refutes ( string_data . o lean ) ( string_data formal ) out ( string_data work ) threads ) {
+            ? & failed ( cert_lean_refutes ( string_data . o lean ) ( string_data formal ) out ( string_data work ) threads cond ) {
                 = verdict ( string_from `refused` )
-                = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false, proved by the kernel)` `the verified checker refuses the program (C.certOK2B is false, proved by the kernel)` )
+                = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false, proved by the kernel)`
+                ? cond `the verified checker refuses the program (C.certOK2BA is false, proved by the kernel)`
+                `the verified checker refuses the program (C.certOK2B is false, proved by the kernel)` )
             } {
                 ? failed {
                     = verdict ( string_from `error` )
@@ -713,7 +782,11 @@ open A2 C
             ? ( nc_is caps_status `open` ) {
                 = caps F
                 = caps_why ( string_from `Cert.n_cap rests on axioms beyond the profile's` )
-            } {}
+            } {
+                // a conditional bundle's N.cap is about the program with its
+                // stubs: assumed, as its M claims are (AGORA-1033)
+                ? cond { = caps_status ( string_from `assumed` ) } {}
+            }
         } {
             ? & try_caps ( nc_is verdict `accepted` ) {
                 = caps_why ( string_from `Lean did not check the list of functions a run can enter: ` )
@@ -732,7 +805,9 @@ open A2 C
                 T ax → {
                     : ( Vec String ) al ( cert_axiom_list ax )
                     ? ( nc_is verdict `accepted` ) {
-                        ( vec_push [String] statuses ( string_from ( cert_status_of prof al ) ) )
+                        : s raw ( cert_status_of prof al )
+                        : s cst ? & cond == 0 ( nurl_str_eq raw `open` ) `assumed` raw
+                        ( vec_push [String] statuses ( string_from cst ) )
                     } { ( vec_push [String] statuses ( string_from `open` ) ) }
                     ( vec_push [( Vec String )] axioms al )
                 }
@@ -757,6 +832,31 @@ open A2 C
     }
 
     // 5. The manifest.
+    : ( Vec FnRow ) fns ( cert_functions ( string_data . r1 out ) )
+    : i nf ( vec_len [FnRow] fns )
+    // Assumed functions' ledger rows and premise ids (AGORA-1033).
+    : ( Vec AssumedRow ) assumed_rows ( vec_new [AssumedRow] )
+    : ( Vec String ) assumed_ids ( vec_new [String] )
+    ? cond {
+        : i nst ( vec_len [TlStub] . tr stubs )
+        : ~ i si 0
+        ~ < si nst {
+            : TlStub sb ( vec_at [TlStub] . tr stubs si )
+            : String loc ( string_new )
+            ? & >= . sb idx 0 < . sb idx nf {
+                : FnRow fr ( vec_at [FnRow] fns . sb idx )
+                ( string_push_str loc ( string_data . fr file ) )
+                ( string_push_str loc `:` )
+                ( string_push_str loc ( string_data . fr line ) )
+            } {}
+            ( vec_push [AssumedRow] assumed_rows @ AssumedRow {
+                . sb idx ( string_clone . sb name ) ( string_clone . sb sig )
+                ( string_clone . sb callees ) . sb has_thru ( string_clone . sb why ) loc
+            } )
+            ( vec_push [String] assumed_ids ( cert_assumed_id ( string_data . sb name ) ) )
+            = si + si 1
+        }
+    } {}
     : Json m ( json_obj_new )
     ( mj_str m `schema` CERT_SCHEMA )
     : Json tool ( json_obj_new )
@@ -780,9 +880,9 @@ open A2 C
         : String st ?? ( vec_get [String] statuses k ) { T x → ( string_clone x ) F → ( string_from `open` ) }
         : ( Vec String ) ax ?? ( vec_get [( Vec String )] axioms k ) { T x → ( vec_clone [String] x ) F → ( vec_new [String] ) }
         : String why ? ( nc_is st `open` ) ( string_clone reason ) ( string_new )
-        : String prem ( cert_claim_premises prof k elab enc )
+        : String prem ( cert_claim_premises prof k elab enc assumed_ids )
         ( json_arr_push cl ( __ct_claim ( cert_claim_id k ) ( cert_claim_lean k ) ( string_data st )
-        ( cert_claim_sentence threads k ) ( cert_claim_sentence_fi threads k ) ( string_data why ) ax ( string_data prem ) ) )
+        ( cert_claim_sentence threads cond k ) ( cert_claim_sentence_fi threads cond k ) ( string_data why ) ax ( string_data prem ) ) )
         = k + k 1
     }
     // M.unsafe: what nurlc's report says.
@@ -799,21 +899,20 @@ open A2 C
     // they reach (AGORA-1013)
     : String cen ? caps ( cert_caps_sentence_en caps_doors ) ( string_from ( cert_caps_open_en ) )
     : String cfi ? caps ( cert_caps_sentence_fi caps_doors ) ( string_from ( cert_caps_open_fi ) )
-    : String cprem ( cert_caps_premises prof caps elab enc nu )
+    : String cprem ( cert_caps_premises prof caps elab enc nu assumed_ids )
     ( json_arr_push cl ( __ct_claim `N.cap` `Cert.n_cap` ( string_data caps_status ) ( string_data cen ) ( string_data cfi )
     ( string_data caps_why ) caps_axioms ( string_data cprem ) ) )
     ( mj_set m `claims` cl )
     ? caps { ( mj_set m `capabilities` caps_json ) } {}
 
     // Coverage: the program's own functions.
-    : ( Vec FnRow ) fns ( __ct_functions ( string_data . r1 out ) )
     : Json cov ( json_obj_new )
     : Json fa ( json_arr_new )
-    : i nf ( vec_len [FnRow] fns )
     // A function's status is the program's: its claims' weakest status
-    // when accepted (`proved` only when every M claim is kernel-proved),
-    // else the verdict.
-    : String fst ( __ct_cov_status verdict statuses )
+    // when accepted (`proved` only when every M claim is kernel-proved, or
+    // in a conditional certificate when every M claim is `assumed` under
+    // kernel), else the verdict.
+    : String fst ( __ct_cov_status verdict statuses cond prof )
     // A function the translation does not cover is `unsupported` with its
     // own reason (`error` where the translation stopped on it), whatever the
     // others are (AGORA-1015). One it covers in a program that is not
@@ -946,7 +1045,7 @@ open A2 C
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab enc caps ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab enc assumed_rows caps ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )
@@ -976,6 +1075,11 @@ open A2 C
         ? > ( string_len caps_why ) 0 {
             ( nurl_print `  N.cap not proved: ` )
             ( nurl_println ( string_data caps_why ) )
+        } {}
+        ? cond {
+            ( nurl_print `  assumed: ` )
+            ( nurl_print_int ( vec_len [AssumedRow] assumed_rows ) )
+            ( nurl_println ` function(s)` )
         } {}
         ( nurl_println ? elab `  term: Cert.elab (the kernel built it from the core IR's words)` `  term: the translator's (the translation ledger row)` )
         ? > ( string_len elab_why ) 0 {

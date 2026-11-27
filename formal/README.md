@@ -296,49 +296,49 @@ hand.
 | own functions | proved | validated | refused | open | unsupported | error |
 |---|---:|---:|---:|---:|---:|---:|
 | by count (105) | 59 (56.2 %) | 0 (0.0 %) | 46 (43.8 %) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) |
-| by lines (568) | 334 (58.8 %) | 0 (0.0 %) | 234 (41.2 %) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) |
+| by lines (564) | 332 (58.9 %) | 0 (0.0 %) | 232 (41.1 %) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) |
 
 ### holes
 
 | programs | accepted | refused | unsupported | error |
 |---:|---:|---:|---:|---:|
-| 4237 | 36 | 131 | 4070 | 0 |
+| 4245 | 301 | 274 | 3670 | 0 |
 
 | own functions | proved | validated | refused | open | unsupported | error |
 |---|---:|---:|---:|---:|---:|---:|
-| by count (13488) | 68 (0.5 %) | 0 (0.0 %) | 302 (2.2 %) | 4237 (31.4 %) | 8881 (65.8 %) | 0 (0.0 %) |
-| by lines (64673) | 449 (0.7 %) | 0 (0.0 %) | 1688 (2.6 %) | 16132 (24.9 %) | 46404 (71.8 %) | 0 (0.0 %) |
+| by count (13517) | 508 (3.8 %) | 0 (0.0 %) | 599 (4.4 %) | 3501 (25.9 %) | 8909 (65.9 %) | 0 (0.0 %) |
+| by lines (64227) | 2069 (3.2 %) | 0 (0.0 %) | 2534 (3.9 %) | 13298 (20.7 %) | 46326 (72.1 %) | 0 (0.0 %) |
 
 | functions | lines | why unsupported | e.g. |
 |---:|---:|---|---|
-| 612 | 3379 | `type %Rc__Vec__u8: a raw string held in a struct field` | `box_of_a_drop_value_released_after_the_last_read_of_a_view_runs_clean.cert drop__H` |
-| 476 | 2591 | `type %W: a raw string held in a struct field` | `adv_index_panic_in_library.cert fill` |
+| 612 | 3322 | `type %Rc__Vec__u8: a raw string held in a struct field` | `box_of_a_drop_value_released_after_the_last_read_of_a_view_runs_clean.cert drop__H` |
+| 476 | 2587 | `type %W: a raw string held in a struct field` | `adv_index_panic_in_library.cert fill` |
 | 454 | 989 | `a result aliasing parameter 0` | `arc_payload_clone_then_repointed_at_an_accessor_lend_below.cert vof` |
 | 442 | 1499 | `a result owned or lent per call` | `arm_block_call_lend_returned.cert pick` |
-| 416 | 3254 | `vec_at of a non-scalar element` | `alias_of_a_struct_field_handed_to_an_element_grower_view_through_the_path.cert top` |
-| 340 | 893 | `type %{ i64*, i64 }` | `arm_slice_local_or_block_argument_tail_releases_the_arm_locals_runs_clean.cert slice_arm` |
+| 416 | 3252 | `vec_at of a non-scalar element` | `alias_of_a_struct_field_handed_to_an_element_grower_view_through_the_path.cert top` |
+| 340 | 892 | `type %{ i64*, i64 }` | `arm_slice_local_or_block_argument_tail_releases_the_arm_locals_runs_clean.cert slice_arm` |
 | 309 | 1058 | `a destructor value handed back` | `arc_temporary_handed_back_or_replaced_runs_clean.cert mk` |
 | 198 | 1639 | `an owner bound before its value` | `arm_assign_block_call_lend.cert main` |
 | 194 | 1522 | `type %Arc__App: a raw string held in a struct field` | `arc_payload_changed_by_a_closure_parameter_called_on_it_is_refused.cert apply` |
-| 180 | 1038 | `type %E` | `arm_ending_in_a_lend_of_an_outer_binding_releases_its_locals.cert match` |
-| 166 | 527 | `a closure inside a value (…)` | `arc_payload_handed_to_a_function_value_read_out_of_a_struct_that_grows_it.cert with` |
+| 180 | 1034 | `type %E` | `arm_ending_in_a_lend_of_an_outer_binding_releases_its_locals.cert match` |
+| 166 | 512 | `a closure inside a value (…)` | `arc_payload_handed_to_a_function_value_read_out_of_a_struct_that_grows_it.cert with` |
 | 142 | 735 | `a destructor value a call hands back` | `binding_moved_into_a_literal_whose_later_field_panics_is_dropped_runs_clean.cert flat` |
 | 140 | 1328 | `call of slice_at__u8, not in the program` | `adv_double_forwarder.cert main` |
 | 129 | 284 | `a result aliasing parameter 0 1` | `borrowing_option_bound_by_colon_grown_through_its_payload_while_its_source_is_viewed.cert pick` |
 | 127 | 654 | `type %Tok` | `callee_handing_back_a_dup_of_a_bound_element_runs_clean.cert show` |
-| 125 | 523 | `a capture of type { i1, %String }` | `borrowing_slot_capture_lent_a_closure_local_runs_clean.cert __closure_1` |
+| 125 | 521 | `a capture of type { i1, %String }` | `borrowing_slot_capture_lent_a_closure_local_runs_clean.cert __closure_1` |
 | 124 | 775 | `a raw string held in a struct field` | `bare_view_of_a_loop_elements_storage_or_held_view_kept_while_the_container_grows_runs_clean.cert pick` |
 | 119 | 691 | `a field as an argument (…)` | `another_value_of_the_receivers_type_taken_apart_in_its_destructor.cert drop__Holder` |
-| 106 | 422 | `a closure bound from another binding` | `block_ending_in_a_call_bound_run_by_the_caller.cert mk2` |
-| 104 | 267 | `a destructor value as a sink or inout parameter` | `bound_closure_handed_back_reached_its_frame.cert eat` |
+| 106 | 409 | `a closure bound from another binding` | `block_ending_in_a_call_bound_run_by_the_caller.cert mk2` |
+| 104 | 247 | `a destructor value as a sink or inout parameter` | `bound_closure_handed_back_reached_its_frame.cert eat` |
 | 93 | 334 | `type %String, %E` | `block_join_tail_try_arm.cert getr` |
-| 88 | 409 | `type %` | `arm_slice_local_or_block_argument_tail_releases_the_arm_locals_runs_clean.cert block_arg` |
+| 88 | 407 | `type %` | `arm_slice_local_or_block_argument_tail_releases_the_arm_locals_runs_clean.cert block_arg` |
 | 82 | 340 | `the place vN/buf where a variable is needed` | `bound_closure_handed_back_reached_its_frame.cert drop__Res` |
 | 75 | 205 | `type %i1, %PanicInfo` | `argument_temporary_leaked_by_a_panic.cert main` |
 | 68 | 382 | `type %V: a raw string held in a struct field` | `arc_of_views_field_returned_in_an_option.cert answer` |
-| 3572 | 20666 | 544 other reasons | |
+| 3600 | 20708 | 550 other reasons | |
 
-208 of the 4445 programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed): aliased_and_underscore_named_structs_as_type_arguments_holding_an_rc_captured_by_a_thread, arc_of_a_library_handle_on_two_threads, arc_of_an_optional_rc_dropped_by_the_receiving_thread, arc_payload_bufreader_read_through_a_by_value_helper, arcweak_of_a_share_handle_upgraded_and_changed_on_another_thread, arcweak_of_an_arcweak_of_a_share_handle_upgraded_and_changed_on_another_thread, bare_variant_with_payload, borrowed_response_body_read_after_its_vec, box_ptr_field_copied, buffered_reader_state_built_by_hand, bytes_range_cc_past_its_vector, cast_int_to_string, chacha20_scalar_kernel_given_a_range_past_its_data, closure_handed_on_to_par_map_index_changing_its_capture_is_refused, closure_in_a_nested_struct_in_a_vec_in_an_arc_run_by_threads_is_refused, closure_in_a_struct_in_a_vec_in_an_arc_run_by_threads_is_refused, closure_in_a_struct_literal_kept_in_an_arc_grows_its_env, closure_in_an_arc_captures_a_library_handle, closure_in_an_enum_payload_in_a_vec_in_an_arc_run_by_threads_is_refused, closure_in_an_option_field_in_a_vec_in_an_arc_run_by_threads_is_refused and 188 more.
+204 of the 4449 programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed): aliased_and_underscore_named_structs_as_type_arguments_holding_an_rc_captured_by_a_thread, arc_of_a_library_handle_on_two_threads, arc_of_an_optional_rc_dropped_by_the_receiving_thread, arc_payload_bufreader_read_through_a_by_value_helper, arcweak_of_an_arcweak_of_a_share_handle_upgraded_and_changed_on_another_thread, arcweak_of_a_share_handle_upgraded_and_changed_on_another_thread, bare_variant_with_payload, borrowed_response_body_read_after_its_vec, box_ptr_field_copied, buffered_reader_state_built_by_hand, bytes_range_cc_past_its_vector, cast_int_to_string, chacha20_scalar_kernel_given_a_range_past_its_data, closure_handed_on_to_par_map_index_changing_its_capture_is_refused, closure_in_an_arc_captures_a_library_handle, closure_in_an_enum_payload_in_a_vec_in_an_arc_run_by_threads_is_refused, closure_in_a_nested_struct_in_a_vec_in_an_arc_run_by_threads_is_refused, closure_in_an_option_field_in_a_vec_in_an_arc_run_by_threads_is_refused, closure_in_a_struct_in_a_vec_in_an_arc_run_by_threads_is_refused, closure_in_a_struct_literal_kept_in_an_arc_grows_its_env and 184 more.
 
 ### examples
 
@@ -349,7 +349,7 @@ hand.
 | own functions | proved | validated | refused | open | unsupported | error |
 |---|---:|---:|---:|---:|---:|---:|
 | by count (430) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 77 (17.9 %) | 353 (82.1 %) | 0 (0.0 %) |
-| by lines (7725) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 530 (6.9 %) | 7195 (93.1 %) | 0 (0.0 %) |
+| by lines (7721) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 526 (6.8 %) | 7195 (93.2 %) | 0 (0.0 %) |
 
 | functions | lines | why unsupported | e.g. |
 |---:|---:|---|---|
@@ -384,87 +384,87 @@ hand.
 
 | programs | accepted | refused | unsupported | error |
 |---:|---:|---:|---:|---:|
-| 1126 | 11 | 3 | 1110 | 2 |
+| 1137 | 45 | 9 | 1083 | 0 |
 
 | own functions | proved | validated | refused | open | unsupported | error |
 |---|---:|---:|---:|---:|---:|---:|
-| by count (8318) | 37 (0.4 %) | 0 (0.0 %) | 7 (0.1 %) | 1750 (21.0 %) | 6518 (78.4 %) | 6 (0.1 %) |
-| by lines (99586) | 201 (0.2 %) | 0 (0.0 %) | 64 (0.1 %) | 10041 (10.1 %) | 89116 (89.5 %) | 164 (0.2 %) |
+| by count (8590) | 95 (1.1 %) | 0 (0.0 %) | 21 (0.2 %) | 1905 (22.2 %) | 6568 (76.5 %) | 1 (0.0 %) |
+| by lines (102325) | 584 (0.6 %) | 0 (0.0 %) | 160 (0.2 %) | 11882 (11.6 %) | 89687 (87.6 %) | 12 (0.0 %) |
 
 | functions | lines | why unsupported | e.g. |
 |---:|---:|---|---|
-| 590 | 7636 | `call of nurl_print, not in the program` | `aes_gcm_vectors.cert check` |
-| 222 | 2900 | `type %Value` | `dst_flagship.cert val_is_null` |
+| 593 | 7874 | `call of nurl_print, not in the program` | `aes_gcm_vectors.cert check` |
+| 222 | 2768 | `type %Value` | `dst_flagship.cert val_is_null` |
 | 191 | 2089 | `type %Rc__HttpAppImpl: a raw string held in a struct field` | `dst_flagship.cert HttpApp_share` |
 | 153 | 4001 | `type %Json` | `anthropic_tools.cert pr_json` |
 | 112 | 1780 | `type %Arc__WalImpl: a raw string held in a struct field` | `dst_flagship.cert Wal_share` |
-| 106 | 1005 | `a closure inside a value (…)` | `closure_beside_view_stored_through_borrow.cert main` |
+| 106 | 990 | `a closure inside a value (…)` | `closure_beside_view_stored_through_borrow.cert main` |
 | 102 | 1044 | `type %Arc__DbImpl: a raw string held in a struct field` | `dst_flagship.cert Db_share` |
 | 93 | 1105 | `type %Shared__AtomicCell: a raw string held in a struct field` | `atomic_basic.cert cas_inc` |
-| 90 | 434 | `a result owned or lent per call` | `agg_join_return_slots.cert pick_s` |
-| 73 | 918 | `a raw string held in a struct field` | `alias_field_names.cert fl__name` |
+| 90 | 432 | `a result owned or lent per call` | `agg_join_return_slots.cert pick_s` |
+| 73 | 911 | `a raw string held in a struct field` | `alias_field_names.cert fl__name` |
 | 73 | 1518 | `type %Shared__TcpConnImpl: a raw string held in a struct field` | `dst_flagship.cert line_reader` |
 | 73 | 1344 | `type %u8*` | `big_string_literal.cert main` |
 | 71 | 1284 | `rvalue payload` | `anthropic_stream.cert main` |
+| 67 | 808 | `store to c` | `arm_join_verdict_drop.cert drop__DH` |
 | 66 | 271 | `a destructor value handed back` | `arm_local_call_lend_ok.cert mkw` |
-| 65 | 778 | `store to c` | `arm_join_verdict_drop.cert drop__DH` |
 | 63 | 371 | `a closure parameter taken sink or inout` | `block_after_cond.cert __closure_1` |
 | 60 | 552 | `an owner bound before its value` | `agg_join_return_slots.cert pick_o` |
 | 59 | 452 | `a destructor value a call hands back` | `arm_local_call_lend_ok.cert main` |
 | 59 | 222 | `call of nurl_free_count, not in the program` | `arc_weak_frozen.cert live` |
-| 58 | 532 | `type %E` | `call_answers_per_call_ok.cert pick_enum` |
+| 58 | 530 | `type %E` | `call_answers_per_call_ok.cert pick_enum` |
 | 56 | 141 | `a result aliasing parameter 0` | `arm_local_call_lend_ok.cert gets` |
 | 56 | 489 | `type %i1, %PanicInfo` | `bigint_div.cert run` |
+| 56 | 1173 | `type %u8, %ParseErr` | `aes_gcm_vectors.cert hx` |
 | 54 | 643 | `raw text assigned from another binding` | `alias_join_nested.cert pick` |
 | 54 | 518 | `type %Locked__HttpClientImpl, with a destructor A2's translation does not see` | `dst_flagship.cert HttpClient_share` |
-| 54 | 1680 | `type %i1, %IoErr` | `bufio_basic.cert main` |
-| 3865 | 55409 | 830 other reasons | |
+| 3908 | 56377 | 839 other reasons | |
 
-9 of the 1135 programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed): arity_strict_nary, cast_to_binding, ecdsa_p256_wycheproof_der, ecdsa_p384_wycheproof_der, sqlite_basic, sqlite_hardening, sqlite_nc_lend_returns, sqlite_tier34, struct_lit_int_field_clash.
+3 of the 1140 programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed): arity_strict_nary, cast_to_binding, struct_lit_int_field_clash.
 
 ### packages
 
 | programs | accepted | refused | unsupported | error |
 |---:|---:|---:|---:|---:|
-| 27 | 0 | 0 | 27 | 0 |
+| 28 | 0 | 0 | 28 | 0 |
 
 | own functions | proved | validated | refused | open | unsupported | error |
 |---|---:|---:|---:|---:|---:|---:|
-| by count (3111) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 429 (13.8 %) | 2682 (86.2 %) | 0 (0.0 %) |
-| by lines (60033) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 4898 (8.2 %) | 55135 (91.8 %) | 0 (0.0 %) |
+| by count (3970) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 875 (22.0 %) | 3095 (78.0 %) | 0 (0.0 %) |
+| by lines (75153) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 9336 (12.4 %) | 65817 (87.6 %) | 0 (0.0 %) |
 
 | functions | lines | why unsupported | e.g. |
 |---:|---:|---|---|
-| 111 | 1450 | `type %Value` | `nurldb.cert val_is_null` |
-| 106 | 2933 | `type %Box__MapCtl, with a destructor A2's translation does not see` | `nurl-cert.cert __wd_see__fp15` |
-| 96 | 1721 | `rvalue payload` | `arima.cert _ar_at` |
-| 93 | 4443 | `a raw string held in a struct field` | `gpu.cert gpu_host_ptr` |
-| 90 | 1879 | `call of string_push_char, not in the program` | `benchmark.cert __pad_right__fp7` |
-| 89 | 2466 | `call of slice_byte, not in the program` | `audio.cert __wpush_tag__fp11` |
-| 74 | 1931 | `type %Json` | `arima.cert _ar_jarr` |
-| 65 | 938 | `a field as an argument (…)` | `arima.cert __ar_loglik_ml__fp15` |
+| 137 | 4045 | `type %InterpImpl, holding a value of a destructor type (…)` | `nwasm.cert __ctx_take__fp15` |
+| 111 | 3092 | `type %Box__MapCtl, with a destructor A2's translation does not see` | `nurl-cert.cert __wd_see__fp16` |
+| 111 | 1384 | `type %Value` | `nurldb.cert val_is_null` |
+| 97 | 2702 | `call of slice_byte, not in the program` | `audio.cert __wpush_tag__fp11` |
+| 96 | 1718 | `rvalue payload` | `arima.cert _ar_at` |
+| 95 | 4465 | `a raw string held in a struct field` | `gpu.cert gpu_host_ptr` |
+| 92 | 1939 | `call of string_push_char, not in the program` | `benchmark.cert __pad_right__fp7` |
+| 76 | 1970 | `type %Json` | `arima.cert _ar_jarr` |
+| 70 | 1125 | `a field as an argument (…)` | `arima.cert __ar_loglik_ml__fp15` |
+| 57 | 1079 | `store to c` | `gpu.cert cuda_init` |
 | 56 | 890 | `type %Arc__WalImpl: a raw string held in a struct field` | `nurldb.cert Wal_share` |
 | 53 | 553 | `type %Arc__DbImpl: a raw string held in a struct field` | `nurldb.cert Db_share` |
 | 46 | 776 | `type %Shared__FileImpl, with a destructor A2's translation does not see` | `gguf.cert __gws_kv_u32_in__fp17` |
-| 44 | 912 | `store to c` | `gpu.cert cuda_init` |
 | 44 | 588 | `type %Arc__GcovObjImpl: a raw string held in a struct field` | `nurl-cov.cert GcovObj_share` |
 | 43 | 419 | `type %Shared__LockedImpl__ArimaModelImpl, with a destructor A2's translation does not see` | `arima.cert ArimaModel_share` |
-| 36 | 491 | `call of nurl_str_eq, not in the program` | `benchmark.cert __bench_selected__fp21` |
-| 35 | 491 | `call of nurl_print, not in the program` | `audio.cert __say__fp19` |
-| 35 | 2187 | `type %String, %IoErr` | `arima.cert read_series` |
+| 42 | 324 | `a closure parameter taken sink or inout` | `nurl-cert.cert __closure_lit__fp23` |
+| 38 | 2437 | `type %String, %IoErr` | `arima.cert read_series` |
+| 37 | 519 | `call of nurl_print, not in the program` | `audio.cert __say__fp19` |
+| 37 | 557 | `call of nurl_str_eq, not in the program` | `benchmark.cert __bench_selected__fp21` |
+| 35 | 1155 | `type %Box__NameBuf: a raw string held in a struct field` | `nwasm.cert __mod_err__fp10` |
 | 29 | 976 | `call of slice_put__f64, not in the program` | `arima.cert __ar_vec_copy__fp15` |
 | 29 | 193 | `type %Arc__SstFilter: a raw string held in a struct field` | `lsmdb.cert SstReader_share` |
 | 29 | 232 | `type %Rc__SstCursorImpl: a raw string held in a struct field` | `lsmdb.cert SstCursor_share` |
-| 27 | 220 | `type %Arc__GpuResImpl, with a destructor A2's translation does not see` | `gpu.cert GpuRes_share` |
-| 27 | 83 | `type %Arc__PkImpl: a raw string held in a struct field` | `torchpt.cert Pk_share` |
-| 27 | 489 | `type %u8*` | `gpu.cert cuda_device_name` |
-| 26 | 431 | `type %Arc__GpuCtxImpl: a raw string held in a struct field` | `gpu.cert GpuCtx_share` |
-| 26 | 321 | `type %Arc__PtImpl: a raw string held in a struct field` | `torchpt.cert Pt_share` |
-| 1346 | 27122 | 374 other reasons | |
+| 29 | 513 | `type %u8*` | `gpu.cert cuda_device_name` |
+| 27 | 822 | `call of vec_set__i64, not in the program` | `benchmark.cert __closure_5` |
+| 1579 | 31344 | 419 other reasons | |
 
-22 of the 49 programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed): agora, anomaly, embed, f5tts, lingbot-map, map-anything, mermaid-server, nurl-mcp, nurllama, nwasm, objdet, onnx, pctiles, pki-server, ply, psql, redis, registry, swarm-mcp, whisper and 2 more.
+21 of the 49 programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed): agora, anomaly, embed, f5tts, lingbot-map, map-anything, mermaid-server, nurllama, nurl-mcp, objdet, onnx, pctiles, pki-server, ply, psql, redis, registry, swarm-mcp, whisper, yoloe-demo and 1 more.
 
-Certified on Windows.
+Certified on Linux.
 <!-- coverage:end -->
 
 ## How it relates to the rest of the repository

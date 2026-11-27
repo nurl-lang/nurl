@@ -6,7 +6,7 @@ by the kernel for the subset of numbers, buffers of numbers, views,
 closures, options and structs, AGORA-1029 steps 3 to 7; S3, what a program
 can do outside its memory, `N.cap`, AGORA-1013; part of AGORA-1010; spec in
 the agora notes `spec.program-cert`, `.2`, `.3`).
-Schema **`nurl-cert/1`**, described here and in
+Schema **`nurl-cert/2`**, described here and in
 [`certificate.schema.json`](certificate.schema.json).
 
 A certificate states theorems about one program. It does not ask to be
@@ -21,12 +21,13 @@ nurl verify prog.cert --binary prog  # check it again: no compiler needed
 `nurl --certify` builds the program as usual, then runs
 `nurl-cert certify` (`packages/nurl-cert`, written in NURL). The build is
 unchanged. The exit code is the certificate's: 0 when every claim is
-proved, 2 when the translation does not cover the program, 3 when the
-checker refuses it. `nurl verify` runs `nurl-cert verify`. Both find
+proved, validated or conditionally assumed, 2 when the translation does not
+cover the program, 3 when the checker refuses it. `nurl verify` runs
+`nurl-cert verify`. Both find
 `formal/` through `$NURL_FORMAL`, then next to `nurl.sh`. They need `lean`
 on `PATH` (elan's: run inside `formal/`, it picks `formal/`'s toolchain;
 or `--lean PATH` / `$LEAN`), and `formal/` built (`lake build C.Cert
-C.Cert3 C.Elab C.Caps C.Caps3`).
+C.Cert3 C.Elab C.Complete C.Caps C.Caps3`).
 
 The flag's and the subcommand's names are working names. The owner
 confirms them before 1.0.
@@ -239,6 +240,14 @@ prog.cert/
   - `def fn<k> : Fn := …`;
   - `def P : Prog := [fn0, …]`;
   - `def entry : Stmt := .letcall 0 <k> [] .skip`;
+  - for a threaded program, `def spawns : List Nat := […]`;
+  - for a conditional certificate (AGORA-1033), `def assumed : List Nat := […]`
+    (the indices of the assumed functions, each holding a stub `.seq s .panic`
+    whose signature, callees and `hasThru` come from the core IR; `Claims.lean`
+    imports `C.Complete`, decides `C.certOK2BA P assumed entry 1`, and states
+    `M.safe` and `M.leak` over every completion `P'` satisfying `C.Completes`
+    and `C.AssumedOK`; each assumed function has a trust-ledger row
+    `assumed-fn:<name>` and `M.safe`/`M.leak` take status `assumed`);
   - terms built from constructors (`.name`), numbers, `true`/`false`, the
     fields of `Fn` and the punctuation `( ) [ ] { } , :=`.
 
@@ -417,7 +426,7 @@ translation, and the link to the binary on LLVM and the linker.
 ## 4. manifest.json
 
 ```
-schema      "nurl-cert/1"
+schema      "nurl-cert/2"
 tool        { name, version }
 profile     "kernel" | "fast"
 program     { source, verdict: accepted | refused | unsupported | error, reason, slots }
@@ -457,17 +466,20 @@ ledger      [ { id, what, why, where, vouches, claims [..] } ]
   and records the case: with it, the ledger has `core-ir-words` and the
   encodings' rows in place of `translation` (below), and verify requires
   the file.
-- **Schema.** The member is optional, so the schema stays
-  `nurl-cert/1`. A bundle made before it (nurl-cert 0.1.x, against the
-  same `formal/` tree) has none, and verifies as before with its
-  translator's row. An older verify refuses a bundle that has it (an
-  unknown member), which fails closed.
+- **Schema.** `nurl-cert/2` (AGORA-1033) adds conditional certificates
+  (`def assumed : List Nat := […]` in `Program.lean`, `C.certOK2BA` and
+  `C.Completes`/`C.AssumedOK` claims in `Claims.lean`, `assumed-fn:<name>`
+  trust-ledger rows, and `assumed` status on `M.safe`/`M.leak` when any
+  function is assumed), and (AGORA-1013) `N.cap` after `M.unsafe`, with
+  `capabilities`, `hashes.caps_lean` and `hashes.caps_tsv`. Bundles written
+  under `nurl-cert/1` must be re-certified with `nurl-cert certify`.
 - `capabilities`, `hashes.caps_lean` and `hashes.caps_tsv` are present
-  exactly when N.cap is proved. Otherwise N.cap is `open`, its sentence
-  says it is not claimed, and it rests on `claim-definitions` alone.
-  `capabilities.runs` is Caps.lean's list; `functions` gives each of the
-  program's functions in it with the classes its calls reach;
-  `classes` gives each class of the claim with its chain.
+  exactly when N.cap is proved (or, in a conditional bundle, `assumed`).
+  Otherwise N.cap is `open`, its sentence says it is not claimed, and it
+  rests on `claim-definitions` alone. `capabilities.runs` is Caps.lean's
+  list; `functions` gives each of the program's functions in it with the
+  classes its calls reach; `classes` gives each class of the claim with
+  its chain.
 - `versions.formal_tree` is the sha256 of a listing with one line
   `<sha256>  <path>` per file of `formal/`, in byte order of the paths:
   every `.lean` file, plus `lakefile.toml`, `lean-toolchain` and

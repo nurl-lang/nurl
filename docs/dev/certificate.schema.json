@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nurl-lang.org/schemas/nurl-cert/1/manifest.json",
-  "title": "nurl-cert/1 manifest",
-  "description": "manifest.json of a NURL certificate bundle (docs/dev/CERTIFICATE.md, AGORA-1019).",
+  "$id": "https://nurl-lang.org/schemas/nurl-cert/2/manifest.json",
+  "title": "nurl-cert/2 manifest",
+  "description": "manifest.json of a NURL certificate bundle (docs/dev/CERTIFICATE.md, AGORA-1019, AGORA-1033).",
   "type": "object",
   "required": [
     "schema",
@@ -143,7 +143,7 @@
   },
   "properties": {
     "schema": {
-      "const": "nurl-cert/1"
+      "const": "nurl-cert/2"
     },
     "tool": {
       "type": "object",

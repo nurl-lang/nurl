@@ -35,7 +35,7 @@
 #     Lean reads back as the word.
 #  3. The fast profile: a bundle whose claims are `validated`, with the
 #     compiled-code axiom listed, verifies.
-#  3c. N.cap (AGORA-1013): every accepted certify program proves which of
+#  3d. N.cap (AGORA-1013): every accepted certify program proves which of
 #     its functions a run can enter (Caps.lean, Cert.n_cap), every refused
 #     one leaves it open; seeded programs get exactly the classes their
 #     reachable calls have (a print in main, behind a closure, in a
@@ -780,7 +780,168 @@ EOF3
 then ok "a program refused before its functions are translated: each unsupported, none open"
 else bad "a program refused before its functions are translated"; head -c 1500 "$TMP/nomain/lib.cert/manifest.json"; fi
 
-echo "== 3c. N.cap: which functions a run can enter, and what they reach (AGORA-1013)"
+echo "== 3c. conditional certificates (AGORA-1033)"
+# A program with an unsupported function whose signature, callees and hasThru
+# can be classified from the core IR gets an accepted conditional bundle with
+# stubs, `def assumed`, C.Complete claims, `assumed-fn:*` ledger rows and
+# `assumed` claim status; its non-assumed functions are `proved` and its
+# assumed ones stay `unsupported`.
+CC="$TMP/cond"; mkdir -p "$CC"
+cat > "$CC/cond.nu" <<'EOF3'
+$ `stdlib/core/io.nu`
+$ `stdlib/core/vec.nu`
+
+@ helper i x → i { ^ + x 1 }
+
+@ log_and_grow ( Vec i ) v → i {
+    ( nurl_print `hi\n` )
+    ( vec_clear [i] v )
+    ^ ( helper 1 )
+}
+
+@ main → i {
+    : ~ ( Vec i ) v ( vec_new [i] )
+    ( vec_push [i] v 7 )
+    ^ ( log_and_grow v )
+}
+EOF3
+"$C" certify "$CC/cond.nu" "${CA[@]}" --out "$CC/cond.cert" > "$CC/cert.out" 2>&1; crc=$?
+"$C" verify "$CC/cond.cert" --formal "$ROOT/formal" > "$CC/ver.out" 2>&1; vrc=$?
+"$C" verify "$CC/cond.cert" --formal "$ROOT/formal" --rebuild --nurlc "$NURLC" --stdlib "$ROOT" > "$CC/reb.out" 2>&1; rrc=$?
+if [ "$crc" = 0 ] && [ "$vrc" = 0 ] && [ "$rrc" = 0 ] \
+    && grep -q "M.safe assumed" "$CC/cert.out" && grep -q "M.leak assumed" "$CC/cert.out" \
+    && [ ! -e "$CC/cond.cert/Elab.lean" ] \
+    && grep -q "^def assumed : List Nat := \[" "$CC/cond.cert/Program.lean" \
+    && grep -q "C.certOK2BA P assumed entry 1" "$CC/cond.cert/Claims.lean" \
+    && python3 - "$CC/cond.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+st = {f["name"]: f["status"] for f in m["coverage"]["functions"]}
+cl = {c["id"]: c for c in m["claims"]}
+lr = {r["id"]: r for r in m["ledger"]}
+row = lr.get("assumed-fn:log_and_grow")
+ok = (m["program"]["verdict"] == "accepted"
+      and cl["M.safe"]["status"] == "assumed" and cl["M.leak"]["status"] == "assumed"
+      and "assumed-fn:log_and_grow" in cl["M.safe"]["premises"]
+      and "assumed-fn:log_and_grow" in cl["M.leak"]["premises"]
+      and row is not None and "callees [helper]" in row["what"] and "hasThru true" in row["what"]
+      and st.get("log_and_grow") == "unsupported"
+      and st.get("helper") == "proved" and st.get("main") == "proved")
+sys.exit(0 if ok else 1)
+EOF3
+then ok "conditional certificate: accepted with assumed claims, stub callees/hasThru, verifies (+ --rebuild)"
+else bad "conditional certificate: accepted and verifies (crc=$crc vrc=$vrc rrc=$rrc)"; cat "$CC/cert.out" "$CC/ver.out" "$CC/reb.out" | head -40; fi
+
+# Conditional refusal: an assumed function beside a buggy non-assumed function
+# is still refused by C.certOK2BA (exit 3, no Claims.lean, verifies as refused).
+cat > "$CC/cond_refused.nu" <<'EOF3'
+$ `stdlib/core/io.nu`
+$ `stdlib/core/vec.nu`
+
+@ log_msg → v { ( nurl_print `hi\n` ) }
+
+@ main → i {
+    ( log_msg )
+    : ~ ( Vec i ) v ( vec_new [i] )
+    ( vec_push [i] v 1 )
+    ( vec_free [i] v )
+    ^ ( vec_len [i] v )
+}
+EOF3
+"$C" certify "$CC/cond_refused.nu" "${CA[@]}" --out "$CC/cond_refused.cert" > "$CC/ref.out" 2>&1; crc=$?
+"$C" verify "$CC/cond_refused.cert" --formal "$ROOT/formal" > "$CC/ref_v.out" 2>&1; vrc=$?
+if [ "$crc" = 3 ] && [ "$vrc" = 0 ] && [ ! -e "$CC/cond_refused.cert/Claims.lean" ] \
+    && grep -q "C.certOK2BA is false" "$CC/ref.out"; then
+    ok "conditional certificate with a buggy non-assumed function stays refused"
+else bad "conditional certificate with a buggy non-assumed function stays refused (crc=$crc vrc=$vrc)"; cat "$CC/ref.out" "$CC/ref_v.out" | head -20; fi
+
+# Tamper 1: an index dropped from `def assumed` in Program.lean.
+cp -r "$CC/cond.cert" "$CC/t1.cert"
+python3 - "$CC/t1.cert" <<'EOF3'
+import hashlib, json, os, re, sys
+d = sys.argv[1]
+p = os.path.join(d, "Program.lean")
+txt = open(p).read()
+txt = re.sub(r"^def assumed : List Nat := \[.*\]\n", "", txt, flags=re.M)
+open(p, "w").write(txt)
+mp = os.path.join(d, "manifest.json")
+m = json.load(open(mp))
+m["hashes"]["program_lean"] = hashlib.sha256(txt.encode()).hexdigest()
+json.dump(m, open(mp, "w"), indent=2)
+EOF3
+if ! "$C" verify "$CC/t1.cert" --formal "$ROOT/formal" > "$CC/t1.out" 2>&1; then
+    ok "conditional tamper: assumed index dropped from Program.lean fails verify"
+else bad "conditional tamper: assumed index dropped from Program.lean should fail verify"; fi
+
+# Tamper 2: a stub's body changed (still `.seq _ .panic`, different callees),
+# even with Program.lean's hash updated: fails both plain verify and --rebuild.
+cp -r "$CC/cond.cert" "$CC/t2.cert"
+python3 - "$CC/t2.cert" <<'EOF3'
+import hashlib, json, os, sys
+d = sys.argv[1]
+p = os.path.join(d, "Program.lean")
+txt = open(p).read()
+assert "(.letcall 0 0 [] .skip)" in txt
+txt = txt.replace("(.letcall 0 0 [] .skip)", "(.letcall 0 2 [] .skip)", 1)
+open(p, "w").write(txt)
+mp = os.path.join(d, "manifest.json")
+m = json.load(open(mp))
+m["hashes"]["program_lean"] = hashlib.sha256(txt.encode()).hexdigest()
+json.dump(m, open(mp, "w"), indent=2)
+EOF3
+if ! "$C" verify "$CC/t2.cert" --formal "$ROOT/formal" > "$CC/t2.out" 2>&1 \
+    && ! "$C" verify "$CC/t2.cert" --formal "$ROOT/formal" --rebuild --nurlc "$NURLC" --stdlib "$ROOT" > "$CC/t2r.out" 2>&1; then
+    ok "conditional tamper: stub callees changed fails verify and --rebuild"
+else bad "conditional tamper: stub callees changed should fail verify"; fi
+
+# Tamper 3: a stub's hasThru bit flipped (`.edit true` removed), even with
+# Program.lean's hash updated: fails both plain verify and --rebuild.
+cp -r "$CC/cond.cert" "$CC/t3.cert"
+python3 - "$CC/t3.cert" <<'EOF3'
+import hashlib, json, os, sys
+d = sys.argv[1]
+p = os.path.join(d, "Program.lean")
+txt = open(p).read()
+assert "(.edit true 0 (.trunc (.lit 0)))" in txt
+txt = txt.replace("(.edit true 0 (.trunc (.lit 0)))", ".skip", 1)
+open(p, "w").write(txt)
+mp = os.path.join(d, "manifest.json")
+m = json.load(open(mp))
+m["hashes"]["program_lean"] = hashlib.sha256(txt.encode()).hexdigest()
+json.dump(m, open(mp, "w"), indent=2)
+EOF3
+if ! "$C" verify "$CC/t3.cert" --formal "$ROOT/formal" > "$CC/t3.out" 2>&1 \
+    && ! "$C" verify "$CC/t3.cert" --formal "$ROOT/formal" --rebuild --nurlc "$NURLC" --stdlib "$ROOT" > "$CC/t3r.out" 2>&1; then
+    ok "conditional tamper: stub hasThru bit flipped fails verify and --rebuild"
+else bad "conditional tamper: stub hasThru bit flipped should fail verify"; fi
+
+# Tamper 4: an assumed-fn:* ledger row dropped from manifest.json.
+cp -r "$CC/cond.cert" "$CC/t4.cert"
+python3 - "$CC/t4.cert/manifest.json" <<'EOF3'
+import json, sys
+mp = sys.argv[1]
+m = json.load(open(mp))
+m["ledger"] = [r for r in m["ledger"] if not r["id"].startswith("assumed-fn:")]
+json.dump(m, open(mp, "w"), indent=2)
+EOF3
+if ! "$C" verify "$CC/t4.cert" --formal "$ROOT/formal" > "$CC/t4.out" 2>&1; then
+    ok "conditional tamper: assumed-fn ledger row dropped fails verify"
+else bad "conditional tamper: assumed-fn ledger row dropped should fail verify"; fi
+
+# Tamper 5: M.safe status upgraded from assumed to proved in manifest.json.
+cp -r "$CC/cond.cert" "$CC/t5.cert"
+python3 - "$CC/t5.cert/manifest.json" <<'EOF3'
+import json, sys
+mp = sys.argv[1]
+m = json.load(open(mp))
+m["claims"][0]["status"] = "proved"
+json.dump(m, open(mp, "w"), indent=2)
+EOF3
+if ! "$C" verify "$CC/t5.cert" --formal "$ROOT/formal" > "$CC/t5.out" 2>&1; then
+    ok "conditional tamper: M.safe upgraded from assumed to proved fails verify"
+else bad "conditional tamper: M.safe upgraded from assumed to proved should fail verify"; fi
+
+echo "== 3d. N.cap: which functions a run can enter, and what they reach (AGORA-1013)"
 # Every accepted certify program proves N.cap (Caps.lean, Cert.n_cap on the
 # standard axioms), every refused one leaves it open with no Caps.lean.
 if python3 - "$TMP"/progs/*/*.cert <<'EOF2'
@@ -932,7 +1093,7 @@ else bad "a list missing a called function: the kernel refuses Cert.runs_closed"
 
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then
-    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$TMP"/ncap/*.cert/manifest.json <<'EOF2'
+    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$CC/cond.cert/manifest.json" "$CC/cond_refused.cert/manifest.json" "$TMP"/ncap/*.cert/manifest.json <<'EOF2'
 import json, sys, jsonschema
 schema = json.load(open(sys.argv[1]))
 bad = 0
@@ -944,7 +1105,7 @@ for p in sys.argv[2:]:
         print(f"        {p}: {e.message}")
 sys.exit(1 if bad else 0)
 EOF2
-    then ok "every manifest is a nurl-cert/1 manifest"; else bad "every manifest is a nurl-cert/1 manifest"; fi
+    then ok "every manifest is a nurl-cert/2 manifest"; else bad "every manifest is a nurl-cert/2 manifest"; fi
 else
     echo "  SKIP  the schema check: python3 has no jsonschema module"
 fi

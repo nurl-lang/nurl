@@ -789,7 +789,7 @@ $ `manifest.nu`
 // call anything); under `fast` the Lean compiler; and every hand-vouched
 // place (an `unsafe` function may call anything). A claim that is not
 // proved rests on nothing but its definition.
-@ cert_caps_premises s prof b proved b elab ( Vec String ) enc i nunsafe → String {
+@ cert_caps_premises s prof b proved b elab ( Vec String ) enc i nunsafe ( Vec String ) assumed_ids → String {
     ? ! proved { ^ ( string_from `claim-definitions` ) } {}
     : String p ( string_from `lean-kernel claim-definitions` )
     ? elab {
@@ -809,6 +809,16 @@ $ `manifest.nu`
         ( string_push_str p ` unsafe-` )
         ( string_push_int p + k 1 )
         = k + k 1
+    }
+    // (a conditional bundle, AGORA-1033: Cert.n_cap is about the program with
+    // a stub at each assumed function, and an assumed function's row says
+    // what its stub stands for: the functions it calls)
+    : i na ( vec_len [String] assumed_ids )
+    : ~ i aj 0
+    ~ < aj na {
+        ( string_push_char p 32 )
+        ( string_push_str p ( string_data ( vec_at [String] assumed_ids aj ) ) )
+        = aj + aj 1
     }
     ^ p
 }

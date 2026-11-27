@@ -175,6 +175,7 @@ $ `stdlib/ext/json.nu`
     } {}
     : String pbody ( string_substr prog ( nurl_str_len head ) - ( string_len prog ) ( nurl_str_len head ) )
     : ~ b threads F
+    : ~ b cond F
     : ~ String cbody ( string_new )
     ?? ( __lt_unimport claims ( __lt_v1 `import Program` ) ) {
         T c → { = cbody c }
@@ -185,8 +186,16 @@ $ `stdlib/ext/json.nu`
                     = threads T
                 }
                 F → {
-                    = why ( string_from `Claims.lean's imports are not the template's` )
-                    ^ @ ?String { F }
+                    ?? ( __lt_unimport claims ( __lt_v2 `import C.Complete` `import Program` ) ) {
+                        T c → {
+                            = cbody c
+                            = cond T
+                        }
+                        F → {
+                            = why ( string_from `Claims.lean's imports are not the template's` )
+                            ^ @ ?String { F }
+                        }
+                    }
                 }
             }
         }
@@ -239,6 +248,7 @@ $ `stdlib/ext/json.nu`
     : String o ( string_with_cap + + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) ( string_len kbody ) 256 )
     ( string_push_str o `import C.Cert\n` )
     ? threads { ( string_push_str o `import C.Cert3\n` ) } {}
+    ? cond { ( string_push_str o `import C.Complete\n` ) } {}
     ? has_elab { ( string_push_str o `import C.Elab\n` ) } {}
     ? has_caps { ( string_push_str o ? caps3 `import C.Caps3\n` `import C.Caps\n` ) } {}
     ( string_push_str o `section\nopen A2 C\n` )
@@ -490,10 +500,12 @@ $ `stdlib/ext/json.nu`
 // that got stuck leaves (AGORA-1034). So a refusal is not read off that
 // message: it is proved, in a run of its own, or the verdict stays an
 // error. Program.lean has passed the grammar check (shape.nu) before.
-@ cert_lean_refutes s lean s formal s bundle s work b threads → b {
+@ cert_lean_refutes s lean s formal s bundle s work b threads b cond → b {
     : String ptext ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → { ^ F } }
     : String o ( string_new )
     ? threads { ( string_push_str o `import C.Cert3
+` ) } {}
+    ? cond { ( string_push_str o `import C.Complete
 ` ) } {}
     ( string_push_str o ( string_data ptext ) )
     ? threads {
@@ -501,9 +513,15 @@ $ `stdlib/ext/json.nu`
 theorem refuted : C.certOK3B P spawns entry 1 = false := by decide +kernel
 ` )
     } {
-        ( string_push_str o `
+        ? cond {
+            ( string_push_str o `
+theorem refuted : C.certOK2BA P assumed entry 1 = false := by decide +kernel
+` )
+        } {
+            ( string_push_str o `
 theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
 ` )
+        }
     }
     : String file ( nc_join work `Refute.lean` )
     ? ! ( nc_write ( string_data file ) ( string_data o ) ) { ^ F } {}
