@@ -500,24 +500,161 @@ $ `coreir.nu`
     ^ | ( string_starts_with f `stdlib/` ) ( string_contains f `/stdlib/` )
 }
 
-@ __cp_fn_index CoreIR ir s name → i {
-    : i n ( vec_len [CoreFn] . ir fns )
-    : ~ i k 0
-    ~ < k n {
-        ? ( nc_is . ( vec_at [CoreFn] . ir fns k ) name name ) { ^ k } {}
-        = k + k 1
-    }
-    ^ -1
+// What N.cap reads of the core IR, and nothing more: each function's
+// header (name, file, line, flags), the callees its statements name (a
+// `call`'s and a `closure`'s, each with the `line` it is on) and the `virt`
+// lines. A scan of the text in place, so certify does not parse the core IR
+// a second time (the translation has its own reader, coreir.nu, which
+// builds every record).
+: CapIR {
+    ( Vec String ) names
+    ( Vec String ) files
+    ( Vec i ) lines
+    ( Vec i ) flags
+    ( Vec ( Vec String ) ) callees
+    ( Vec ( Vec i ) ) clines
+    ( Vec String ) vcallee
+    ( Vec ( Vec String ) ) vimpls
 }
 
-@ __cp_virt CoreIR ir s name → i {
-    : i n ( vec_len [CoreVirt] . ir virts )
-    : ~ i k 0
-    ~ < k n {
-        ? ( nc_is . ( vec_at [CoreVirt] . ir virts k ) callee name ) { ^ k } {}
-        = k + k 1
+@ __cp_hash String x → i { ^ ( hash_string ( string_data x ) ) }
+
+@ __cp_eqs String a String b → b { ^ ( eq_string ( string_data a ) ( string_data b ) ) }
+
+@ __cp_mset ( HashMap String i ) m String k i v → v {
+    : ?i _o ( map_set [String i] m k v \ String x → i { ^ ( __cp_hash x ) } \ String p String q → b { ^ ( __cp_eqs p q ) } )
+}
+
+@ __cp_mget ( HashMap String i ) m s k → i {
+    ^ ?? ( map_get_with [String i s] m k \ s x → i { ^ ( hash_string x ) } \ String p s q → b { ^ ( eq_string ( string_data p ) q ) } ) {
+        T v → v
+        F → -1
     }
-    ^ -1
+}
+
+// The number of t[a, z) (digits only), or 0.
+@ __cp_int ( Slice u ) t i a i z → i {
+    : ~ i v 0
+    : ~ i k a
+    ~ & < k z ( __cp_digit ( slice_byte t k ) ) { = v + * v 10 - ( slice_byte t k ) 48 = k + k 1 }
+    ^ v
+}
+
+// The tab-separated columns of t[a, z).
+@ __cp_split_tabs ( Slice u ) t i a i z → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : ~ i k a
+    : ~ b more T
+    ~ more {
+        : ~ i e k
+        ~ & < e z != ( slice_byte t e ) 9 { = e + e 1 }
+        : String w ( string_new )
+        ( string_push_window w t k - e k )
+        ( vec_push [String] out w )
+        ? < e z { = k + e 1 } { = more F }
+    }
+    ^ out
+}
+
+@ __cp_scan s text → CapIR {
+    : ( Vec String ) names ( vec_new [String] )
+    : ( Vec String ) files ( vec_new [String] )
+    : ( Vec i ) lines ( vec_new [i] )
+    : ( Vec i ) flags ( vec_new [i] )
+    : ( Vec ( Vec String ) ) callees ( vec_new [( Vec String )] )
+    : ( Vec ( Vec i ) ) clines ( vec_new [( Vec i )] )
+    : ( Vec String ) vcallee ( vec_new [String] )
+    : ( Vec ( Vec String ) ) vimpls ( vec_new [( Vec String )] )
+    : ~ ( Vec String ) cc ( vec_new [String] )
+    : ~ ( Vec i ) cl ( vec_new [i] )
+    : ~ b in_fn F
+    : ~ i cur_line 0
+    : ( Slice u ) t ( slice_of_str text )
+    : i n ( slice_len [u] t )
+    : ~ i a 0
+    ~ < a n {
+        : ~ i z a
+        ~ & < z n & != ( slice_byte t z ) 10 != ( slice_byte t z ) 13 { = z + z 1 }
+        : ~ i sa a
+        ~ & < sa z ( core_is_ws ( slice_byte t sa ) ) { = sa + sa 1 }
+        ? < sa z {
+            : i c0 ( slice_byte t sa )
+            ? & & == c0 102 < + sa 2 z & == ( slice_byte t + sa 1 ) 110 == ( slice_byte t + sa 2 ) 9 {
+                // `fn` header: name, return type, parameters, line, file, flags
+                : ( Vec String ) f ( __cp_split_tabs t sa z )
+                : String nm ?? ( vec_get [String] f 1 ) { T x → ( string_clone x ) F → ( string_new ) }
+                : String ln ?? ( vec_get [String] f 4 ) { T x → ( string_clone x ) F → ( string_new ) }
+                : String fl ?? ( vec_get [String] f 5 ) { T x → ( string_clone x ) F → ( string_new ) }
+                : String fg ?? ( vec_get [String] f 6 ) { T x → ( string_clone x ) F → ( string_new ) }
+                : ( Slice u ) lv ( slice_of_str ( string_data ln ) )
+                : ( Slice u ) gv ( slice_of_str ( string_data fg ) )
+                : i lnum ( __cp_int lv 0 ( slice_len [u] lv ) )
+                ( vec_push [String] names nm )
+                ( vec_push [String] files fl )
+                ( vec_push [i] lines lnum )
+                ( vec_push [i] flags ( __cp_int gv 0 ( slice_len [u] gv ) ) )
+                = cc ( vec_new [String] )
+                = cl ( vec_new [i] )
+                = cur_line lnum
+                = in_fn T
+            } {
+                ? & in_fn & == c0 101 & < + sa 4 z & == ( slice_byte t + sa 1 ) 110 & == ( slice_byte t + sa 2 ) 100 & == ( slice_byte t + sa 3 ) 102 == ( slice_byte t + sa 4 ) 110 {
+                    // `endfn`
+                    ( vec_push [( Vec String )] callees cc )
+                    ( vec_push [( Vec i )] clines cl )
+                    = cc ( vec_new [String] )
+                    = cl ( vec_new [i] )
+                    = in_fn F
+                } {
+                    ? & ! in_fn & == c0 118 & < + sa 4 z & == ( slice_byte t + sa 1 ) 105 & == ( slice_byte t + sa 2 ) 114 & == ( slice_byte t + sa 3 ) 116 == ( slice_byte t + sa 4 ) 9 {
+                        // `virt` callee impl…
+                        : ( Vec String ) f ( __cp_split_tabs t sa z )
+                        : String cal ?? ( vec_get [String] f 1 ) { T x → ( string_clone x ) F → ( string_new ) }
+                        : ( Vec String ) im ( vec_new [String] )
+                        : i nfc ( vec_len [String] f )
+                        : ~ i j 2
+                        ~ < j nfc { ( vec_push [String] im ( string_clone ( vec_at [String] f j ) ) ) = j + j 1 }
+                        ( vec_push [String] vcallee cal )
+                        ( vec_push [( Vec String )] vimpls im )
+                    } {
+                        // (a variable's `v` line names no callee)
+                        ? & in_fn ! & == c0 118 & < + sa 1 z == ( slice_byte t + sa 1 ) 9 {
+                            ? & & == c0 108 < + sa 4 z & & == ( slice_byte t + sa 1 ) 105 == ( slice_byte t + sa 2 ) 110 & == ( slice_byte t + sa 3 ) 101 == ( slice_byte t + sa 4 ) 32 {
+                                // `line N`
+                                = cur_line ( __cp_int t + sa 5 z )
+                            } {
+                                // a statement: every `call X` / `closure X`
+                                : ~ i k sa
+                                ~ < k z {
+                                    ~ & < k z == ( slice_byte t k ) 32 { = k + k 1 }
+                                    : ~ i e k
+                                    ~ & < e z != ( slice_byte t e ) 32 { = e + e 1 }
+                                    : i wl - e k
+                                    : b is_call & == wl 4 ( __cp_at t k `call` )
+                                    : b is_clo & == wl 7 ( __cp_at t k `closure` )
+                                    ? | is_call is_clo {
+                                        : ~ i b2 e
+                                        ~ & < b2 z == ( slice_byte t b2 ) 32 { = b2 + b2 1 }
+                                        : ~ i e2 b2
+                                        ~ & < e2 z != ( slice_byte t e2 ) 32 { = e2 + e2 1 }
+                                        ? > e2 b2 {
+                                            : String w ( string_new )
+                                            ( string_push_window w t b2 - e2 b2 )
+                                            ( vec_push [String] cc w )
+                                            ( vec_push [i] cl cur_line )
+                                        } {}
+                                        = k e2
+                                    } { = k e }
+                                }
+                            }
+                        } {}
+                    }
+                }
+            }
+        } {}
+        = a + z 1
+    }
+    ^ @ CapIR { names files lines flags callees clines vcallee vimpls }
 }
 
 @ __cp_add_s ( Vec String ) v String x → v {
@@ -533,57 +670,6 @@ $ `coreir.nu`
     ( Vec i ) flines
     ( Vec String ) syms
     ( Vec i ) slines
-}
-
-@ __cp_edges CoreIR ir i k → CapEdges {
-    : CoreFn fn ( vec_at [CoreFn] . ir fns k )
-    : ( Vec i ) fs ( vec_new [i] )
-    : ( Vec i ) fl ( vec_new [i] )
-    : ( Vec String ) ss ( vec_new [String] )
-    : ( Vec i ) sl ( vec_new [i] )
-    : i nst - ( vec_len [i] . fn wstart ) 1
-    : ~ i line . fn line
-    : ~ i q 0
-    ~ < q nst {
-        : i nw ( core_nwords fn q )
-        ? & >= nw 2 != 0 ( nurl_str_eq ( core_word fn q 0 ) `line` ) {
-            ?? ( core_parse_int ( core_word fn q 1 ) ) { T v → { = line v } F → {} }
-        } {
-            : ~ i j 0
-            ~ < j - nw 1 {
-                : s w ( core_word fn q j )
-                ? | != 0 ( nurl_str_eq w `call` ) != 0 ( nurl_str_eq w `closure` ) {
-                    : s c ( core_word fn q + j 1 )
-                    : i g ( __cp_fn_index ir c )
-                    ? >= g 0 {
-                        ( vec_push [i] fs g )
-                        ( vec_push [i] fl line )
-                    } {
-                        : i vi ( __cp_virt ir c )
-                        ? >= vi 0 {
-                            : CoreVirt vt ( vec_at [CoreVirt] . ir virts vi )
-                            : i ni ( vec_len [String] . vt impls )
-                            : ~ i z 0
-                            ~ < z ni {
-                                : i h ( __cp_fn_index ir ( string_data ( vec_at [String] . vt impls z ) ) )
-                                ? >= h 0 {
-                                    ( vec_push [i] fs h )
-                                    ( vec_push [i] fl line )
-                                } {}
-                                = z + z 1
-                            }
-                        } {
-                            ( vec_push [String] ss ( string_from c ) )
-                            ( vec_push [i] sl line )
-                        }
-                    }
-                    = j + j 2
-                } { = j + j 1 }
-            }
-        }
-        = q + q 1
-    }
-    ^ @ CapEdges { fs fl ss sl }
 }
 
 @ __cp_sort_doors ( Vec String ) v → ( Vec String ) {
@@ -614,22 +700,68 @@ $ `coreir.nu`
 // as the calls go), the program's functions by their term index, and the
 // union over `runs` with one shortest chain each.
 @ cert_caps_fns String text ( Vec CapRow ) tab ( Vec i ) runs → !CapsRes String {
-    : CoreIR ir \ ( core_read ( string_data text ) )
-    : i nf ( vec_len [CoreFn] . ir fns )
+    : CapIR ir ( __cp_scan ( string_data text ) )
+    : i nf ( vec_len [String] . ir names )
+    // names → indices, once
+    : ( HashMap String i ) fidx ( map_new [String i] )
+    : ~ i k 0
+    ~ < k nf { ( __cp_mset fidx ( string_clone ( vec_at [String] . ir names k ) ) k ) = k + k 1 }
+    : ( HashMap String i ) vidx ( map_new [String i] )
+    = k 0
+    ~ < k ( vec_len [String] . ir vcallee ) { ( __cp_mset vidx ( string_clone ( vec_at [String] . ir vcallee k ) ) k ) = k + k 1 }
+    // a runtime function's class, once each
+    : ( HashMap String i ) cidx ( map_new [String i] )
+    : ( Vec String ) ccls ( vec_new [String] )
     : ( Vec CapEdges ) es ( vec_new [CapEdges] )
     : ( Vec ( Vec String ) ) own ( vec_new [( Vec String )] )
-    : ~ i k 0
+    = k 0
     ~ < k nf {
-        : CapEdges e ( __cp_edges ir k )
+        : ( Vec String ) cs ( vec_at [( Vec String )] . ir callees k )
+        : ( Vec i ) ls ( vec_at [( Vec i )] . ir clines k )
+        : ( Vec i ) fs ( vec_new [i] )
+        : ( Vec i ) fl ( vec_new [i] )
+        : ( Vec String ) ss ( vec_new [String] )
+        : ( Vec i ) sl ( vec_new [i] )
         : ( Vec String ) mine ( vec_new [String] )
-        : i ns ( vec_len [String] . e syms )
+        : i nc ( vec_len [String] cs )
         : ~ i j 0
-        ~ < j ns {
-            ( __cp_add_s mine ( cert_caps_class_of tab ( string_data ( vec_at [String] . e syms j ) ) ) )
+        ~ < j nc {
+            : String c ( string_clone ( vec_at [String] cs j ) )
+            : i ln ( vec_at [i] ls j )
+            : i g ( __cp_mget fidx ( string_data c ) )
+            ? >= g 0 {
+                ( vec_push [i] fs g )
+                ( vec_push [i] fl ln )
+            } {
+                : i vi ( __cp_mget vidx ( string_data c ) )
+                ? >= vi 0 {
+                    : ( Vec String ) im ( vec_at [( Vec String )] . ir vimpls vi )
+                    : i ni ( vec_len [String] im )
+                    : ~ i z 0
+                    ~ < z ni {
+                        : i h ( __cp_mget fidx ( string_data ( vec_at [String] im z ) ) )
+                        ? >= h 0 {
+                            ( vec_push [i] fs h )
+                            ( vec_push [i] fl ln )
+                        } {}
+                        = z + z 1
+                    }
+                } {
+                    : ~ i ci ( __cp_mget cidx ( string_data c ) )
+                    ? < ci 0 {
+                        = ci ( vec_len [String] ccls )
+                        ( vec_push [String] ccls ( cert_caps_class_of tab ( string_data c ) ) )
+                        ( __cp_mset cidx ( string_clone c ) ci )
+                    } {}
+                    ( __cp_add_s mine ( string_clone ( vec_at [String] ccls ci ) ) )
+                    ( vec_push [String] ss c )
+                    ( vec_push [i] sl ln )
+                }
+            }
             = j + j 1
         }
-        ? != 0 & . ( vec_at [CoreFn] . ir fns k ) flags 8 { ( __cp_add_s mine ( string_from `panic` ) ) } {}
-        ( vec_push [CapEdges] es e )
+        ? != 0 & ( vec_at [i] . ir flags k ) 8 { ( __cp_add_s mine ( string_from `panic` ) ) } {}
+        ( vec_push [CapEdges] es @ CapEdges { fs fl ss sl } )
         ( vec_push [( Vec String )] own mine )
         = k + k 1
     }
@@ -667,10 +799,9 @@ $ `coreir.nu`
     : ( Vec ( Vec String ) ) pcls ( vec_new [( Vec String )] )
     = k 0
     ~ < k nf {
-        : CoreFn fn ( vec_at [CoreFn] . ir fns k )
-        ? ! ( __cp_is_lib . fn file ) {
+        ? ! ( __cp_is_lib ( vec_at [String] . ir files k ) ) {
             ( vec_push [i] prog k )
-            ( vec_push [String] names ( string_clone . fn name ) )
+            ( vec_push [String] names ( string_clone ( vec_at [String] . ir names k ) ) )
             ( vec_push [( Vec String )] pcls ( __cp_sort_doors ( vec_at [( Vec String )] all k ) ) )
         } {}
         = k + k 1
@@ -744,25 +875,22 @@ $ `coreir.nu`
             : ~ i z - ( vec_len [i] path ) 1
             ~ >= z 0 {
                 : i f ( vec_at [i] path z )
-                : CoreFn fn ( vec_at [CoreFn] . ir fns f )
                 ? == ( vec_at [i] par f ) -1 {
-                    ( vec_push [String] chain ( __cp_step . fn name . fn file . fn line ) )
+                    ( vec_push [String] chain ( __cp_step ( vec_at [String] . ir names f ) ( vec_at [String] . ir files f ) ( vec_at [i] . ir lines f ) ) )
                 } {
-                    : CoreFn caller ( vec_at [CoreFn] . ir fns ( vec_at [i] par f ) )
-                    ( vec_push [String] chain ( __cp_step . fn name . caller file ( vec_at [i] pline f ) ) )
+                    ( vec_push [String] chain ( __cp_step ( vec_at [String] . ir names f ) ( vec_at [String] . ir files ( vec_at [i] par f ) ) ( vec_at [i] pline f ) ) )
                 }
                 = z - z 1
             }
             // the runtime function, at its call
             : CapEdges e ( vec_at [CapEdges] es found )
-            : CoreFn ff ( vec_at [CoreFn] . ir fns found )
             : i nsy ( vec_len [String] . e syms )
             : ~ b put F
             : ~ i j 0
             ~ & < j nsy ! put {
                 : String sy ( string_clone ( vec_at [String] . e syms j ) )
                 ? ( string_eq ( cert_caps_class_of tab ( string_data sy ) ) want ) {
-                    ( vec_push [String] chain ( __cp_step sy . ff file ( vec_at [i] . e slines j ) ) )
+                    ( vec_push [String] chain ( __cp_step sy ( vec_at [String] . ir files found ) ( vec_at [i] . e slines j ) ) )
                     = put T
                 } {}
                 = j + j 1

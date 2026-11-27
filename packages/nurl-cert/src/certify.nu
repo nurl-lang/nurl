@@ -538,6 +538,116 @@ open A2 C
     ^ o
 }
 
+// ── formal/'s commit ─────────────────────────────────────────────────
+//
+// `versions.formal_commit` (informational: verify pins the tree's hash,
+// not the commit). Read off the repository's files where they are the
+// plain case, a `.git` directory or a worktree's `.git` file, `HEAD` a ref
+// or a commit, the ref loose or in `packed-refs`: that costs a few small
+// reads, where starting `git rev-parse HEAD` cost about 9 ms of every
+// certify. Anything else asks git, as before.
+
+@ __ct_hex40 String x → b {
+    : ( Slice u ) t ( slice_of_str ( string_data x ) )
+    : i n ( slice_len [u] t )
+    ? != n 40 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte t k )
+        ? ! | & >= c 48 <= c 57 & >= c 97 <= c 102 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// The directory above `p` ("" at the root).
+@ __ct_parent String p → String {
+    : ( Slice u ) t ( slice_of_str ( string_data p ) )
+    : ~ i k - ( slice_len [u] t ) 1
+    ~ & > k 0 | == ( slice_byte t k ) 47 == ( slice_byte t k ) 92 { = k - k 1 }
+    ~ & > k 0 & != ( slice_byte t k ) 47 != ( slice_byte t k ) 92 { = k - k 1 }
+    ? <= k 0 { ^ ( string_new ) } {}
+    ^ ( string_substr p 0 k )
+}
+
+@ __ct_git_commit_files s dir → String {
+    // the repository's git directory, from `dir` up
+    : ~ String d ( nc_abs dir )
+    : ~ String gitdir ( string_new )
+    : ~ i up 0
+    ~ & == 0 ( string_len gitdir ) & > ( string_len d ) 0 < up 64 {
+        : String g ( nc_join ( string_data d ) `.git` )
+        ?? ( dir_list ( string_data g ) ) {
+            T _ → { = gitdir ( string_clone g ) }
+            F _ → {
+                ?? ( nc_read ( string_data g ) ) {
+                    T txt → {
+                        : String l ( string_trim txt )
+                        ? ( string_starts_with l `gitdir: ` ) {
+                            : String rest ( string_substr l 8 - ( string_len l ) 8 )
+                            = gitdir ? ( nc_is_abs ( string_data rest ) ) rest ( nc_join ( string_data d ) ( string_data rest ) )
+                        } { ^ ( string_new ) }
+                    }
+                    F → {}
+                }
+            }
+        }
+        = d ( __ct_parent d )
+        = up + up 1
+    }
+    ? == 0 ( string_len gitdir ) { ^ ( string_new ) } {}
+    // a worktree's refs are its common directory's
+    : ~ String common ( string_clone gitdir )
+    ?? ( nc_read ( string_data ( nc_join ( string_data gitdir ) `commondir` ) ) ) {
+        T c → {
+            : String cd ( string_trim c )
+            = common ? ( nc_is_abs ( string_data cd ) ) cd ( nc_join ( string_data gitdir ) ( string_data cd ) )
+        }
+        F → {}
+    }
+    : String head ?? ( nc_read ( string_data ( nc_join ( string_data gitdir ) `HEAD` ) ) ) { T h → ( string_trim h ) F → { ^ ( string_new ) } }
+    ? ( __ct_hex40 head ) { ^ head } {}
+    ? ! ( string_starts_with head `ref: ` ) { ^ ( string_new ) } {}
+    : String ref ( string_substr head 5 - ( string_len head ) 5 )
+    ?? ( nc_read ( string_data ( nc_join ( string_data common ) ( string_data ref ) ) ) ) {
+        T x → {
+            : String sha ( string_trim x )
+            ? ( __ct_hex40 sha ) { ^ sha } {}
+        }
+        F → {}
+    }
+    ?? ( nc_read ( string_data ( nc_join ( string_data common ) `packed-refs` ) ) ) {
+        T pr → {
+            : ( Vec String ) ls ( nc_lines ( string_data pr ) )
+            : i n ( vec_len [String] ls )
+            : ~ i k 0
+            ~ < k n {
+                : String l ( string_clone ( vec_at [String] ls k ) )
+                ? & > ( string_len l ) 41 ( string_ends_with l ( string_data ref ) ) {
+                    : String sha ( string_substr l 0 40 )
+                    : String tail ( string_substr l 41 - ( string_len l ) 41 )
+                    ? & ( __ct_hex40 sha ) ( string_eq tail ref ) { ^ sha } {}
+                } {}
+                = k + k 1
+            }
+        }
+        F → {}
+    }
+    ^ ( string_new )
+}
+
+@ __ct_formal_commit s formal → String {
+    : String c ( __ct_git_commit_files formal )
+    ? > ( string_len c ) 0 { ^ c } {}
+    : ( Vec String ) ga ( vec_new [String] )
+    ( vec_push [String] ga ( string_from `-C` ) )
+    ( vec_push [String] ga ( string_from formal ) )
+    ( vec_push [String] ga ( string_from `rev-parse` ) )
+    ( vec_push [String] ga ( string_from `HEAD` ) )
+    : Run gr ( nc_run `git` ga )
+    ^ ? & . gr started == . gr code 0 ( __ct_first_line . gr out ) ( string_new )
+}
+
 // ── Certify ──────────────────────────────────────────────────────────
 
 @ __ct_claim s id s lean s status s en s fi s reason ( Vec String ) axioms s premises → Json {
@@ -1032,14 +1142,7 @@ open A2 C
     : Json vs ( json_obj_new )
     ( mj_str vs `nurlc` ( string_data nurlc_ver ) )
     ( mj_str vs `formal_tree` ( string_data ( cert_formal_hash ( string_data formal ) ) ) )
-    : ( Vec String ) ga ( vec_new [String] )
-    ( vec_push [String] ga ( string_from `-C` ) )
-    ( vec_push [String] ga ( string_clone formal ) )
-    ( vec_push [String] ga ( string_from `rev-parse` ) )
-    ( vec_push [String] ga ( string_from `HEAD` ) )
-    : Run gr ( nc_run `git` ga )
-    : String commit ? & . gr started == . gr code 0 ( __ct_first_line . gr out ) ( string_new )
-    ( mj_str vs `formal_commit` ( string_data commit ) )
+    ( mj_str vs `formal_commit` ( string_data ( __ct_formal_commit ( string_data formal ) ) ) )
     : String tc_path ( nc_join ( string_data formal ) `lean-toolchain` )
     : String tc ?? ( nc_read ( string_data tc_path ) ) { T t → ( string_trim t ) F → ( string_new ) }
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
