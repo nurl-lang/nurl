@@ -36,7 +36,7 @@ accepted
   numbers, `foreach` over a Vec of numbers, closures over numbers and
   buffers of numbers, options and structs of those types, read and built
   field by field, and structs with a `% Drop` of the program's own of
-  those fields, raw text a view, each value bound in a function's
+  those fields but closures, raw text a view, each value bound in a function's
   destructor frame and not handed back, assigned, returned by a call,
   given to a `sink` or `inout` parameter or held in another value);
   when the proof fails, there is no Elab.lean and the bundle keeps the
