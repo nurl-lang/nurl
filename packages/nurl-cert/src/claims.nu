@@ -55,21 +55,29 @@ $ `words.nu`
 // the code that handles that, is outside the claim), and its M.leak is
 // over runs in which every thread has finished (`cert3_leak`: A3's leak
 // clause asks that of a run, and says nothing of one a panic ends).
-@ cert_claim_sentence b threads i k → s {
+@ cert_claim_sentence b threads b cond i k → s {
     ? threads {
         ? == k 0 { ^ `It never reads or writes memory it does not own, on any run in which every thread it spawns starts.` } {}
         ? == k 1 { ^ `On any run in which every thread it spawns starts, once every thread has finished, it has released everything it allocated.` } {}
         ^ `Its threads never race on shared memory, on any run in which every thread it spawns starts.`
     } {}
+    ? cond {
+        ? == k 0 { ^ `Assuming the listed functions follow their summaries, it never reads or writes memory it does not own, on any run.` } {}
+        ^ `Assuming the listed functions follow their summaries, everything it allocates it releases, also when it stops with an error.`
+    } {}
     ? == k 0 { ^ `It never reads or writes memory it does not own, on any run.` } {}
     ^ `Everything it allocates it releases, also when it stops with an error.`
 }
 
-@ cert_claim_sentence_fi b threads i k → s {
+@ cert_claim_sentence_fi b threads b cond i k → s {
     ? threads {
         ? == k 0 { ^ `Se ei koskaan lue eikä kirjoita muistia, jota se ei omista, millään ajolla, jolla jokainen sen käynnistämä säie käynnistyy.` } {}
         ? == k 1 { ^ `Millä tahansa ajolla, jolla jokainen sen käynnistämä säie käynnistyy, se on vapauttanut kaiken minkä varasi, kun jokainen säie on päättynyt.` } {}
         ^ `Sen säikeet eivät koskaan kilpaile jaetusta muistista millään ajolla, jolla jokainen sen käynnistämä säie käynnistyy.`
+    } {}
+    ? cond {
+        ? == k 0 { ^ `Olettaen että luetellut funktiot noudattavat yhteenvetojaan, se ei koskaan lue eikä kirjoita muistia, jota se ei omista, millään ajolla.` } {}
+        ^ `Olettaen että luetellut funktiot noudattavat yhteenvetojaan, kaiken minkä se varaa, se vapauttaa, myös kun se pysähtyy virheeseen.`
     } {}
     ? == k 0 { ^ `Se ei koskaan lue eikä kirjoita muistia, jota se ei omista, millään ajolla.` } {}
     ^ `Kaiken minkä se varaa, se vapauttaa, myös kun se pysähtyy virheeseen.`
@@ -80,8 +88,9 @@ $ `words.nu`
 // binary's sequential consistency), which is cited, not mechanized. With
 // Elab.lean (`elab`), the translation is the core IR's words and the
 // encodings the term uses (`enc`, cert_enc_ids), AGORA-1029; without it,
-// the translator.
-@ cert_claim_premises s prof i k b elab ( Vec String ) enc → String {
+// the translator. Conditional certificates also rest on each `assumed-fn:*`
+// ledger row (`assumed_ids`, AGORA-1033).
+@ cert_claim_premises s prof i k b elab ( Vec String ) enc ( Vec String ) assumed_ids → String {
     : String p ( string_from `lean-kernel claim-definitions` )
     ? elab {
         ( string_push_str p ` core-ir-words` )
@@ -96,6 +105,13 @@ $ `words.nu`
     ( string_push_str p ` library-summaries` )
     ? != 0 ( nurl_str_eq prof `fast` ) { ( string_push_str p ` lean-compiler` ) } {}
     ? == k 2 { ( string_push_str p ` drf-sc` ) } {}
+    : i na ( vec_len [String] assumed_ids )
+    : ~ i aj 0
+    ~ < aj na {
+        ( string_push_char p 32 )
+        ( string_push_str p ( string_data ( vec_at [String] assumed_ids aj ) ) )
+        = aj + aj 1
+    }
     ^ p
 }
 
@@ -113,9 +129,10 @@ $ `words.nu`
 }
 
 // Claims.lean for a program over `nv` slots, under profile `prof`;
-// `threads`: the A3 template.
-@ cert_claims_lean s prof i nv b threads → String {
+// `threads`: the A3 template; `cond`: the conditional template (C.Complete).
+@ cert_claims_lean s prof i nv b threads b cond → String {
     ? threads { ^ ( __cl_claims3 prof nv ) } {}
+    ? cond { ^ ( __cl_claims_cond prof nv ) } {}
     : String n ( __cl_slots nv )
     : s ns ( string_data n )
     : String o ( string_with_cap 2048 )
@@ -131,13 +148,13 @@ $ `words.nu`
     ( string_push_str o ( __cl_tactic prof ) )
     ( string_push_str o `\n\n` )
     ( string_push_str o `/-- M.safe: ` )
-    ( string_push_str o ( cert_claim_sentence F 0 ) )
+    ( string_push_str o ( cert_claim_sentence F F 0 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_safe :\n    ∀ m' s', A2.Steps P (A2.emptyMem ` )
     ( string_push_str o ns )
     ( string_push_str o `) entry (.ok m' s') → ¬ A2.Stuck P m' s' :=\n  C.cert_safe verdict\n\n` )
     ( string_push_str o `/-- M.leak: ` )
-    ( string_push_str o ( cert_claim_sentence F 1 ) )
+    ( string_push_str o ( cert_claim_sentence F F 1 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_leak :\n    (∀ m', A2.Steps P (A2.emptyMem ` )
     ( string_push_str o ns )
@@ -149,6 +166,56 @@ $ `words.nu`
     ( string_push_str o `end Cert\n\n` )
     : i k0 0
     : ~ i k k0
+    ~ < k ( cert_claim_count F ) {
+        ( string_push_str o `#print axioms ` )
+        ( string_push_str o ( cert_claim_lean k ) )
+        ( string_push_str o `\n` )
+        = k + k 1
+    }
+    ^ o
+}
+
+// The conditional template (formal/C/Complete.lean, AGORA-1033): the verdict
+// over `assumed`, and M.safe / M.leak for every completion `P'` where the
+// assumed functions satisfy `AssumedOK`.
+@ __cl_claims_cond s prof i nv → String {
+    : String n ( __cl_slots nv )
+    : s ns ( string_data n )
+    : String o ( string_with_cap 2048 )
+    ( string_push_str o `-- Generated by nurl-cert: the claims of this certificate. nurl-cert verify\n` )
+    ( string_push_str o `-- writes this file again and compares it byte for byte; do not edit it.\n` )
+    ( string_push_str o `-- Program.lean is the program as a term of formal/A2 (P, entry) and the\n` )
+    ( string_push_str o `-- indices of its assumed functions (assumed); the claims are conditional\n` )
+    ( string_push_str o `-- over every completion of P at assumed (formal/C/Complete.lean).\n` )
+    ( string_push_str o `import C.Complete\nimport Program\n\n` )
+    ( string_push_str o `namespace Cert\n\n` )
+    ( string_push_str o `/-- The verified checker accepts the program outside its assumed functions (formal/C/Complete.lean). -/\n` )
+    ( string_push_str o `theorem verdict : C.certOK2BA P assumed entry ` )
+    ( string_push_str o ns )
+    ( string_push_str o ` = true := by ` )
+    ( string_push_str o ( __cl_tactic prof ) )
+    ( string_push_str o `\n\n` )
+    ( string_push_str o `/-- M.safe: ` )
+    ( string_push_str o ( cert_claim_sentence F T 0 ) )
+    ( string_push_str o ` -/\n` )
+    ( string_push_str o `theorem m_safe :\n    ∀ P', C.Completes assumed P P' → C.AssumedOK assumed P' →\n` )
+    ( string_push_str o `      ∀ m' s', A2.Steps P' (A2.emptyMem ` )
+    ( string_push_str o ns )
+    ( string_push_str o `) entry (.ok m' s') → ¬ A2.Stuck P' m' s' :=\n  C.cert_safe_cond verdict\n\n` )
+    ( string_push_str o `/-- M.leak: ` )
+    ( string_push_str o ( cert_claim_sentence F T 1 ) )
+    ( string_push_str o ` -/\n` )
+    ( string_push_str o `theorem m_leak :\n    (∀ P', C.Completes assumed P P' → C.AssumedOK assumed P' →\n` )
+    ( string_push_str o `      ∀ m', A2.Steps P' (A2.emptyMem ` )
+    ( string_push_str o ns )
+    ( string_push_str o `) entry (.ok m' .skip) → ∀ i, m'.alloc i = false) ∧\n` )
+    ( string_push_str o `    (∀ P', C.Completes assumed P P' → C.AssumedOK assumed P' →\n` )
+    ( string_push_str o `      ∀ m', A2.Steps P' (A2.emptyMem ` )
+    ( string_push_str o ns )
+    ( string_push_str o `) entry (.panic m') → ∀ i, m'.alloc i = false) :=\n` )
+    ( string_push_str o `  ⟨C.cert_leak_end_cond verdict, C.cert_leak_panic_cond verdict⟩\n\n` )
+    ( string_push_str o `end Cert\n\n` )
+    : ~ i k 0
     ~ < k ( cert_claim_count F ) {
         ( string_push_str o `#print axioms ` )
         ( string_push_str o ( cert_claim_lean k ) )
@@ -181,19 +248,19 @@ $ `words.nu`
     ( string_push_str o ( __cl_tactic prof ) )
     ( string_push_str o `\n\n` )
     ( string_push_str o `/-- M.safe: ` )
-    ( string_push_str o ( cert_claim_sentence T 0 ) )
+    ( string_push_str o ( cert_claim_sentence T F 0 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_safe :\n    ` )
     ( string_push_str o rs )
     ( string_push_str o ` ∀ (i : Nat) (t : A3.Thread), C.ths[i]? = some t → ¬ A2.Stuck P (C.view t) t.s :=\n  C.cert3_safe verdict\n\n` )
     ( string_push_str o `/-- M.leak: ` )
-    ( string_push_str o ( cert_claim_sentence T 1 ) )
+    ( string_push_str o ( cert_claim_sentence T F 1 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_leak :\n    ` )
     ( string_push_str o rs )
     ( string_push_str o ` (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false :=\n  C.cert3_leak verdict\n\n` )
     ( string_push_str o `/-- M.race: ` )
-    ( string_push_str o ( cert_claim_sentence T 2 ) )
+    ( string_push_str o ( cert_claim_sentence T F 2 ) )
     ( string_push_str o ` -/\n` )
     ( string_push_str o `theorem m_race :\n    ` )
     ( string_push_str o rs )
