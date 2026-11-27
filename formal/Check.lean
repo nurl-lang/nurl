@@ -1076,6 +1076,9 @@ import D
 -- AGORA-1029: the words as numbers, read back into their bytes
 #print axioms C.Elab.wordOf_encB
 #print axioms C.Elab.elabLIs_sound
+-- AGORA-1029 step 7: structs and options
+#print axioms C.Elab.elab_struct
+#print axioms C.Elab.elab_opt
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided

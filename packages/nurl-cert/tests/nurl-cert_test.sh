@@ -111,11 +111,12 @@ want_elab=$(printf '%s\n' cursor_over_a_vec int_recursion_early_return joins_eac
     raw_strings_held_in_a_vec clo_called_in_a_loop clo_changes_a_captured_vec clo_no_captures_two_arguments \
     clo_number_capture_called clo_returned_owning_a_vec_capture clo_returned_with_a_number_capture \
     clo_string_captured_and_read_after clo_two_captures_passed_to_a_function \
+    struct_field_handed_to_a_reader struct_fields_read vec_moved_into_a_struct option_built_and_matched \
     | sort | tr '\n' ' ')
-if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 26 accepted certify programs in the subset have Elab.lean (Cert.elab)"
-else bad "exactly the 26 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
-if grep -qx "ok struct_fields_read accepted (translator)" "$TMP/progs.txt"; then ok "struct_fields_read (outside the subset): no Elab.lean, and it verifies"
-else bad "struct_fields_read (outside the subset): no Elab.lean, and it verifies"; fi
+if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 30 accepted certify programs in the subset have Elab.lean (Cert.elab)"
+else bad "exactly the 30 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
+if grep -qx "ok destructor_frame_left_by_an_early_return accepted (translator)" "$TMP/progs.txt"; then ok "destructor_frame_left_by_an_early_return (outside the subset): no Elab.lean, and it verifies"
+else bad "destructor_frame_left_by_an_early_return (outside the subset): no Elab.lean, and it verifies"; fi
 
 echo "== 1b. one Lean file, and the module way"
 # certify and verify check a bundle in one Lean file (Program.lean's
@@ -241,7 +242,7 @@ echo "== 2. tampering"
 # (a program outside C.Elab's subset: its bundle's term is the translator's,
 # and its ledger row the one a downgraded bundle must have, part 2b)
 P="$TMP/t"; mkdir -p "$P"
-cp tools/ncore/certify/struct_fields_read.nu "$P/prog.nu"
+cp tools/ncore/certify/destructor_frame_left_by_an_early_return.nu "$P/prog.nu"
 "$ROOT/nurl.sh" "$P/prog.nu" "$P/prog" > /dev/null 2>&1 || bad "the program builds"
 cp "$P/prog" "$P/other"; printf 'x' >> "$P/other"
 "$C" certify "$P/prog.nu" "${CA[@]}" --binary "$P/prog" > /dev/null 2>&1 || bad "certify the tamper program"

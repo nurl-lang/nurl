@@ -859,7 +859,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   translate_test 1c checks the words against a Python reading of both
   rules. ≈ 0.1 s on `clo_changes_a_captured_vec`.
 - **Breaking:** Elab.lean's words are another text now, so a 0.3.0 bundle
-  with Elab.lean does not verify with nurl-cert 0.3.1 (`verify` makes
+  with Elab.lean does not verify with nurl-cert 0.4.0 (`verify` makes
   Elab.lean again from Program.core and compares it byte for byte).
   Migration: certify the program again. A bundle without Elab.lean
   verifies as before.
@@ -893,15 +893,194 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   (`joins…`); the 13 new programs +15 to +71 MiB each; the other 49
   within −51 to +5 MiB; the sum of the 62 peaks −1.1 %.
 
+## Route (b), step 7: structs and options (AGORA-1029)
+
+- `elabIR` covers the translator's **structs and options**. A variable,
+  parameter or result may be of an option type `{ i1, T }` (A2's `.sum .int
+  T`, `None` the first variant) or of a struct type `%S` whose `ty` line
+  gives its fields (A2's `.prod`, the fields' types nested in pairs to the
+  right; a struct of one field is its field's type), over any type of the
+  subset, options and structs included (`tyR`, the translator's
+  `__lean_ty` and `_struct_ty`). The constructors it builds beyond step
+  6's are `.inl .inr .getr` (Rhs), `.isl` (Expr) and `.sum` (Ty); `.pair
+  .fst .snd .prod` were step 6's. They are tolean.nu's rules for:
+  - a struct's literal (`agg - n ops…`): its operands nested in pairs to the
+    right, each inner pair bound first (one of one field: its operand's
+    value, a number's or a moved buffer's); an option's (`agg F 0`: `.inl`
+    of a temporary; `agg T 1 op`: `.inr .int` of its payload), into a
+    variable of an option type, by `let` or `assign`;
+  - a field read (`v3/f`, `__field_temp`): through the pairs into fresh
+    temporaries (`.snd` as often as the field's place, then `.fst` unless it
+    is the last), where a `scalar`'s operand, a `use` of a number field, an
+    index or a length operand (`operandP`) or a library call's argument
+    (`rdF`, `fpre`: its bindings around the call's construct, outside an
+    operand's) names it; a field's A2 type where it is read (`__flean`) is
+    its place in the struct's pairs (`fieldTy`);
+  - an option's match (`match v` with arms `T` and `F`): `.ite (.isl v)`,
+    the `None` arm first, and `payload v T 0`: the payload lent, `.getr`.
+- **Fail closed.** Each check the translator makes on these is made too,
+  each with a kernel witness of its refusal and of its well-formed
+  neighbour (formal/C/Elab.lean, "step 7"): a struct holding raw text (a
+  field `i8*`), a closure inside a struct or an option, a struct inside
+  itself, a struct of no fields or with no `ty` line, an owning field's
+  value moved or copied (`use v/items` of a Vec), a nested field path, a
+  field the struct does not have, an option's literal into a variable of
+  another type or given none (`eval agg …`), a struct's literal of no
+  operand, a payload other than `T 0` (a result's error, which the
+  translator reads only in a program that spawns), a match whose arm names
+  repeat or are not `T` and `F`. The type checks run for every variable
+  and result of every function, as the translator's `__fn_init`. Where the
+  translator takes more, `elabIR` refuses (stricter, never laxer):
+  - a struct whose fields' names repeat (the translator reads a field by
+    its first name in `__field_temp` and by its last in `__field_ix`);
+  - a field of a type that is no struct of the subset (the translator reads
+    the `ty` line of any type, a `Vec`'s or a `String`'s handle `ctl`
+    included: `v/ctl` of a `%String` would be the whole String), and a field
+    of a struct of one field named other than its field (the translator does
+    not read the name there);
+  - a struct named like a number behind its `%` (`%i64`: the translator
+    takes it for a number) or like a channel, and a type nested deeper than
+    `tyFuel` (32 types, the innermost counted: a number inside 31 options is
+    read, inside 32 refused, both witnessed);
+  - a field root other than `v` and digits, and a `match` of more than two
+    arms (the translator takes repeated names, the last block of each).
+  A program that spawns is outside the subset as before: its spawn is a
+  call `intrS` has no rule for, so the translator's threaded readings
+  (results, `%Thread`) never meet `elabIR`'s.
+- **Closure types over structs.** A closure type's argument may be a
+  struct of the subset (`cloArgTy`: step 6's `tyOfB`, else `tyR` through
+  the program's `ty` lines, as the translator's `__lean_ty` reads it), so a
+  closure taking a struct is in the subset; its interface takes the struct
+  lent (`.inp`), as the translator's. A struct holding raw text, or a name
+  with no `ty` line, is refused there as everywhere; so is a nested or
+  pointer type (`nestedOrPtrB`: a `{`, a `(`, or a `*` other than `i8*`'s),
+  which the translator refuses before it reads the type: a `%P*` is no
+  struct, though the IR has a `ty %P*` line for it.
+- **A struct of one number field** is A2's `.int`. Where the translator
+  asks the IR type (`__is_int`: a `use`, a `ret`) it is no number and
+  moves; where it asks the A2 type (`__lean_ty`: a `drop`, a `none` slot)
+  it is one. `Ctx.obj` and the drop's and the slot's tests now read it so
+  (for every type before this step the two readings agree).
+- **The skip before Lean.** `ELAB_CTORS` takes `.inl .inr .getr .isl
+  .sum`. `ELAB_CLO_CTORS`, step 6's skip of a term with a closure's
+  constructor but no `.fn`, now holds `.callc .pack` only: `elabIR` builds
+  those only for a call through, or a literal of, a variable of a closure
+  type (`sigmaOf` of its type), and every closure type has an interface
+  whose first parameter is a `.fn`. With `.pair .fst .snd .prod` in it, it
+  skipped every struct program, now a term `elabIR` builds. It is still
+  exact, and over tools/ncore/certify it skips none.
+- **Which programs.** Over tools/ncore/certify, 51 programs are in the
+  subset (45 at step 6): all 6 this step aimed at
+  (`struct_field_handed_to_a_reader`,
+  `struct_field_read_after_the_struct_moved_refused`, `struct_fields_read`,
+  `vec_moved_into_a_struct`, `vec_moved_into_a_struct_then_pushed_refused`,
+  `option_built_and_matched`). The 4 the checker accepts get Elab.lean, 30
+  bundles in all (the selftest requires exactly these 30); the 2
+  `*_refused` ones have no Claims.lean, so no Elab.lean. Outside stay the
+  destructor programs (`.dtor .letd`), the channel and thread programs (A3)
+  and nothing else. The selftest's tamper bundle, a program outside the
+  subset, is a destructor program now
+  (`destructor_frame_left_by_an_early_return`), and its outside-the-subset
+  check names that one.
+- **Parity** (`tools/ncore/elab_parity.sh`, 17 new fixtures in
+  `tools/ncore/elab/`: three fields read through nested pairs, a struct
+  made by a function and handed back, a struct of one field, a struct
+  holding a String measured, viewed and grown through its field, a Vec
+  field indexed, sliced and cut back, a struct inside a struct, a struct
+  given a new literal in a loop, a struct handed `inout`, an option matched
+  `None` first, an option holding a Vec, an option of a literal given
+  another value, options made and matched in a loop, a closure taking a
+  struct, and two the checker refuses: a Vec moved into an option then
+  pushed, a struct read after it was handed to a sink): of 4583 programs nurlc makes a core IR of 4378.
+  tolean.nu translates 303 of those, and `elabIR` answers a term for 224
+  (the 51 certify programs, the 74 fixtures, 99 hole probes; 166 at step
+  6, none of them lost), every one exactly tolean.nu's term (each also by
+  `decide +kernel`). It answers `none` for the other 4154, and a term for
+  no program tolean.nu refuses; the same on the words as on every line for
+  all 4378. The new matches are the 6 certify programs, the 17 fixtures and
+  35 hole probes (options and their payloads, struct literals, cursors in
+  literals). The baseline run on main 986339c9 found 166 matches of 4356
+  core IRs; 5 hole probes that import `stdlib/ext/sqlite.nu` had no core
+  IR there (the baseline tree was a `git archive` copy), none of them in
+  the subset on the branch.
+- **Verdicts unchanged.** Every program of step 5's parity list (4554)
+  certified by main's nurl-cert and formal/ and by this step's, 10 jobs:
+  the same exit status for all 4554 (111 accepted, 163 refused, 4075
+  unsupported, 205 not compiled). 10 more get Elab.lean (92 against 82):
+  the 4 certify programs and 6 hole probes; none loses it. The 16 new
+  fixtures, certified apart: the 14 accepted get Elab.lean, the 2
+  `*_refused` are refused.
+- **Certify time** over the 62 certify programs, one at a time, best of
+  3, base (main's nurl-cert and formal/, 986339c9) and branch alternated
+  (A1 B1 A2 B2 A3 B3) on the same x86-64 host: **80.0 s against 80.2 s
+  (−0.2 %)**; the sums of the per-program bests 77.7 s against 77.7 s.
+  The same exit status for all 62 (36 accepted, 26 refused).
+  - the 6 programs new to the subset: +0.11 to +0.39 s each, +1.63 s in
+    all (`option_built_and_matched` 0.64 → 1.03 s), the cost of their new
+    Elab.lean part; the 2 the checker refuses spend it too (no Elab.lean is
+    kept; the verdict comes from the same Lean run);
+  - the other 56: −1.55 s in all. `joins_each_freeing_a_different_vec`
+    19.90 → 18.71 s; the other 25 with Elab.lean +0.19 s in all, each
+    within −0.06 to +0.07 s; the 30 without −0.55 s.
+  - Before the four changes below, the same run gave 78.4 s against 76.3 s
+    (+2.8 %): the 6 new programs +1.43 s, the other 56 +0.37 s.
+- **What won it back**, each found by timing `decide +kernel` of `elabIs`
+  on the bundles' words (the file with the theorem minus the one without,
+  best of 3), and checked to change no answer by the parity run (the same
+  223 matches, 0 DIFF, 0 LAX, words and full words the same):
+  - a drop's check read every mention of every variable in the body (one
+    list, `mentionsFrom`) for each drop. It now reads the lines after the
+    drop, as bits of one number (`maskAfter`: bit `i` set where a line names
+    `i`; `lineMask` of each line, `maskAfter` of each suffix of a body one
+    term, so one pass serves every drop) and the drop's set as another;
+    they share a bit exactly when a later line names a variable of the
+    set. A set with a variable past `maskB` (4096) is read line by line as
+    before (kernel witnesses of both). On a synthetic body of 50 Vecs (400
+    lines) `elabIR` took 8.3 s, 5.1 s with the lines read per drop, 3.6 s
+    with the bits, 3.8 s with no drop check at all;
+  - `retSplit` (does a list end in `ret`?) reversed the rest of a list at
+    every statement, quadratic in its length; it now runs once a list
+    (`go`'s `fr`: a suffix of a list that does not end in `ret` does not
+    either);
+  - the literals' temporaries were counted on entry to a statement and cut
+    off by `take`/`drop` on its exit. The kernel keeps a state's fields as
+    terms, so each `drop` was one more step every later read took again
+    (65 000 unfoldings of `List.drop` on `joins…`); they are now set aside
+    on entry and given back (`M.saveLits`);
+  - a variable's last `v` line: the first from the end (`find?` on the
+    reversed list, one term per function) instead of a fold over all.
+  `joins…`'s Elab.lean part took 3.30 s of kernel (3.11 s at base), 2.53 s
+  with the lines read per drop and the next two changes; the bits then took
+  it from 2.26 to 1.83 s (both measured on a build without the witnesses).
+  The 26 bundles that had Elab.lean at base: 10.31 s of kernel at base,
+  9.27 s with the lines read per drop and the next two changes.
+- **Peak memory** (the summed RSS of certify's process tree, sampled every
+  5 ms), against the same base: the largest peak 2585 → 2585 MiB
+  (`joins…`); the 6 new programs +22 to +36 MiB each (`C.Elab` and the
+  kernel's work in the one process); the other 56 within −17 to +8 MiB;
+  the sum of the 62 peaks +0.2 %.
+- **Where the rest goes.** The kernel's time is spread: no pass of
+  `elabIR` but the drop's check costs more than ≈ 0.05 s alone on a small
+  program, and `perf` on Lean shows term instantiation and the kernel's
+  caches (hash lookups, freeing) on top, not any one definition. Of
+  nurl-cert's own time (≈ 60–110 ms a program, built `-O0` by the
+  selftest), 86 % is sha256 of formal/'s tree (7 MB of Lean sources, the
+  manifest's `formal_tree`), and `lake env` adds ≈ 50 ms a run before
+  Lean starts; neither is this step's, and both are the same for base and
+  branch.
+- A translator limit seen on the way: tolean.nu crashes (exit 139, stack)
+  on a synthetic body of 50 such Vecs, which `elabIR` reads; certify has
+  no term for such a program, so no Elab.lean either.
+
 ## Next
 
 **`elab` in Lean (route b)**, in formal/C/Elab.lean: the translator's
 rules over words. Done: the claims rest on `elabIR` for the subset of
 numbers (steps 2 and 3), buffers of numbers (step 4), views, slices,
-`foreach` and changes through a borrow (step 5) and closures (step 6),
-and `verify` checks the words against `Program.core`. Then:
-- the subset widened rule by rule (options; structs; destructors;
-  threads);
+`foreach` and changes through a borrow (step 5), closures (step 6) and
+structs and options (step 7), and `verify` checks the words against
+`Program.core`. Then:
+- the subset widened rule by rule (destructors; threads);
 - the per-encoding rows above replace `translation`;
 - kernel time is measured on the corpus;
 - `elab`'s parity with the NURL translator is shown over the sweep.

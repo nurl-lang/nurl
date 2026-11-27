@@ -49,4 +49,6 @@ and `cert3_leak` give A3's claim on every interleaving from the entry.
 `C/Elab.lean` (AGORA-1029): the core IR as words (`C.Elab.IR`) and its
 reader, in the kernel, the first part of building the term inside it;
 step 2, `C.Elab.elabIR`: the term of a scalar program built from those
-words, tolean.nu's rules for that subset (`elabIs_sound`, `elab_while`). -/
+words, tolean.nu's rules for that subset (`elabIs_sound`, `elab_while`),
+widened by steps 4 to 7 to buffers, views, closures (`elab_clo`), structs
+(`elab_struct`) and options (`elab_opt`). -/

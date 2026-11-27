@@ -230,26 +230,28 @@ $ `words.nu`
 }
 
 // The constructors `C.Elab.elabIR` builds terms from (formal/C/Elab.lean:
-// `go`, `rhsS`, `intrS`, `editS`, `callAny`, `letcallS`, `readE`, `printE`,
-// `operandE`, `retR`, `modeOf`, `fnElab`, `elabIR`; step 6's `callindS`,
-// `cloLitS`, `pairUp`, `capBinds`, `cloFnElab`, `envTy`, `ifaceFn`), as
-// the translator writes them:
+// `go`, `rhsS`, `intrP`, `editS`, `callAny`, `letcallS`, `readP`,
+// `operandE`, `operandP`, `fieldTemp`, `retR`, `modeOf`, `fnElab`, `elabIR`;
+// step 6's `callindS`, `cloLitS`, `pairUp`, `capBinds`, `cloFnElab`,
+// `envTy`, `ifaceFn`; step 7's `tyR`, `sndChain`), as the translator writes
+// them:
 //   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop .push .free .edit .callc
-//   Rhs   .expr .new .var .borrow .at .view .sat .pack .pair .fst .snd
-//   Expr  .any .lit .var .add .lt .len .slen
+//   Rhs   .expr .new .var .borrow .at .view .sat .pack .pair .fst .snd .inl .inr .getr
+//   Expr  .any .lit .var .add .lt .len .slen .isl
 //   Edit  .push .trunc
 //   PMode .inp .sink .inout
 //   Eff   .replace .drop .realloc .dropIn
-//   Ty    .int .vec .slice .prod .fn
+//   Ty    .int .vec .slice .prod .sum .fn
 //   Cross .any (a closure's class; the same word as Expr's)
-// and the Bools of `resOwn := false` / `true` (a buffer handed back) and of
-// `.edit true` (a change through a borrow). A new constructor elabIR emits
-// goes into this list too (Elab.lean says so above `elabIR`); the
-// selftest's sweep fails if a certify program in the subset loses its
-// Elab.lean.
-// Of those, the ones elabIR builds for closures alone (step 6).
-: s ELAB_CLO_CTORS `callc pack pair fst snd prod`
-: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc expr new var borrow at view sat pack pair fst snd any lit add lt len slen trunc inp sink inout replace drop realloc dropIn int vec slice prod fn`
+// and the Bools of `resOwn := false` / `true` (a buffer, a struct or an
+// option handed back) and of `.edit true` (a change through a borrow). A
+// new constructor elabIR emits goes into this list too (Elab.lean says so
+// above `elabIR`); the selftest's sweep fails if a certify program in the
+// subset loses its Elab.lean.
+// Of those, the ones elabIR builds for closures alone (step 6; step 7's
+// structs build `.prod .pair .fst .snd` too).
+: s ELAB_CLO_CTORS `callc pack`
+: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc expr new var borrow at view sat pack pair fst snd inl inr getr any lit add lt len slen isl trunc inp sink inout replace drop realloc dropIn int vec slice prod sum fn`
 
 // Can Program.lean's term be `elabIR`'s at all? F when it holds a
 // constructor outside ELAB_CTORS: `elabIs` compares the two terms
@@ -260,10 +262,10 @@ $ `words.nu`
 // `true` is no constructor: the translator writes it in `resOwn` and in
 // constructors outside the list, `.edit true`, `.chanRecv true`.)
 // Also F when it holds one of ELAB_CLO_CTORS but no `.fn`: elabIR builds
-// those for a program with closures only, and a term of it with any of
-// them holds `.fn` too (an interface's first parameter; formal/C/Elab.lean
-// says so above `elabIR`), so this skip is exact as well. A struct's term
-// (`.prod`, `.pair`, `.fst`) is skipped by it.
+// `.callc` and `.pack` only for a call through, or a literal of, a variable
+// of a closure type, and every closure type has an interface whose first
+// parameter is a `.fn` (formal/C/Elab.lean says so above `elabIR`), so this
+// skip is exact as well.
 @ cert_elab_candidate s text → b {
     : ( Vec String ) ok ( string_split ( string_from ELAB_CTORS ) ` ` )
     : ( Vec String ) clo ( string_split ( string_from ELAB_CLO_CTORS ) ` ` )
