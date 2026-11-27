@@ -73,6 +73,11 @@ Every mutating operation on a root binding `r` has an effect `e : Eff` ordered b
 | Pop (`vec_pop r`) | `.drop` (rank 2) | **Yes** | **Yes** (element may drop) | Only if `r` holds views (`hv`) | No |
 | Move / `=` / `vec_free` / scope end | `.replace` (rank 3) | **Yes** | **Yes** | **Yes** | **Yes** (at `exitScope`) |
 
+AGORA-374 adds `Kind.innerAt i` (strictly inside element `i`) and `Eff.dropInAt i`
+(a change strictly inside element `i`): `.dropInAt i` ends what `.dropIn` ends but
+`.innerAt j` for `j ≠ i`; `.realloc` ends `.innerAt` (a push may be an insert's first
+step); a reorder asks `NoIdx`. A call's boundary forgets indices (`Kind.coarse`).
+
 ---
 
 ## 3. Theorem Blueprint Graph (Landmark Definitions & Theorems)
