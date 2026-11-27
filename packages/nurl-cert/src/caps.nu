@@ -106,7 +106,10 @@ $ `coreir.nu`
 
 // The claim's sentence: what it can do, then what it never does, every
 // class of CAPS_DOORS in one of the two (ffi.unknown, fd and net.io only in
-// the first: their absence says nothing a reader needs).
+// the first: their absence says nothing a reader needs).  A program that
+// reaches an unclassed runtime function (ffi.unknown) gets no "never": that
+// function could do anything, so the sentence says its effects outside its
+// memory are not bounded.
 @ __cp_never_listed s c → b {
     ^ ! | | ( nc_is ( string_from c ) `ffi.unknown` ) ( nc_is ( string_from c ) `fd` ) ( nc_is ( string_from c ) `net.io` )
 }
@@ -142,6 +145,19 @@ $ `coreir.nu`
         = k + k 1
     }
     : String o ( string_new )
+    : String unk ( string_from `ffi.unknown` )
+    ? ( __cp_in unk cls ) {
+        ? fi {
+            ( string_push_str o `Oman muistinsa ulkopuolella se voi: ` )
+            ( string_push_str o ( string_data can ) )
+            ( string_push_str o `. Sen vaikutuksia oman muistinsa ulkopuolella ei ole rajattu.` )
+        } {
+            ( string_push_str o `Outside its own memory it can: ` )
+            ( string_push_str o ( string_data can ) )
+            ( string_push_str o `. Its effects outside its own memory are not bounded.` )
+        }
+        ^ o
+    } {}
     ? fi {
         ? == 0 ( string_len can ) { ( string_push_str o `Se ei tee mitään oman muistinsa ulkopuolella.` ) } {
             ( string_push_str o `Oman muistinsa ulkopuolella se voi vain: ` )
@@ -336,7 +352,8 @@ $ `coreir.nu`
 
 // The functions a run of the term in Program.lean `lean` can enter: the
 // closure, from the entry statement, of the names each function's
-// definition holds; sorted. None when the term has no entry.
+// definition holds; sorted. None when the term has no entry, declares its
+// functions out of order (fn0, fn1, …) or names one it does not declare.
 @ cert_runs String lean → ?( Vec i ) {
     : ( Vec ( Vec i ) ) names ( vec_new [( Vec i )] )
     : ( Vec i ) entry ( vec_new [i] )
@@ -355,7 +372,11 @@ $ `coreir.nu`
                 : ~ i p 6
                 : i kf ( __cp_num t p )
                 ? & >= kf 0 & < p ( slice_len [u] t ) == ( slice_byte t p ) 32 {
-                    ~ <= ( vec_len [( Vec i )] names ) kf { ( vec_push [( Vec i )] names ( vec_new [i] ) ) }
+                    // the functions are declared in order, fn0, fn1, …: an
+                    // index is the one the next declaration has, so the work
+                    // here grows with the declarations, not with an index
+                    ? != kf ( vec_len [( Vec i )] names ) { ^ @ ?( Vec i ) { F } } {}
+                    ( vec_push [( Vec i )] names ( vec_new [i] ) )
                     = cur kf
                 } {}
             } {
@@ -367,49 +388,50 @@ $ `coreir.nu`
         } {}
         ? == cur -1 { ( __cp_line_names l entry ) } {
             ? >= cur 0 {
-                : ( Vec i ) v ( vec_clone [i] ( vec_at [( Vec i )] names cur ) )
-                ( __cp_line_names l v )
-                : b _s ( vec_set [( Vec i )] names cur v )
+                : ( Vec i ) w ( vec_new [i] )
+                ( __cp_line_names l w )
+                ? > ( vec_len [i] w ) 0 {
+                    : ( Vec i ) v ( vec_clone [i] ( vec_at [( Vec i )] names cur ) )
+                    : i wn ( vec_len [i] w )
+                    : ~ i j 0
+                    ~ < j wn { ( vec_push [i] v ( vec_at [i] w j ) ) = j + j 1 }
+                    : b _s ( vec_set [( Vec i )] names cur v )
+                } {}
             } {}
         }
         = q + q 1
     }
     ? ! has_entry { ^ @ ?( Vec i ) { F } } {}
-    // the closure, from the entry's names
-    : ( Vec i ) seen ( vec_new [i] )
+    // the closure, from the entry's names; a name no declaration has is not
+    // a function of the term (the translator writes none)
+    : i nf ( vec_len [( Vec i )] names )
+    : ( Vec b ) seen ( vec_new [b] )
+    : ~ i z 0
+    ~ < z nf { ( vec_push [b] seen F ) = z + z 1 }
     : ( Vec i ) work ( vec_clone [i] entry )
     ~ > ( vec_len [i] work ) 0 {
         ?? ( vec_pop [i] work ) {
             T f → {
-                ? ! ( __cp_has seen f ) {
-                    ( vec_push [i] seen f )
-                    ? < f ( vec_len [( Vec i )] names ) {
-                        : ( Vec i ) ns ( vec_at [( Vec i )] names f )
-                        : i m ( vec_len [i] ns )
-                        : ~ i j 0
-                        ~ < j m {
-                            ( vec_push [i] work ( vec_at [i] ns j ) )
-                            = j + j 1
-                        }
-                    } {}
+                ? | < f 0 >= f nf { ^ @ ?( Vec i ) { F } } {}
+                ? ! ( vec_at [b] seen f ) {
+                    : b _s3 ( vec_set [b] seen f T )
+                    : ( Vec i ) ns ( vec_at [( Vec i )] names f )
+                    : i m ( vec_len [i] ns )
+                    : ~ i j 0
+                    ~ < j m {
+                        ( vec_push [i] work ( vec_at [i] ns j ) )
+                        = j + j 1
+                    }
                 } {}
             }
             F → {}
         }
     }
-    // sorted (insertion: the lists are short)
+    // sorted: in index order
     : ( Vec i ) out ( vec_new [i] )
-    : i ns ( vec_len [i] seen )
     : ~ i a 0
-    ~ < a ns {
-        : i x ( vec_at [i] seen a )
-        ( vec_push [i] out x )
-        : ~ i b - ( vec_len [i] out ) 1
-        ~ & > b 0 > ( vec_at [i] out - b 1 ) x {
-            : b _s1 ( vec_set [i] out b ( vec_at [i] out - b 1 ) )
-            : b _s2 ( vec_set [i] out - b 1 x )
-            = b - b 1
-        }
+    ~ < a nf {
+        ? ( vec_at [b] seen a ) { ( vec_push [i] out a ) } {}
         = a + a 1
     }
     ^ @ ?( Vec i ) { T out }
@@ -496,8 +518,11 @@ $ `coreir.nu`
     ( Vec CapWit ) wits
 }
 
+// A library function: its file starts with `stdlib/`.  The translator's rule
+// (tolean.nu, the `prog` it numbers), so the indices of `Cert.runs` name the
+// same functions here.
 @ __cp_is_lib String f → b {
-    ^ | ( string_starts_with f `stdlib/` ) ( string_contains f `/stdlib/` )
+    ^ ( string_starts_with f `stdlib/` )
 }
 
 // What N.cap reads of the core IR, and nothing more: each function's
@@ -1012,7 +1037,7 @@ $ `manifest.nu`
 }
 
 @ cert_caps_make String lean String core String table → !CapsMade String {
-    : ( Vec i ) runs ?? ( cert_runs lean ) { T r → r F → { ^ @ !CapsMade String { F ( string_from `the term has no entry statement` ) } } }
+    : ( Vec i ) runs ?? ( cert_runs lean ) { T r → r F → { ^ @ !CapsMade String { F ( string_from `the term has no entry statement, declares its functions out of order, or names one it does not declare` ) } } }
     : ( Vec CapRow ) tab \ ( cert_caps_table table )
     : CapsRes res \ ( cert_caps_fns core tab runs )
     : Json j ( cert_caps_json runs res )

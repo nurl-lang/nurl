@@ -302,6 +302,34 @@ $ `stdlib/ext/json.nu`
 
 @ nc_is_s s a s b → b { ^ != 0 ( nurl_str_eq a b ) }
 
+// The lines of `text`'s import header: its first lines, as long as they
+// start `import `.
+@ __lt_header_lines s text → i {
+    : ( Slice u ) t ( slice_of_str text )
+    : i n ( slice_len [u] t )
+    : ~ i lines 0
+    : ~ i k 0
+    ~ < k n {
+        ? ! ( __lt_at t k `import ` ) { ^ lines } {}
+        = lines + lines 1
+        ~ & < k n != ( slice_byte t k ) 10 { = k + k 1 }
+        = k + k 1
+    }
+    ^ lines
+}
+
+@ __lt_at ( Slice u ) t i k s p → b {
+    : ( Slice u ) q ( slice_of_str p )
+    : i m ( slice_len [u] q )
+    ? > + k m ( slice_len [u] t ) { ^ F } {}
+    : ~ i j 0
+    ~ < j m {
+        ? != ( slice_byte t + k j ) ( slice_byte q j ) { ^ F } {}
+        = j + j 1
+    }
+    ^ T
+}
+
 // Check `bundle/Program.lean` and `bundle/Claims.lean` (and with `elab`,
 // `bundle/Elab.lean`) in one Lean process: the file `__lt_combined` makes,
 // in `work`, run by `lean --json` inside formal/ with formal/'s build on
@@ -397,6 +425,12 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     // an error Lean itself placed in the claims' part
     : ~ b cerr F
+    // an error in the import header (Lean places a module it cannot load at
+    // the header, line 1): it may be an optional part's import (C.Elab,
+    // C.Caps, C.Caps3), so it does not stand against the claims until they
+    // are checked again alone
+    : ~ b herr F
+    : i hdr ( __lt_header_lines ( string_data text ) )
     ~ < k n {
         : String l ( string_clone ( vec_at [String] ls k ) )
         ? > ( string_len ( string_trim l ) ) 0 {
@@ -419,7 +453,9 @@ $ `stdlib/ext/json.nu`
                                         ( string_push_str elog ( string_data mt ) )
                                     } {
                                         ( string_push_str log ( string_data mt ) )
-                                        ? ( nc_is_s ( string_data sev ) `error` ) { = cerr T } {}
+                                        ? ( nc_is_s ( string_data sev ) `error` ) {
+                                            ? <= ln hdr { = herr T } { = cerr T }
+                                        } {}
                                     }
                                 }
                                 = placed T
@@ -451,16 +487,26 @@ $ `stdlib/ext/json.nu`
     // the claims': the claims stand, the part is not proved)
     : b elab_failed & & & & | has_elab has_caps . r started == . r code 1 | ( cert_lean_has_error elog ) ( cert_lean_has_error klog ) ! ( cert_lean_has_error log )
     // A run that ended otherwise (killed, out of memory, an exit Lean does
-    // not give for an error) with no error of Lean's in the claims' part
-    // may have ended in the optional Elab.lean part: the claims are checked
-    // again alone, once, and Elab.lean is not proved. (Without Elab.lean,
-    // as in verify of a bundle that holds it, Cert.elab then fails.)
+    // not give for an error, an import it could not load) with no error of
+    // Lean's in the claims' own part may have ended in an optional part
+    // (Elab.lean's, Caps.lean's, or their imports): the claims are checked
+    // again alone, once, and the optional parts are not proved. A failure of
+    // that run is the claims' own. (Without Elab.lean, as in verify of a
+    // bundle that holds it, Cert.elab then fails; so does Cert.n_cap.)
     ? & & | has_elab has_caps ! | ok0 elab_failed ! cerr {
         : LeanRun again ( cert_lean_check2 lean formal bundle work F F )
-        : String note ( string_from `the Lean run ended abnormally (exit ` )
-        ( string_push_int note . r code )
-        ( string_push_str note `) before the Elab.lean part was checked; the claims were checked again alone` )
-        ^ @ LeanRun { . again ran . again log F note F ( string_new ) }
+        : String note ( string_new )
+        ? herr {
+            ( string_push_str note `Lean could not load the imports with the optional parts' (` )
+            ( string_push_str note ( string_data ( string_trim log ) ) )
+            ( string_push_str note `); the claims were checked again alone` )
+        } {
+            ( string_push_str note `the Lean run ended abnormally (exit ` )
+            ( string_push_int note . r code )
+            ( string_push_str note `) before the optional parts were checked; the claims were checked again alone` )
+        }
+        : String knote ( string_clone note )
+        ^ @ LeanRun { . again ran . again log F note F knote }
     } {}
     // (each optional part ran when the run did and held no error of its
     // own: a failed Caps.lean part leaves Elab.lean's proof standing)

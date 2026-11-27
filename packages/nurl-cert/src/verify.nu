@@ -267,24 +267,30 @@ $ `caps.nu`
             // Caps.lean the template over that list, byte for byte
             ( __vf_hash t m bundle `Caps.lean` `caps_lean` )
             ( __vf_hash t m bundle `caps.tsv` `caps_tsv` )
-            : String core_text2 ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
-            : String tab_text ?? ( nc_read ( string_data ( nc_join bundle `caps.tsv` ) ) ) { T x → x F → ( string_new ) }
-            ?? ( cert_caps_make ptext core_text2 tab_text ) {
-                T cm → {
-                    : String khave ?? ( nc_read ( string_data ( nc_join bundle `Caps.lean` ) ) ) { T x → x F → ( string_new ) }
-                    ( __vf_check t ( string_eq ( cert_caps_lean . cm runs ( string_data prof ) threads ) khave )
-                    `Caps.lean is the template over the functions the term can enter, byte for byte` `its list, statement or proof were edited` )
-                    : String jwant ( json_stringify . cm json )
-                    : String jhave ?? ( json_get m `capabilities` ) { T j → ( json_stringify j ) F → ( string_new ) }
-                    ( __vf_check t ( string_eq jwant jhave )
-                    `the capabilities are the ones the term, the core IR and caps.tsv give (list, classes, chains)` `` )
-                    : i ncl ( cert_claim_count threads )
-                    : String sen ( mj_get_str m ( string_data ( __vf_path `claims.` + ncl 1 `.sentence.en` ) ) )
-                    : String sfi ( mj_get_str m ( string_data ( __vf_path `claims.` + ncl 1 `.sentence.fi` ) ) )
-                    ( __vf_check t & ( string_eq sen ( cert_caps_sentence_en . . cm res doors ) ) ( string_eq sfi ( cert_caps_sentence_fi . . cm res doors ) )
-                    `N.cap's sentences name exactly the classes it reaches` `` )
+            // (made again only from files every check above passed: the
+            // work is in proportion to them, and a refused file gets none)
+            ? > . t bad 0 {
+                ( __vf_bad t `the capabilities can be made again from the bundle` `not run: the bundle failed the checks above` )
+            } {
+                : String core_text2 ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
+                : String tab_text ?? ( nc_read ( string_data ( nc_join bundle `caps.tsv` ) ) ) { T x → x F → ( string_new ) }
+                ?? ( cert_caps_make ptext core_text2 tab_text ) {
+                    T cm → {
+                        : String khave ?? ( nc_read ( string_data ( nc_join bundle `Caps.lean` ) ) ) { T x → x F → ( string_new ) }
+                        ( __vf_check t ( string_eq ( cert_caps_lean . cm runs ( string_data prof ) threads ) khave )
+                        `Caps.lean is the template over the functions the term can enter, byte for byte` `its list, statement or proof were edited` )
+                        : String jwant ( json_stringify . cm json )
+                        : String jhave ?? ( json_get m `capabilities` ) { T j → ( json_stringify j ) F → ( string_new ) }
+                        ( __vf_check t ( string_eq jwant jhave )
+                        `the capabilities are the ones the term, the core IR and caps.tsv give (list, classes, chains)` `` )
+                        : i ncl ( cert_claim_count threads )
+                        : String sen ( mj_get_str m ( string_data ( __vf_path `claims.` + ncl 1 `.sentence.en` ) ) )
+                        : String sfi ( mj_get_str m ( string_data ( __vf_path `claims.` + ncl 1 `.sentence.fi` ) ) )
+                        ( __vf_check t & ( string_eq sen ( cert_caps_sentence_en . . cm res doors ) ) ( string_eq sfi ( cert_caps_sentence_fi . . cm res doors ) )
+                        `N.cap's sentences name exactly the classes it reaches` `` )
+                    }
+                    F e → ( __vf_bad t `the capabilities can be made again from the bundle` ( string_data e ) )
                 }
-                F e → ( __vf_bad t `the capabilities can be made again from the bundle` ( string_data e ) )
             }
         } {
             ( __vf_check t & ! ( file_exists ( string_data ( nc_join bundle `Caps.lean` ) ) ) ! ( __vf_has m `capabilities` )

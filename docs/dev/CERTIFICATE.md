@@ -185,6 +185,10 @@ what it never does, from fixed phrases:
 > Outside its own memory it can only: write to standard output. It never:
 > write to standard error; read standard input …; read files; …
 
+A program that reaches an `ffi.unknown` function gets no "never" list:
+that function could do anything, so its sentence lists what it can do and
+ends "Its effects outside its own memory are not bounded."
+
 Two halves mean two kinds of trust, and the premises name both. The list
 is a theorem. The classes rest on the table (`caps-table`: the C runtime
 and the OS do what the table says) and on the core IR's calls being what

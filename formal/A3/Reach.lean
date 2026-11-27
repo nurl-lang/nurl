@@ -35,19 +35,8 @@ theorem CfgFns.put {C : Cfg} (h : CfgFns A C) {i : Nat} {m : Mem} {s : Stmt} (hm
   · exact h.1 t ht
   · exact ⟨hm.1, hs⟩
 
-/-- The marking sweep keeps or marks blocks: their packages and their types'
-    destructors stay. -/
-theorem BlkFns.sweepBlkD {R : Val → Prop} {B : Nat → Option Blk} (h : BlkFns A B) :
-    BlkFns A (sweepBlkD R B) := by
-  refine ⟨fun k bl hk => ?_, fun k bl hk => ?_⟩
-  · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
-    · exact h.1 k bl hk0
-    · refine ⟨?_, by rw [Blk.mark_rd]; exact pkgFns_int A 0⟩
-      rw [hp.tree hk0]; exact (h.1 k bl0 hk0).1
-  · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
-    · exact h.2 k bl hk0
-    · exact h.2 k bl0 hk0
-
+/-- The sweep of the shared blocks is A2's (`A2.BlkFns.sweepBlkD`); no thread's
+    slots change. -/
 theorem CfgFns.sweepD {C : Cfg} (h : CfgFns A C) : CfgFns A C.sweepD := ⟨h.1, BlkFns.sweepBlkD h.2⟩
 
 theorem CSettle.fns {P : Prog} (hP : ProgFns A P) {i : Nat} {C C' : Cfg} (h : CSettle P i C C')

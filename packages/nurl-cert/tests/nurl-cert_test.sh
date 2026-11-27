@@ -5,7 +5,7 @@
 #  nurl-cert end-to-end tests (AGORA-1019).
 #
 #  Run from anywhere in a checkout:  packages/nurl-cert/tests/nurl-cert_test.sh
-#  Needs: build/nurlc, Lean's lean (and lake) on PATH, formal/ built (lake build C.Cert C.Cert3 C.Elab C.Caps).
+#  Needs: build/nurlc, Lean's lean (and lake) on PATH, formal/ built (lake build C.Cert C.Cert3 C.Elab C.Caps C.Caps3).
 #  Env:   NURL_CERT  a built nurl-cert (default: build it into build/)
 #         JOBS       parallel certify runs (default: nproc)
 #
@@ -1090,6 +1090,51 @@ if ( cd "$ROOT/formal" && lake env lean --root="$KB" -o "$KW/Program.olean" "$KB
         && ! LEAN_PATH="$KW" lake env lean "$KW/Caps.lean" > "$KW/k.log" 2>&1 ) && grep -q "C.capsOKB P entry runs = true" "$KW/k.log" && grep -q "is false" "$KW/k.log"; then
     ok "a list missing a called function: the kernel refuses Cert.runs_closed"
 else bad "a list missing a called function: the kernel refuses Cert.runs_closed"; head -5 "$KW/k.log"; fi
+# (i) a `def fn<k>` with a huge index, its hash updated: the capabilities
+# are not made from it (an index is the next declaration's, so the work grows
+# with the declarations, not with the index: verify ends at once), and Lean
+# is not run.
+kfresh; sed -i 's/^def fn0 : Fn :=/def fn1000000000 : Fn :=/' "$NC/k/Program.lean"; krehash program_lean "$NC/k/Program.lean"
+out="$(timeout 60 "$C" verify "$NC/k" --formal "$ROOT/formal" 2>&1)"; rc=$?
+if [ "$rc" != 0 ] && [ "$rc" != 124 ] && printf '%s\n' "$out" | grep -q "FAIL  the capabilities can be made again from the bundle: .*out of order"; then
+    ok "a def fn<k> with a huge index: refused at once, the capabilities not made"
+else bad "a def fn<k> with a huge index: refused at once, the capabilities not made (rc $rc)"; printf '%s\n' "$out" | grep -v "^  ok" | head -5; fi
+# (j) a runtime function the table does not class (ffi.unknown): the
+# sentence says no "never", only that its effects outside its memory are not
+# bounded. (A standard library root whose caps.tsv has no nurl_println row.)
+SL="$NC/sl"; mkdir -p "$SL/stdlib"
+for e in "$ROOT"/stdlib/*; do [ "$(basename "$e")" = caps.tsv ] || ln -s "$e" "$SL/stdlib/"; done
+grep -v $'^nurl_println\t' "$ROOT/stdlib/caps.tsv" > "$SL/stdlib/caps.tsv"
+"$C" certify "$NC/prints.nu" "${CA[@]}" --stdlib "$SL" --out "$NC/unk.cert" > "$NC/unk.out" 2>&1 || true
+if python3 - "$NC/unk.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+nc = [c for c in m["claims"] if c["id"] == "N.cap"][0]
+en, fi = nc["sentence"]["en"], nc["sentence"]["fi"]
+ok = (nc["status"] == "proved" and "ffi.unknown" in {w["class"] for w in m["capabilities"]["classes"]}
+      and "never" not in en and en.endswith("Its effects outside its own memory are not bounded.")
+      and "ei koskaan" not in fi and fi.endswith("Sen vaikutuksia oman muistinsa ulkopuolella ei ole rajattu."))
+sys.exit(0 if ok else 1)
+EOF3
+then ok "a runtime function the table does not class: no \"never\", its effects are not bounded"
+else bad "a runtime function the table does not class: no \"never\", its effects are not bounded"; grep -i "n.cap\|error" "$NC/unk.out" | head -5; fi
+"$C" verify "$NC/unk.cert" --formal "$ROOT/formal" > "$NC/unk.vout" 2>&1 \
+    && ok "the ffi.unknown bundle verifies" || { bad "the ffi.unknown bundle verifies"; grep -v '^  ok' "$NC/unk.vout" | head -5; }
+# (k) an optional part's import Lean cannot load (a formal tree with no
+# built C.Caps): the claims are checked again alone and stand; N.cap is open
+# and says why.
+F2="$NC/f2"; cp -rs "$ROOT/formal" "$F2"; rm -f "$F2"/.lake/build/lib/lean/C/Caps.olean
+"$C" certify "$NC/prints.nu" --nurlc "$NURLC" --formal "$F2" --out "$NC/noimp.cert" > "$NC/noimp.out" 2>&1 || true
+if python3 - "$NC/noimp.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+st = {c["id"]: c["status"] for c in m["claims"]}
+nc = [c for c in m["claims"] if c["id"] == "N.cap"][0]
+sys.exit(0 if st["M.safe"] == "proved" and st["N.cap"] == "open" and "caps_lean" not in m["hashes"] else 1)
+EOF3
+then ok "C.Caps not loadable: the M claims stand, N.cap is open"
+else bad "C.Caps not loadable: the M claims stand, N.cap is open"; tail -8 "$NC/noimp.out"; fi
+rm -rf "$F2"
 
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then

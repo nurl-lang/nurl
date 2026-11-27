@@ -790,17 +790,22 @@ theorem fns_step {P : Prog} (hP : ProgFns A P) {m : Mem} {s : Stmt} {r : Res} (h
 
 /-! ### The sweeps -/
 
-/-- The marking sweep keeps or marks blocks, and changes no slot: their
-    packages and their types' destructors stay. -/
-theorem MemFns.sweepDR {R : Val → Prop} {m : Mem} (h : MemFns A m) : MemFns A (m.sweepDR R) := by
-  refine ⟨h.1, fun k bl hk => ?_, fun k bl hk => ?_⟩
+/-- The marking sweep keeps or marks blocks: their packages and their types'
+    destructors stay.  A3's sweep of the shared blocks is this one too. -/
+theorem BlkFns.sweepBlkD {R : Val → Prop} {B : Nat → Option Blk} (h : BlkFns A B) :
+    BlkFns A (sweepBlkD R B) := by
+  refine ⟨fun k bl hk => ?_, fun k bl hk => ?_⟩
   · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
-    · exact h.blk.1 k bl hk0
+    · exact h.1 k bl hk0
     · refine ⟨?_, by rw [Blk.mark_rd]; exact pkgFns_int A 0⟩
-      rw [hp.tree hk0]; exact (h.blk.1 k bl0 hk0).1
+      rw [hp.tree hk0]; exact (h.1 k bl0 hk0).1
   · rcases sweepBlkD_some hk with ⟨hk0, _⟩ | ⟨bl0, hk0, _, hp, rfl⟩
-    · exact h.dead k bl hk0
-    · exact h.dead k bl0 hk0
+    · exact h.2 k bl hk0
+    · exact h.2 k bl0 hk0
+
+/-- The marking sweep changes no slot. -/
+theorem MemFns.sweepDR {R : Val → Prop} {m : Mem} (h : MemFns A m) : MemFns A (m.sweepDR R) :=
+  ⟨h.1, h.blk.sweepBlkD⟩
 
 theorem MemFns.sweepD {m : Mem} (h : MemFns A m) : MemFns A m.sweepD := h.sweepDR
 

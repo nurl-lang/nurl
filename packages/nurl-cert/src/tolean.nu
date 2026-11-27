@@ -3386,6 +3386,8 @@ $ `coreir.nu`
     : ~ i k 0
     ~ < k nall {
         : CoreFn fn ( vec_at [CoreFn] . ir fns k )
+        // a library function: its file starts with `stdlib/` (caps.nu's
+        // `__cp_is_lib` is the same rule: N.cap's indices are these)
         ? ! ( __sw ( string_data . fn file ) `stdlib/` ) {
             ( __mset names ( string_data . fn name ) ( vec_len [i] prog ) )
             ( vec_push [i] prog k )
