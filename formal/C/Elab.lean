@@ -2752,6 +2752,123 @@ def fnElab (tops : List (List W)) (prog : List CoreFn) (cl : CloTab) (fn : CoreF
     pure ({ params := params, resTy := rt, resOwn := own, lends := [], rholds := [],
             outHolds := [], body := .block inner, nvars := s.next + 1 }, s.wsig)
 
+/-! ### Conditional stubs (AGORA-1036, step 3 of CONDITIONAL_CERTIFICATES.md) -/
+
+def kBodyDone : List Nat := [98, 111, 100, 121, 95, 100, 111, 110, 101]
+def kInout : List Nat := [105, 110, 111, 117, 116]
+def kNop : W := 0x1706f6e
+def kRetnx : W := 0x1786e746572
+
+def stubThruB (f : W) : Bool :=
+  let cs := wordOf f
+  cs == stringPushStrB || prefixN vecClearB cs || prefixN vecTruncB cs ||
+    prefixN vecReserveB cs || prefixN vecShrinkB cs
+
+def stubExtraNonThru : List (List Nat) :=
+  ["nurl_print", "nurl_print_int", "nurl_eprint", "nurl_eprintln", "nurl_free_count",
+   "nurl_alloc_count", "nurl_str_eq", "nurl_str_cmp", "nurl_str_starts", "nurl_str_ends",
+   "nurl_str_find", "nurl_str_to_int"].map bytesOf
+
+def stubNonThruB (f : W) : Bool :=
+  if f == kSpawnW || stubThruB f then false
+  else intrinsicName f || f == kJoinW || stubExtraNonThru.any (· == wordOf f)
+
+def stubAdd (cs : List Nat) (g : Nat) : List Nat :=
+  if cs.contains g then cs else cs ++ [g]
+
+def stubRv (tops : List (List W)) (names : List W) (cl : CloTab) (fn : CoreFn)
+    (views : List Nat) (rw : List W) (callees : List Nat) (thru : Bool) :
+    Option (List Nat × Bool) :=
+  match rw with
+  | kUse :: _ | kAgg :: _ | kScalar :: _ | kPayload :: _ | kClosure :: _ => some (callees, thru)
+  | kCallind :: _ :: c0 :: _ => do
+    let vid ← vref c0
+    let ty ← vlOf cl fn.vars views [] vid
+    match ty with
+    | .fn [σ] _ => some (stubAdd callees σ, thru)
+    | _ => none
+  | kCall :: f :: _ =>
+    match indexOf names f with
+    | some fi => some (stubAdd callees fi, thru)
+    | none =>
+      if stubThruB f then some (callees, true)
+      else if stubNonThruB f then some (callees, thru)
+      else
+        let sm := sumOf tops f
+        if sm.val kBodyDone == some [49] && (sm.val kMutates).isNone &&
+            (sm.val kReallocs).isNone && (sm.val kDrops).isNone && (sm.val kInout).isNone then
+          some (callees, thru)
+        else none
+  | _ => none
+
+def stubScan (tops : List (List W)) (names : List W) (cl : CloTab) (fn : CoreFn)
+    (views : List Nat) : List (List W) → List Nat → Bool → Option (List Nat × Bool)
+  | [], callees, thru => some (callees, thru)
+  | l :: ls, callees, thru =>
+    match l with
+    | [] => stubScan tops names cl fn views ls callees thru
+    | w0 :: rest =>
+      if w0 == kLine || w0 == kNop || w0 == kScope || w0 == kEnd || w0 == kIf || w0 == kElse ||
+          w0 == kMatch || w0 == kArm || w0 == kLoop || w0 == kLoopcond || w0 == kForeach ||
+          w0 == kBreak || w0 == kContinue || w0 == kDrop || w0 == kRet || w0 == kRetnx ||
+          w0 == kDefer then
+        stubScan tops names cl fn views ls callees thru
+      else if w0 == kLet then
+        match rest with
+        | vidW :: rv => do
+          let vid ← natOf vidW
+          let callees' ← match cl.dts.find? (·.1 == tyD fn.vars vid kEmpty) with
+            | some (_, some df) => some (stubAdd callees df)
+            | some (_, none) => none
+            | none => some callees
+          let (c2, t2) ← stubRv tops names cl fn views rv callees' thru
+          stubScan tops names cl fn views ls c2 t2
+        | _ => none
+      else if w0 == kAssign then
+        match rest with
+        | _ :: rv => do
+          let (c2, t2) ← stubRv tops names cl fn views rv callees thru
+          stubScan tops names cl fn views ls c2 t2
+        | _ => none
+      else if w0 == kEval then do
+        let (c2, t2) ← stubRv tops names cl fn views rest callees thru
+        stubScan tops names cl fn views ls c2 t2
+      else none
+
+/-- Build a stub `Fn` for an assumed function (AGORA-1036): its signature
+    from `fn`/`v`/`sum` (without requiring local variable types to be in the
+    subset), and a body `.seq s .panic` whose `Stmt.calls` and `Stmt.hasThru`
+    match the real body's. -/
+def fnStubElab (tops : List (List W)) (prog : List CoreFn) (cl : CloTab) (fn : CoreFn) :
+    Option (Fn × List (Nat × Nat)) := do
+  if startsB fn.name closureB then none
+  let rt ← tyOf cl fn.ret
+  let own ← match rt with
+    | .int => some false
+    | .slice _ => none
+    | .dtor _ _ => none
+    | _ => some true
+  let sm := sumOf tops fn.name
+  if sm.val kRetdyn == some [49] then none
+  if borrowedB sm then none
+  if own && (sm.val kRetAlias).isSome then none
+  let views := viewVars fn.body (fn.body.length + 1) []
+  let c : Ctx := ⟨fn.np, fn.vars, prog, sm, fn.body, views, eachIds fn.body, viewEdges fn.body fn.vars views, cl,
+    fn.np, none, tops, []⟩
+  if (List.range fn.np).any (fun j => (cl.dtorF (tyD fn.vars j kEmpty)).isSome &&
+      (bitB (c.flags j) 1 || bitB (c.flags j) 2)) then none
+  let params ← (List.range fn.np).mapM fun j =>
+    (vlOf cl fn.vars views [] j).map (modeOf cl sm fn views j, ·)
+  let names := prog.map (·.name)
+  let (callees, thru) ← stubScan tops names cl fn views fn.body [] false
+  let s0 : Stmt := if thru then .edit true 0 (.trunc (.lit 0)) else .skip
+  let s := callees.foldr (fun g acc =>
+    match acc with
+    | .skip => .letcall 0 g [] .skip
+    | _ => .seq (.letcall 0 g [] .skip) acc) s0
+  pure ({ params := params, resTy := rt, resOwn := own, lends := [], rholds := [],
+          outHolds := [], body := .seq s .panic, nvars := 0 }, [])
+
 /-- Drop exactly `n` elements, or fail if there are fewer. -/
 def dropN {α : Type} : Nat → List α → Option (List α)
   | 0, l => some l
@@ -3085,10 +3202,11 @@ def wsigOf (recs : List (Nat × Nat)) : Nat → Option Nat
     the constructors `elabIR` emits (`ELAB_CTORS`,
     packages/nurl-cert/src/claims.nu): a new constructor elabIR emits goes
     into nurl-cert's list too. -/
-def elabLT (ls : Lines) : Option (Bool × Prog × List Nat × Stmt) := do
+def elabLTA (ls : Lines) (A : List Nat) : Option (Bool × Prog × List Nat × Stmt) := do
   let fns ← fnsOfL ls
   let tops := topLines ls false
   let prog := fns.filter fun f => !startsB f.file stdlibB
+  if !A.isEmpty && !(A.all (· < prog.length) && nodupB A) then none
   -- (step 8) the program's destructor types, and every `ty` line's
   let dts0 ← dtorsOf (idxFrom 0 prog)
   let dts := dts0 ++ (← dOnlyOf tops)
@@ -3115,13 +3233,16 @@ def elabLT (ls : Lines) : Option (Bool × Prog × List Nat × Stmt) := do
   -- a closure's code where the program has no closure type, which no
   -- literal can pack (stricter: the translator translates it)
   if cl.tys.isEmpty && names.any (startsB · closureB) then none
-  let PW ← (prog.zip svs).mapM fun e => fnElab tops prog cl e.1 e.2
+  let PW ← (idxFrom 0 (prog.zip svs)).mapM fun e =>
+    if A.contains e.1 then fnStubElab tops prog cl e.2.1 else fnElab tops prog cl e.2.1 e.2.2
   let I ← (idxFrom cl.base cl.tys).mapM fun e => ifaceFn cl.tyls cl.dts e.1 e.2
   -- (step 10) one spawn wrapper per spawned code, after the interfaces
   let recs := (PW.map (·.2)).flatten
   let W ← (List.range spawned.length).mapM fun j => (wsigOf recs j).map wrapperFn
   let wb := cl.base + cl.tys.length
   pure (thr, PW.map (·.1) ++ I ++ W, (List.range spawned.length).map (wb + ·), .letcall 0 mi [] .skip)
+
+def elabLT (ls : Lines) : Option (Bool × Prog × List Nat × Stmt) := elabLTA ls []
 
 /-- The program and its entry statement, from the words, of a program that
     spawns no thread (A2's checker). -/
@@ -3137,11 +3258,29 @@ def elabL3 (ls : Lines) : Option (Prog × List Nat × Stmt) :=
   | some (true, P, sp, e) => some (P, sp, e)
   | _ => none
 
+/-- (AGORA-1036) Conditional elaboration: builds stubs for the assumed indices `A`. -/
+def elabLCond (ls : Lines) (A : List Nat) : Option (Prog × Stmt) :=
+  match elabLTA ls A with
+  | some (false, P, _, e) => some (P, e)
+  | _ => none
+
+/-- (AGORA-1036) Threaded conditional elaboration: stubs for `A` and spawn wrappers. -/
+def elabL3Cond (ls : Lines) (A : List Nat) : Option (Prog × List Nat × Stmt) :=
+  match elabLTA ls A with
+  | some (true, P, sp, e) => some (P, sp, e)
+  | _ => none
+
 /-- The program and its entry statement, from the IR's words. -/
 def elabIR (ir : IR) : Option (Prog × Stmt) := elabL ir
 
 /-- (step 10) The same, for a program that spawns. -/
 def elabIR3 (ir : IR) : Option (Prog × List Nat × Stmt) := elabL3 ir
+
+/-- (AGORA-1036) Conditional elaboration from the IR's words. -/
+def elabIRCond (ir : IR) (A : List Nat) : Option (Prog × Stmt) := elabLCond ir A
+
+/-- (AGORA-1036) Threaded conditional elaboration from the IR's words. -/
+def elabIR3Cond (ir : IR) (A : List Nat) : Option (Prog × List Nat × Stmt) := elabL3Cond ir A
 
 /-! ### Comparing terms
 
@@ -3204,6 +3343,9 @@ def stmtBeq : Stmt → Stmt → Bool
   | .letd x f r s, b => match b with
     | .letd y g q t => x == y && f == g && decide (r = q) && stmtBeq s t
     | _ => false
+  | .panic, b => match b with
+    | .panic => true
+    | _ => false
   | _, _ => false
 
 theorem stmtBeq_sound : ∀ a b : Stmt, stmtBeq a b = true → a = b := by
@@ -3256,6 +3398,7 @@ theorem stmtBeq_sound : ∀ a b : Stmt, stmtBeq a b = true → a = b := by
     intro b h; cases b <;> simp only [stmtBeq, Bool.and_eq_true, Bool.false_eq_true, beq_iff_eq,
       decide_eq_true_eq] at h
     obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := h; subst h1; subst h2; subst h3; rw [ih _ h4]
+  | panic => intro b h; cases b <;> simp_all [stmtBeq]
   | _ => intro b h; simp [stmtBeq] at h
 
 def fnBeq (f g : Fn) : Bool :=
@@ -3334,6 +3477,37 @@ theorem elabIs_sound (ir : IR) (P : Prog) (e : Stmt) (h : elabIs ir P e = true) 
   · rename_i Q e' heq
     simp only [Bool.and_eq_true] at h
     rw [heq, progBeq_sound _ _ h.1, stmtBeq_sound _ _ h.2]
+  · simp at h
+
+/-- (AGORA-1036) `elabIs` for a conditional certificate (stubs at `A`). -/
+@[irreducible] def elabIsCond (ir : IR) (A : List Nat) (P : Prog) (e : Stmt) : Bool :=
+  match elabIRCond ir A with
+  | some (Q, e') => progBeq Q P && stmtBeq e' e
+  | none => false
+
+theorem elabIsCond_sound (ir : IR) (A : List Nat) (P : Prog) (e : Stmt)
+    (h : elabIsCond ir A P e = true) : elabIRCond ir A = some (P, e) := by
+  unfold elabIsCond at h
+  split at h
+  · rename_i Q e' heq
+    simp only [Bool.and_eq_true] at h
+    rw [heq, progBeq_sound _ _ h.1, stmtBeq_sound _ _ h.2]
+  · simp at h
+
+/-- (AGORA-1036) `elabIs3` for a threaded conditional certificate (stubs at `A`). -/
+@[irreducible] def elabIs3Cond (ir : IR) (A : List Nat) (P : Prog) (sp : List Nat) (e : Stmt) : Bool :=
+  match elabIR3Cond ir A with
+  | some (Q, sq, e') => progBeq Q P && sq == sp && stmtBeq e' e
+  | none => false
+
+theorem elabIs3Cond_sound (ir : IR) (A : List Nat) (P : Prog) (sp : List Nat) (e : Stmt)
+    (h : elabIs3Cond ir A P sp e = true) : elabIR3Cond ir A = some (P, sp, e) := by
+  unfold elabIs3Cond at h
+  split at h
+  · rename_i Q sq e' heq
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h
+    rw [heq, progBeq_sound _ _ h1, h2, stmtBeq_sound _ _ h3]
   · simp at h
 
 /-! ### Witnesses (step 2) -/
@@ -4286,5 +4460,33 @@ example : (elabS3 (irThrW (thrVs ++ [["v", "8", "1", "1", "0", "7", "-1", "e", "
     translation reads it as an option of two members, which it is not). -/
 example : (elabL (strs (irM [["v", "0", "1", "1", "0", "1", "-1", "r", "{ i1, i64, i64 }"]] [["ret", "c"]] []))).isNone := by
   decide +kernel
+
+/-! ### Conditional stub elaboration witness (AGORA-1036) -/
+
+def irCondW : SIR := [
+  ["fn", "log_msg", "void", "0", "1", "a.nu", "0", ""],
+  ["eval", "call", "nurl_print", "1", "c"],
+  ["endfn"],
+  ["fn", "main", "i64", "0", "2", "a.nu", "0", ""],
+  ["eval", "call", "log_msg", "0"],
+  ["ret", "c"],
+  ["endfn"]
+]
+
+def pCondW : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .seq .skip .panic, nvars := 0 },
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letcall 1 0 [] (.assign 0 (.expr .any))) (.exit 0)), nvars := 3 }
+]
+
+theorem elab_cond : elabIRCond (encIR irCondW) [0] = some (pCondW, .letcall 0 1 [] .skip) :=
+  elabIsCond_sound _ _ _ _ (by decide +kernel)
+
+/-- Without `0` assumed, `nurl_print` is outside the subset and `elabIR` answers none. -/
+example : elabIR (encIR irCondW) = none := by decide +kernel
+
+/-- An out-of-range assumed index is refused. -/
+example : elabIRCond (encIR irCondW) [2] = none := by decide +kernel
 
 end C.Elab

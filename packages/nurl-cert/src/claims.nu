@@ -355,7 +355,7 @@ $ `words.nu`
 // a keyword of Lean, hence `«elab»`; Lean prints the name `Cert.elab`.)
 // A threaded program's (`threads`: Program.lean names its spawns) is
 // about `C.Elab.elabIR3`, which builds the spawn wrappers too (step 10).
-@ cert_elab_lean String core b threads → ?String {
+@ cert_elab_lean String core b threads b cond → ?String {
     ? ! ( cert_words_ok core ) { ^ @ ?String { F } } {}
     : String w ( cert_words ( string_data core ) )
     : String o ( string_with_cap + ( string_len w ) 1024 )
@@ -368,14 +368,26 @@ $ `words.nu`
     ( string_push_str o `/-- Program.core as words (nurl-cert words). -/\n` )
     ( string_push_str o `noncomputable ` )
     ( string_push_str o ( string_data w ) )
-    ? threads {
-        ( string_push_str o `\n/-- The term (P, spawns, entry) is C.Elab.elabIR3's of those words (formal/C/Elab.lean). -/\n` )
-        ( string_push_str o `theorem «elab» : C.Elab.elabIR3 ir = some (P, spawns, entry) :=\n` )
-        ( string_push_str o `  C.Elab.elabIs3_sound _ _ _ _ (by decide +kernel)\n\n` )
+    ? & threads cond {
+        ( string_push_str o `\n/-- The term (P, spawns, entry) with stubs at assumed is C.Elab.elabIR3Cond's of those words (formal/C/Elab.lean). -/\n` )
+        ( string_push_str o `theorem «elab» : C.Elab.elabIR3Cond ir assumed = some (P, spawns, entry) :=\n` )
+        ( string_push_str o `  C.Elab.elabIs3Cond_sound _ _ _ _ _ (by decide +kernel)\n\n` )
     } {
-        ( string_push_str o `\n/-- The term (P, entry) is C.Elab.elabIR's of those words (formal/C/Elab.lean). -/\n` )
-        ( string_push_str o `theorem «elab» : C.Elab.elabIR ir = some (P, entry) :=\n` )
-        ( string_push_str o `  C.Elab.elabIs_sound _ _ _ (by decide +kernel)\n\n` )
+        ? threads {
+            ( string_push_str o `\n/-- The term (P, spawns, entry) is C.Elab.elabIR3's of those words (formal/C/Elab.lean). -/\n` )
+            ( string_push_str o `theorem «elab» : C.Elab.elabIR3 ir = some (P, spawns, entry) :=\n` )
+            ( string_push_str o `  C.Elab.elabIs3_sound _ _ _ _ (by decide +kernel)\n\n` )
+        } {
+            ? cond {
+                ( string_push_str o `\n/-- The term (P, entry) with stubs at assumed is C.Elab.elabIRCond's of those words (formal/C/Elab.lean). -/\n` )
+                ( string_push_str o `theorem «elab» : C.Elab.elabIRCond ir assumed = some (P, entry) :=\n` )
+                ( string_push_str o `  C.Elab.elabIsCond_sound _ _ _ _ (by decide +kernel)\n\n` )
+            } {
+                ( string_push_str o `\n/-- The term (P, entry) is C.Elab.elabIR's of those words (formal/C/Elab.lean). -/\n` )
+                ( string_push_str o `theorem «elab» : C.Elab.elabIR ir = some (P, entry) :=\n` )
+                ( string_push_str o `  C.Elab.elabIs_sound _ _ _ (by decide +kernel)\n\n` )
+            }
+        }
     }
     ( string_push_str o `end Cert\n\n` )
     ( string_push_str o `#print axioms Cert.«elab»\n` )
@@ -409,7 +421,7 @@ $ `words.nu`
 // Of those, the ones elabIR builds for closures alone (step 6; step 7's
 // structs build `.prod .pair .fst .snd` too).
 : s ELAB_CLO_CTORS `callc pack`
-: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc letd expr new var borrow at view sat pack pair fst snd inl inr getr any lit add lt len slen isl trunc inp sink inout replace drop realloc dropIn int vec slice prod sum fn dtor lockNew lockClone chanSend chanRecv chanClose lk getl send`
+: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc letd panic expr new var borrow at view sat pack pair fst snd inl inr getr any lit add lt len slen isl trunc inp sink inout replace drop realloc dropIn int vec slice prod sum fn dtor lockNew lockClone chanSend chanRecv chanClose lk getl send`
 
 // Can Program.lean's term be `elabIR`'s at all? F when it holds a
 // constructor outside ELAB_CTORS: `elabIs` compares the two terms

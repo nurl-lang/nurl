@@ -173,7 +173,7 @@ $ `certify.nu`
             }
             = ai + ai 1
         }
-        ( __vf_check t & assumed_ok ! elab `assumed functions in Program.lean match Program.core and coverage.functions` `` )
+        ( __vf_check t assumed_ok `assumed functions in Program.lean match Program.core and coverage.functions` `` )
     } {}
     ( __vf_structure t m ( string_data prof ) threads cond elab enc assumed_ids assumed_rows )
 
@@ -253,7 +253,7 @@ $ `certify.nu`
             ( __vf_hash t m bundle `Elab.lean` `elab_lean` )
             : String core_text ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
             : String ehave ?? ( nc_read ( string_data elab_path ) ) { T x → x F → ( string_new ) }
-            : b esame ?? ( cert_elab_lean core_text threads ) { T w → ( string_eq w ehave ) F → F }
+            : b esame ?? ( cert_elab_lean core_text threads cond ) { T w → ( string_eq w ehave ) F → F }
             ( __vf_check t esame `Elab.lean is Program.core's words and the template, byte for byte`
             `its words, statement or proof are not what nurl-cert makes of Program.core` )
         } {}

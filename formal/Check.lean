@@ -1103,6 +1103,10 @@ import D
 #print axioms C.Elab.elab_thread
 #print axioms C.Elab.elabIs3_sound
 #print axioms C.Elab.dOnlyOf_topOk
+-- AGORA-1036: conditional stub elaboration (elabIRCond, elabIR3Cond)
+#print axioms C.Elab.elab_cond
+#print axioms C.Elab.elabIsCond_sound
+#print axioms C.Elab.elabIs3Cond_sound
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided
