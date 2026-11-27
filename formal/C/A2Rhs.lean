@@ -70,12 +70,15 @@ theorem noIdxB_sound {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D)
     (h : noIdxB D Γ x = true) : NoIdx Γ x := by
   rintro k ⟨v, E, hE, hn, hl, hd⟩ i rfl
   have := List.all_eq_true.mp h v (mem_of_some2 hs hE)
-  rw [hE] at this
-  have hg : ((E.ty != .int || E.mode == .rootb) && (E.live || (E.dtor && E.mode.ownSlot))) = true := by
-    rcases hn with h1 | h1 <;> rcases hl with h2 | ⟨h2, h3⟩ <;> simp [h1, h2, h3]
-  rw [hg] at this
-  have := List.all_eq_true.mp (by simpa using this) _ hd
-  simp at this
+  simp only [hE] at this
+  have h1 : (E.ty != .int || E.mode == .rootb) = true := by rcases hn with h1 | h1 <;> simp [h1]
+  have h2 : (E.live || (E.dtor && E.mode.ownSlot)) = true := by
+    rcases hl with h2 | ⟨h2, h3⟩
+    · simp [h2]
+    · simp [h2, h3]
+  rw [h1, h2, Bool.true_and, Bool.not_true, Bool.false_or, List.all_eq_true] at this
+  have h4 := this _ hd
+  simp at h4
 
 /-- `canDo`, decided. -/
 def canDoB2 (m : Mode) (e : Eff) : Bool :=

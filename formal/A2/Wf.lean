@@ -833,7 +833,8 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
       · rename_i hn
         exact h _ Ea hEa hl (Or.inl hn) d.root (by
           simp only [roots, Entry.vdeps, List.map_append, List.mem_append]
-          exact Or.inr (List.mem_map_of_mem (List.mem_filter.mp hda).1))
+          obtain ⟨d0, hd0, hr0, _⟩ := coarseMem_root hda
+          exact Or.inr (hr0 ▸ List.mem_map_of_mem hd0))
     · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
       simp only [argNames, List.mem_flatMap] at hd
       obtain ⟨a, ha, hda⟩ := hd

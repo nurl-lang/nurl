@@ -5045,7 +5045,8 @@ theorem heldOfArgs_canon_fix (h : S.OK) {args : List Var} (hall : ∀ a ∈ args
     obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
     obtain ⟨Ea, hEa⟩ := hall a ha
     rw [argE_canons h hEa (hvs a ha)] at hm
-    have hem := List.mem_filter.mp hm
+    obtain ⟨e0, hem', rfl⟩ := mem_coarseMem.mp hm
+    have hem := List.mem_filter.mp hem'
     rw [subE_held] at hem
     obtain ⟨e1, _, he1⟩ := List.mem_flatMap.mp hem.1
     exact S.subD_fix_reKind h (S.subD_idem h he1) _
@@ -5072,6 +5073,19 @@ theorem outHeld_canon_fix (h : S.OK) {fn : Fn} {args : List Var}
   have hoj := houts o (List.mem_filter.mp ho).1
   obtain ⟨Ea, hEa⟩ := hargs o.2.1 hoj.1
   exact argDeps_canon_fix h hoj.1 hEa (hvs _ (getD_mem' hoj.1)) o.2.2 d hdo
+
+/-- AGORA-374: the substitution forgets indices as its input does: what
+    a region stands for names none (`Rd_idx`). -/
+theorem subD_coarse (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : e.coarse ∈ S.subD d.coarse := by
+  rcases S.mem_subD he with rfl | ⟨v, hv, hp, e0, he0, rfl, hdk⟩
+  · show e.coarse ∈ S.subD ⟨e.root, e.kind.coarse⟩
+    rw [S.subD_fix_reKind h (S.subD_idem h he)]; exact List.mem_singleton_self _
+  · have hck : d.coarse.kind.isName = false := by simpa using hdk
+    simp only [subD, Dep.coarse_root, hv, hp, hck, Bool.false_eq_true, ↓reduceIte, List.mem_map]
+    refine ⟨e0, he0, ?_⟩
+    have hi0 : e0.kind.isIdx = false := h.Rd_idx e0 (h.σ_Rd v he0)
+    show (⟨e0.root, comp e0.kind d.kind.coarse.coarse⟩ : Dep) = ⟨e0.root, (comp e0.kind d.kind.coarse).coarse⟩
+    rw [comp_coarse, Kind.coarse_of_not_idx hi0]
 
 /-- AGORA-937 (3d): substituting commutes with composing a memory way: what
     a dependency is substituted by, composed, is what the dependency
@@ -5101,21 +5115,31 @@ theorem heldOfArgs_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
     rw [argE_canons h hEa (hvs a ha)] at hni hm
     rw [subE_ty, liftE_ty' h hab hEa] at hni
     have hae : argE Γa a = Ea := by unfold argE; rw [hEa]; rfl
-    obtain ⟨hm, hn0⟩ := List.mem_filter.mp hm
-    have hn0 : d0.kind.isName = false := by simpa using hn0
+    -- (AGORA-374: what an argument holds comes in the four memory ways)
+    obtain ⟨d0', hm', rfl⟩ := mem_coarseMem.mp hm
+    obtain ⟨hm, hn0⟩ := List.mem_filter.mp hm'
+    have hn0 : d0'.kind.isName = false := by simpa using hn0
     rw [subE_held] at hm
     obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hm
     have hen : e.kind.isName = false := by
       rcases S.mem_subD hde with rfl | ⟨_, _, _, _, _, _, hk'⟩
       · exact hn0
       · exact hk'
-    refine List.mem_flatMap.mpr ⟨⟨e.root, comp e.kind k⟩, ?_, S.mem_subD_comp h hde hkn hki⟩
+    have hsub := S.subD_coarse h (S.mem_subD_comp h hde hkn hki)
+    simp only [Dep.coarse, ← comp_coarse_of hki] at hsub
+    refine List.mem_flatMap.mpr ⟨⟨e.root, comp e.kind.coarse k⟩, ?_, hsub⟩
     rcases List.mem_append.mp (held_lift h hab hEa he) with h1 | h1
     · obtain ⟨d1, hd1, rfl⟩ := mem_rds.mp h1
-      exact List.mem_append_left _ (mem_rds.mpr ⟨⟨d1.root, comp d1.kind k⟩, List.mem_append_left _
-        (mem_compAll.mpr ⟨d1, mem_argMem.mpr ⟨a, ha, by rw [hae]; exact hni,
-          by rw [hae]; exact List.mem_filter.mpr ⟨hd1, by simpa [Dep.ren] using hen⟩⟩, k, hk, rfl⟩), rfl⟩)
-    · exact List.mem_append_right _ (A_comp h hkn hki (List.mem_map_of_mem h1))
+      exact List.mem_append_left _ (mem_rds.mpr ⟨⟨d1.root, comp d1.kind.coarse k⟩, List.mem_append_left _
+        (mem_compAll.mpr ⟨d1.coarse, mem_argMem.mpr ⟨a, ha, by rw [hae]; exact hni,
+          by rw [hae]; exact mem_coarseMem.mpr ⟨d1, List.mem_filter.mpr ⟨hd1, by simpa [Dep.ren] using hen⟩, rfl⟩⟩,
+          k, hk, rfl⟩), rfl⟩)
+    · have hAi : e.kind.isIdx = false := by
+        rcases S.mem_A_ak h h1 with h2 | h2
+        · exact allKinds_notIdx h2
+        · have := h.N_name e h2; cases hk : e.kind <;> simp_all [Kind.isName, Kind.isIdx]
+      rw [Kind.coarse_of_not_idx hAi]
+      exact List.mem_append_right _ (A_comp h hkn hki (List.mem_map_of_mem h1))
   · simp only [argNames, List.flatMap_map, List.mem_flatMap] at hd
     obtain ⟨a, ha, hda⟩ := hd
     obtain ⟨Ea, hEa⟩ := hargs a ha

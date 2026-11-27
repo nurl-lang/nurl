@@ -243,11 +243,11 @@ def bndOf (ps : List (PMode × Ty)) (v : Var) : Option (Eff × Bool) :=
 def argMemF (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) : List Dep :=
   (List.range args.length).flatMap fun i =>
     if (ps[i]?.map regioned).getD false then []
-    else if (argE Γ (args.getD i 0)).ty = .int then [] else memDeps (argE Γ (args.getD i 0)).held
+    else if (argE Γ (args.getD i 0)).ty = .int then [] else coarseMem (argE Γ (args.getD i 0)).held
 
 theorem mem_argMemF {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var} {d : Dep} :
     d ∈ argMemF Γ ps args ↔ ∃ i < args.length, (ps[i]?.map regioned).getD false = false ∧
-      (argE Γ (args.getD i 0)).ty ≠ .int ∧ d ∈ memDeps (argE Γ (args.getD i 0)).held := by
+      (argE Γ (args.getD i 0)).ty ≠ .int ∧ d ∈ coarseMem (argE Γ (args.getD i 0)).held := by
   unfold argMemF; simp only [List.mem_flatMap, List.mem_range]
   constructor
   · rintro ⟨i, hi, hd⟩
@@ -279,7 +279,7 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
   sym := symNames fn.params
   σ := fun v => if fn.nvars ≤ v ∧ v < fn.nvars + fn.params.length then
       (if (argE Γ (args.getD (v - fn.nvars) 0)).ty = .int then []
-        else memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held)
+        else coarseMem (argE Γ (args.getD (v - fn.nvars) 0)).held)
     else []
   isPi := isRegionIdx fn
   isReg := isRegionIdx fn
