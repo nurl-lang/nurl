@@ -3274,7 +3274,7 @@ $ `coreir.nu`
         : i si ( core_sum_index . m ir f )
         ? & >= si 0 & ( __eq ( __sval m f `body_done` `` ) `1` )
         & ! ( __shas m f `mutates` ) & ! ( __shas m f `reallocs` )
-        & ! ( __shas m f `drops` ) ! ( __shas m f `inout` ) {
+        & ! ( __shas m f `ireallocs` ) & ! ( __shas m f `drops` ) ! ( __shas m f `inout` ) {
             ^ @ !v String { T }
         } {}
         ^ @ !v String { F ( __u m p ( string_data ( __f1 `stub: cannot classify call of % for hasThru` f ) ) ) }
