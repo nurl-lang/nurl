@@ -125,11 +125,20 @@ for c in "${corpora[@]}"; do
     done < <(programs "$c")
     nmiss=$(echo $missing | wc -w)
     if [ "$nmiss" -gt 0 ]; then
-        printf '\n%d of the %d programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed):%s\n' \
-            "$nmiss" "$nprog" "$(echo $missing | sed 's/ /, /g; s/^/ /')" >> "$table"
+        # (the first 20 named; every log is kept)
+        names="$(echo $missing | tr ' ' '\n' | head -20 | paste -sd, - | sed 's/,/, /g')"
+        [ "$nmiss" -gt 20 ] && names="$names and $((nmiss - 20)) more"
+        printf '\n%d of the %d programs have no bundle (nurl-cert stopped before the manifest: the program does not compile, or certify failed): %s.\n' \
+            "$nmiss" "$nprog" "$names" >> "$table"
     fi
     echo >> "$table"
 done
+# (what compiles can differ by host: a library a program links, say)
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) host=Windows ;;
+    *) host="$(uname -s)" ;;
+esac
+printf 'Certified on %s.\n' "$host" >> "$table"
 cat "$table"
 
 if [ "$readme" = 1 ]; then
