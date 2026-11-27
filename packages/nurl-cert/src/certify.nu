@@ -431,7 +431,7 @@ open A2 C
     ^ id
 }
 
-@ cert_assumed_row AssumedRow a → Json {
+@ cert_assumed_row AssumedRow a b threads → Json {
     : String id ( cert_assumed_id ( string_data . a name ) )
     : String what ( string_from `function ` )
     ( string_push_str what ( string_data . a name ) )
@@ -443,9 +443,9 @@ open A2 C
     ( string_push_str what ( string_data . a callees ) )
     ( string_push_str what `]; hasThru ` )
     ( string_push_str what ? . a has_thru `true` `false` )
-    ( string_push_str what `) and proof obligations (FnOK, codesOK)` )
+    ( string_push_str what ? threads `) and proof obligations (FnOK, codesOK, globsAt)` `) and proof obligations (FnOK, codesOK)` )
     ^ ( mj_row ( string_data id ) ( string_data what ) ( string_data . a why ) ( string_data . a loc )
-    `assumed (not translated; checked only by signature and call summary)` `M.safe M.leak` )
+    `assumed (not translated; checked only by signature and call summary)` ? threads `M.safe M.leak M.race` `M.safe M.leak` )
 }
 
 // `elab`: the bundle has Elab.lean, so the term is the kernel's
@@ -522,7 +522,7 @@ open A2 C
     : i na ( vec_len [AssumedRow] assumed_rows )
     : ~ i ak 0
     ~ < ak na {
-        ( json_arr_push L ( cert_assumed_row ( vec_at [AssumedRow] assumed_rows ak ) ) )
+        ( json_arr_push L ( cert_assumed_row ( vec_at [AssumedRow] assumed_rows ak ) threads ) )
         = ak + ak 1
     }
     ^ L
@@ -698,7 +698,8 @@ open A2 C
         : LeanRun lr ( cert_lean_check ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab )
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
-            = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)`
+            = reason ( string_from ? & threads cond `the verified checker refuses the program (C.certOK3BA is false)`
+            ? threads `the verified checker refuses the program (C.certOK3B is false)`
             ? cond `the verified checker refuses the program (C.certOK2BA is false)`
             `the verified checker refuses the program (C.certOK2B is false)` )
         } {
@@ -707,7 +708,8 @@ open A2 C
             : b failed | ! . lr ran ( cert_lean_has_error . lr log )
             ? & failed ( cert_lean_refutes ( string_data . o lean ) ( string_data formal ) out ( string_data work ) threads cond ) {
                 = verdict ( string_from `refused` )
-                = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false, proved by the kernel)`
+                = reason ( string_from ? & threads cond `the verified checker refuses the program (C.certOK3BA is false, proved by the kernel)`
+                ? threads `the verified checker refuses the program (C.certOK3B is false, proved by the kernel)`
                 ? cond `the verified checker refuses the program (C.certOK2BA is false, proved by the kernel)`
                 `the verified checker refuses the program (C.certOK2B is false, proved by the kernel)` )
             } {
