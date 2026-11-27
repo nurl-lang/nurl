@@ -145,7 +145,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // One Lean file that checks the bundle's three modules as Lean would check
-// them one by one (`lake`, the module way: Program.lean, then Claims.lean
+// them one by one (`lake build`, the module way: Program.lean, then Claims.lean
 // and Elab.lean against its olean):
 //   import C.Cert                  (Program.lean's first line)
 //   import C.Cert3                 (a threaded Claims.lean's own import)
@@ -251,8 +251,9 @@ $ `stdlib/ext/json.nu`
 
 // Check `bundle/Program.lean` and `bundle/Claims.lean` (and with `elab`,
 // `bundle/Elab.lean`) in one Lean process: the file `__lt_combined` makes,
-// in `work`, run by `lake env lean --json` inside formal/ (so that `import
-// C.Cert` is formal/'s). Each message is the claims' (`log`) or Elab.lean's
+// in `work`, run by `lean --json` inside formal/ with formal/'s build on
+// `LEAN_PATH` (`env LEAN_PATH=<formal>/.lake/build/lib/lean lean …`, so
+// that `import C.Cert` is formal/'s). Each message is the claims' (`log`) or Elab.lean's
 // (`elab_log`) by its own position, not by where it comes in the output: a
 // message of the file from the Elab.lean part's first line on is Elab.lean's,
 // any other the claims'. Fail closed: output that cannot be placed (a line
@@ -261,7 +262,7 @@ $ `stdlib/ext/json.nu`
 // finished when Lean exited 0, or exited 1 for errors of the Elab.lean part
 // alone (they only mean that Cert.elab is not proved); Elab.lean's counts
 // only on an exit 0.
-@ cert_lean_check s lake s formal s bundle s work b elab → LeanRun {
+@ cert_lean_check s lean s formal s bundle s work b elab → LeanRun {
     : ~ String log ( string_new )
     : String prog ( nc_join bundle `Program.lean` )
     : String claims ( nc_join bundle `Claims.lean` )
@@ -300,11 +301,18 @@ $ `stdlib/ext/json.nu`
         }
     }
     : ( Vec String ) a1 ( vec_new [String] )
-    ( vec_push [String] a1 ( string_from `env` ) )
-    ( vec_push [String] a1 ( string_from `lean` ) )
+    // (`lake env lean` set the same `LEAN_PATH` and cost ≈ 45 ms a run
+    // before Lean started, AGORA-1029 step 9; `lean` adds its own library
+    // itself. Run inside formal/, elan's `lean` picks formal/'s toolchain,
+    // as its `lake` did; `LEAN_PATH` is set, not inherited.)
+    : String lp ( string_from `LEAN_PATH=` )
+    ( string_push_str lp formal )
+    ( string_push_str lp `/.lake/build/lib/lean` )
+    ( vec_push [String] a1 lp )
+    ( vec_push [String] a1 ( string_from lean ) )
     ( vec_push [String] a1 ( string_from `--json` ) )
     ( vec_push [String] a1 ( string_clone all ) )
-    : Run r ( nc_run lake a1 )
+    : Run r ( nc_run `env` a1 )
     ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     : b has_elab ?? etext { T _ → T F → F }
     : ~ String elog ( string_new )
@@ -366,7 +374,7 @@ $ `stdlib/ext/json.nu`
     // again alone, once, and Elab.lean is not proved. (Without Elab.lean,
     // as in verify of a bundle that holds it, Cert.elab then fails.)
     ? & & has_elab ! | ok0 elab_failed ! cerr {
-        : LeanRun again ( cert_lean_check lake formal bundle work F )
+        : LeanRun again ( cert_lean_check lean formal bundle work F )
         : String note ( string_from `the Lean run ended abnormally (exit ` )
         ( string_push_int note . r code )
         ( string_push_str note `) before the Elab.lean part was checked; the claims were checked again alone` )

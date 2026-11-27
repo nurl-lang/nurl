@@ -1,7 +1,7 @@
 import C.A2Prog
 
 /-!
-# The core IR as words, read in the kernel (AGORA-1029, steps 1, 2 and 4–8)
+# The core IR as words, read in the kernel (AGORA-1029, steps 1, 2 and 4–9)
 
 docs/dev/TRANSLATION_TRUST.md route (b): a certificate holds nurlc's core IR
 as plain Lean data, one entry per line and each line its words (header
@@ -11,7 +11,7 @@ trusted step. This file is the data and its reader (step 1), and the term
 of a program of the subset built from it (`elabIR`: numbers, step 2;
 buffers of numbers, step 4; views, slices and changes through a borrow,
 step 5; closures, step 6; structs and options, step 7; destructor frames,
-step 8).
+step 8; channels, step 9).
 
 Each word is a number (step 6, "the words as numbers"): `0x1` and then
 the word's bytes from its last to its first, two hex digits each, so
@@ -275,7 +275,7 @@ example : fnsOfL (strs [["fn", "broken"]]) = none := by decide +kernel
 example : fnsOfL (strs [["fn", "f", "i64", "0", "1", "a.nu", "0"],
     ["v", "0", "4", "0", "0", "1", "-1", "", "i64"], ["endfn"]]) = none := by decide +kernel
 
-/-! ## Steps 2 and 4–8: the term of a program of numbers, buffers, views, closures, structs, options and destructor frames (AGORA-1029)
+/-! ## Steps 2 and 4–9: the term of a program of numbers, buffers, views, closures, structs, options, destructor frames and channels (AGORA-1029)
 
 `elabIR ir` (`elab` is a keyword of Lean) builds the A2 program and its
 entry statement from the words of a core IR, for the **subset**: every
@@ -287,8 +287,10 @@ parameters of a type `tyOf` takes: a number (step 2); a buffer of numbers
 `Slice` of a number type (`.slice .int`, step 5); a closure type of the
 program's (`.fn [σ] .any`, step 6); an option of such a type (`.sum .int
 T`) or a struct of such fields (`.prod`, nested to the right; step 7); a
-struct with a `% Drop` of the program's own (`.dtor f u`, step 8). Raw
-text bound from a
+struct with a `% Drop` of the program's own (`.dtor f u`, step 8); a
+channel of a number, a `String` or a `Vec` of numbers (`.lk (.prod (.vec
+T) .int)`, step 9: its calls `.lockNew`, `.lockClone`, `.chanSend`,
+`.chanRecv`, `.chanClose`). Raw text bound from a
 view (`string_data`, an element of a `Vec` of raw text, a copy of such a
 view) is a slice too (`viewVars`, the translator's `__view_vars`). A
 result is a number, or a buffer or `Vec` handed over (owned), never a
@@ -345,7 +347,8 @@ the ones on code it then passes over included (a buffer, or a view of it,
 named after its `drop`, `__views_of`; raw text that holds a view,
 `__view_vars`, over the whole body). It does not read the IR's `ty`,
 `virt` and `sum` lines past what the subset needs (a `d` drop flag: a
-destructor type, by step 8 one of the program's own; a `sum` line's keys). Step 6 adds, stricter: a
+destructor type, which a value of is refused unless the program has its
+`drop__`, steps 8 and 9; a `sum` line's keys). Step 6 adds, stricter: a
 literal of a function not named as a closure's code, a closure type's
 arguments spelled other than nurlc prints them, a closure's code naming a
 variable it does not declare, variables not in id order in a program with
@@ -358,7 +361,10 @@ like a number type behind its `%`, a `match` of other than two arms. Step 8
 adds, stricter: a destructor `drop__X` whose `%X` is no struct's name of
 the subset, a destructor type inside another type, a closure in a
 destructor struct's field, a destructor value bound from a call through a
-closure, a closure's code with a variable of a destructor type.
+closure, a closure's code with a variable of a destructor type. Step 9
+adds, stricter: a channel inside another type or a closure type, a
+channel's element named by one letter (`i`, `u`, `b`), a `d` drop flag
+on a type named other than `%` and a name.
 
 Everything is total and reduces in the kernel: recursion is structural
 (over a fuel bound by the body's length where a list is rebuilt), and
@@ -509,8 +515,10 @@ structure CloTab where
       last `ty` line). -/
   tyls : List (List W)
   /-- The program's destructor types (step 8): each `%X` with a `drop__X`
-      of the program's own, and that function's index (`dtorsOf`). -/
-  dts : List (W × Nat)
+      of the program's own, and that function's index (`dtorsOf`); and
+      (step 9) each other type whose `ty` line's drops say `d`, with none
+      (`dOnlyOf`: a destructor the translation does not see). -/
+  dts : List (W × Option Nat)
 
 def indexOfB (xs : List (List Nat)) (x : List Nat) : Option Nat :=
   match xs with
@@ -617,7 +625,7 @@ def tyFuel : Nat := 32
     translator takes one inside an option, a struct or a `Vec`, and refuses
     it only as a destructor struct's field); `tyOf` takes one as a
     variable's own type only. -/
-def tyR (tyls : List (List W)) (dts : List (W × Nat)) : Nat → List W → W → Option Ty
+def tyR (tyls : List (List W)) (dts : List (W × Option Nat)) : Nat → List W → W → Option Ty
   | 0, _, _ => none
   | f + 1, exp, t =>
     if intTy t then some .int
@@ -652,7 +660,7 @@ whose scope's end runs `f` on them (the IR's `drop` lines are that end). -/
 /-- The index of type `t`'s destructor, if it is one of the program's
     destructor types (`__is_dtor`; exactly the translator's answer on every
     type `tyOf` takes, `dtorsOf`). -/
-def CloTab.dtorF (cl : CloTab) (t : W) : Option Nat := (cl.dts.find? (·.1 == t)).map (·.2)
+def CloTab.dtorF (cl : CloTab) (t : W) : Option Nat := (cl.dts.find? (·.1 == t)).bind (·.2)
 
 /-- A destructor type's struct (`__dtor_of`'s `u`): its fields as a
     struct's (`tyR`, the type itself being expanded), a field of raw text a
@@ -660,7 +668,7 @@ def CloTab.dtorF (cl : CloTab) (t : W) : Option Nat := (cl.dts.find? (·.1 == t)
     or no fields, is refused, and so is a field of a destructor type.
     Stricter: a closure in a field (the translator takes one in a struct of
     one field), a field of `%str`, fields whose names repeat. -/
-def dtorU (tyls : List (List W)) (dts : List (W × Nat)) (t : W) : Option Ty :=
+def dtorU (tyls : List (List W)) (dts : List (W × Option Nat)) (t : W) : Option Ty :=
   let fld (ft : W) : Option Ty := if ft == kI8p then some (.slice .int) else tyR tyls dts tyFuel [t] ft
   match fieldsOf tyls t with
   | some [(_, ft)] => (fld ft).map (.prod · .int)
@@ -668,23 +676,57 @@ def dtorU (tyls : List (List W)) (dts : List (W × Nat)) (t : W) : Option Ty :=
     if !nodupB (fs.map (·.1)) then none else (fs.mapM fun p => fld p.2).map envTy
   | _ => none
 
+def stringB : List Nat := [83, 116, 114, 105, 110, 103]
+def vecNB : List Nat := [86, 101, 99, 95, 95]
+example : stringB = bytesOf "String" ∧ vecNB = bytesOf "Vec__" := by decide +kernel
+
+/-- A channel's element type (`__chan_elem`): a number, a `String`, or a
+    `Vec` of numbers (named with or without its `%`s); none holds a
+    destructor value. (Stricter: the translator also takes the one-letter
+    names `i`, `u`, `b`, which nurlc does not print there.) -/
+def chanElemB (cs : List Nat) : Option Ty :=
+  if intTyB cs then some .int
+  else if cs == stringB || cs == stringTyB then some (.vec .int)
+  else
+    let st := cs.dropWhile (· == 37)
+    if prefixN vecNB st && intTyB (st.drop 5) then some (.vec .int) else none
+
+example : chanElemB (bytesOf "i64") = some .int ∧ chanElemB (bytesOf "String") = some (.vec .int) ∧
+    chanElemB (bytesOf "%String") = some (.vec .int) ∧ chanElemB (bytesOf "Vec__u8") = some (.vec .int) ∧
+    chanElemB (bytesOf "%Vec__i64") = some (.vec .int) ∧ chanElemB (bytesOf "Vec__str") = none ∧
+    chanElemB (bytesOf "%W") = none ∧ chanElemB (bytesOf "%i64") = none := by decide +kernel
+
 /-- A type of the subset as A2's (`__lean_ty`): `tyR`'s, a closure type of
-    the program's (`.fn [σ] .any`, step 6), and a destructor type of the
-    program's (`.dtor f u`, step 8). (Raw text that holds a view is a slice
-    too, `Ctx.vl`: that is the variable's, not its type's.) -/
+    the program's (`.fn [σ] .any`, step 6), a destructor type of the
+    program's (`.dtor f u`, step 8), and a channel (`.lk (.prod (.vec T)
+    .int)`, step 9). A destructor type and a channel are a variable's,
+    parameter's or result's own type only (stricter: the translator nests
+    them; `tyR` refuses both inside another type). (Raw text that holds a
+    view is a slice too, `Ctx.vl`: that is the variable's, not its type's.) -/
 def tyOf (cl : CloTab) (t : W) : Option Ty :=
   if intTy t || t == kI8p || t == kString then tyR cl.tyls cl.dts tyFuel [] t
   else match wordOf t with
     | cs@(123 :: _) =>
       if optB cs then tyR cl.tyls cl.dts tyFuel [] t
       else (indexOfB cl.tys cs).map fun k => .fn [cl.base + k] .any
-    | _ => match cl.dtorF t with
+    | cs =>
+      if prefixN chanTyB cs then (chanElemB (cs.drop 10)).map fun el => .lk (.prod (.vec el) .int)
+      else match cl.dtorF t with
       | some f => (dtorU cl.tyls cl.dts t).map (.dtor f)
       | none => tyR cl.tyls cl.dts tyFuel [] t
 
 example : tyOf ⟨0, [], [], []⟩ (enc "%Vec__str") = some (.vec (.slice .int)) ∧
     tyOf ⟨0, [], [], []⟩ (enc "%Slice__u8") = some (.slice .int) ∧
     tyOf ⟨0, [], [], []⟩ (enc "%Slice__str") = none ∧ tyOf ⟨0, [], [], []⟩ (enc "%Vec__String") = none := by decide +kernel
+
+/-- (step 9) A channel of numbers, of `String`s, of `Vec`s of numbers; none
+    of raw text, of a struct, of a channel; none inside an option. -/
+example : tyOf ⟨0, [], [], []⟩ (enc "%Channel__i64") = some (.lk (.prod (.vec .int) .int)) ∧
+    tyOf ⟨0, [], [], []⟩ (enc "%Channel__String") = some (.lk (.prod (.vec (.vec .int)) .int)) ∧
+    tyOf ⟨0, [], [], []⟩ (enc "%Channel__Vec__i64") = some (.lk (.prod (.vec (.vec .int)) .int)) ∧
+    tyOf ⟨0, [], [], []⟩ (enc "%Channel__str") = none ∧ tyOf ⟨0, [], [], []⟩ (enc "%Channel__W") = none ∧
+    tyOf ⟨0, [], [], []⟩ (enc "%Channel__Channel__i64") = none ∧
+    tyOf ⟨0, [], [], []⟩ (enc "{ i1, %Channel__i64 }") = none := by decide +kernel
 
 /-- `i64` inside `n` options, as its bytes (`{ i1, ` … ` }` `n` times; built
     from the bytes, no string literal for the kernel to build). -/
@@ -707,7 +749,7 @@ example : structNameB stringTyB = false ∧ structNameB (bytesOf "%P") = true �
 /-- A closure type's result or argument as A2's type: `tyOfB`'s, or a
     struct of the subset's (`tyR`, through the program's `ty` lines, as the
     translator's `__lean_ty` reads it). -/
-def cloArgTy (tyls : List (List W)) (dts : List (W × Nat)) (b : List Nat) : Option Ty :=
+def cloArgTy (tyls : List (List W)) (dts : List (W × Option Nat)) (b : List Nat) : Option Ty :=
   match tyOfB b with
   | some t => some t
   | none => if structNameB b then tyR tyls dts tyFuel [] (encB b) else none
@@ -723,7 +765,7 @@ def nestedOrPtrB (x : List Nat) : Bool :=
     translator refuses one, before it reads a type: so a `%P*` is no struct
     here even where the IR has a `ty %P*` line), each a type `cloArgTy`
     takes. -/
-def cloTysB (tyls : List (List W)) (dts : List (W × Nat)) (cs : List Nat) : Option (List Ty) := do
+def cloTysB (tyls : List (List W)) (dts : List (W × Option Nat)) (cs : List Nat) : Option (List Ty) := do
   let sig ← cloSigB cs
   if sig.any (· == i8pB) then none
   if sig.any nestedOrPtrB then none
@@ -732,7 +774,7 @@ def cloTysB (tyls : List (List W)) (dts : List (W × Nat)) (cs : List Nat) : Opt
 /-- The closure types `t` adds, met as a variable's or a result's type: a
     well-formed one not met before. (Any other type that starts `{` is
     none of `tyOf`'s.) -/
-def cloAdd (tyls : List (List W)) (dts : List (W × Nat)) (acc : List (List Nat)) (t : W) : List (List Nat) :=
+def cloAdd (tyls : List (List W)) (dts : List (W × Option Nat)) (acc : List (List Nat)) (t : W) : List (List Nat) :=
   if intTy t then acc
   else
     let cs := wordOf t
@@ -746,7 +788,7 @@ def cloAdd (tyls : List (List W)) (dts : List (W × Nat)) (acc : List (List Nat)
     no other closure type on a program it translates (`__fn_init`). (In the
     order of the `v` lines, where the translator reads them by id, in the
     order an id first appears: `elabIR` requires the ids increasing.) -/
-def cloScan (tyls : List (List W)) (dts : List (W × Nat)) (prog : List CoreFn) : List (List Nat) :=
+def cloScan (tyls : List (List W)) (dts : List (W × Option Nat)) (prog : List CoreFn) : List (List Nat) :=
   prog.foldl (fun acc f => cloAdd tyls dts (f.vars.foldl (fun a v => cloAdd tyls dts a v.2.2.2) acc) f.ret) []
 
 example : cloSigB (bytesOf "{ i64 (i8*, i64, %Vec__i64)*, i8* }") =
@@ -849,6 +891,29 @@ example : [stringDataB, stringPushStrB, printlnB, sliceFromVecB, sliceLenB, vecC
 /-- `nurl_println_int` (step 6). -/
 def printlnIntB : List Nat := [110, 117, 114, 108, 95, 112, 114, 105, 110, 116, 108, 110, 95, 105, 110, 116]
 example : printlnIntB = bytesOf "nurl_println_int" ∧ intrinsicExact.contains printlnIntB := by decide +kernel
+
+/-! #### Channels (step 9)
+
+A `Channel T` (`%Channel__T`) is A2's lock share whose payload is its queue
+and its closed flag, `.lk (.prod (.vec T) .int)` (`__lean_ty`, A3.4); its
+calls are A2's constructs (`__intrinsic_`): `chan_new` a `lockNew` of a
+fresh queue and a 0 flag, `Channel_share` a `lockClone`, `chan_send` a
+`chanSend` (the value moves to the back of the queue), `chan_recv` and
+`chan_try_recv` a `chanRecv` (the head moves out, an owned option),
+`chan_close` a `chanClose`. -/
+
+def chanNewB : List Nat := [99, 104, 97, 110, 95, 110, 101, 119, 95, 95]
+def chanShareB : List Nat := [67, 104, 97, 110, 110, 101, 108, 95, 115, 104, 97, 114, 101, 95, 95]
+def chanSendB : List Nat := [99, 104, 97, 110, 95, 115, 101, 110, 100, 95, 95]
+def chanRecvB : List Nat := [99, 104, 97, 110, 95, 114, 101, 99, 118, 95, 95]
+def chanTryRecvB : List Nat := [99, 104, 97, 110, 95, 116, 114, 121, 95, 114, 101, 99, 118, 95, 95]
+def chanCloseB : List Nat := [99, 104, 97, 110, 95, 99, 108, 111, 115, 101, 95, 95]
+example : chanNewB = bytesOf "chan_new__" ∧ chanShareB = bytesOf "Channel_share__" ∧
+    chanSendB = bytesOf "chan_send__" ∧ chanRecvB = bytesOf "chan_recv__" ∧
+    chanTryRecvB = bytesOf "chan_try_recv__" ∧ chanCloseB = bytesOf "chan_close__" ∧
+    [chanNewB, chanShareB, chanSendB, chanRecvB, chanTryRecvB, chanCloseB].all intrinsicPrefix.contains := by
+  decide +kernel
+
 
 /-- Each is a name `intrinsicName` takes, so no function of the program is
     named like one: a call is the library's or the program's, never both. -/
@@ -1911,6 +1976,53 @@ def intrP (c : Ctx) (f : W) (ops : List W) (x0 : Option Nat) (rest : Stmt) :
         let e ← M.lift (operandE c o0)
         pure ([], .letv y (.expr e) rest)
     | _, _ => M.fail
+  else if prefixN chanNewB fb then
+    -- (step 9) a lock block of a fresh queue and a 0 flag (A3.4)
+    match ops with
+    | [] => do
+      let x ← xfS x0
+      let q ← M.fresh
+      let k ← M.fresh
+      let pp ← M.fresh
+      let el ← M.lift (chanElemB (fb.drop 10))
+      pure ([], .letv q (.new el) (.letv k (.expr (.lit 0)) (.letv pp (.pair q k)
+        (.letv x (.lockNew (.prod (.vec el) .int) pp) rest))))
+    | _ => M.fail
+  else if prefixN chanShareB fb then
+    -- a new share of the channel's lock block
+    match ops with
+    | [o0] => if o0 == kC then M.fail else do
+        let x ← xfS x0
+        let (fp, y) ← rdF c o0
+        pure (fp, .letv x (.lockClone y) rest)
+    | _ => M.fail
+  else if prefixN chanSendB fb then
+    -- the value moves to the back of the queue (an untracked number a
+    -- temporary of its own), as `vec_push` takes it
+    match ops with
+    | [o0, o1] => if o0 == kC then M.fail else do
+        let _ ← M.lift (chanElemB (fb.drop 11))
+        let y ← argvarS c o1
+        let x ← xfS x0
+        let (fp, ch) ← rdF c o0
+        pure (fp, .letv x (.chanSend ch y) rest)
+    | _ => M.fail
+  else if prefixN chanRecvB fb || prefixN chanTryRecvB fb then
+    -- the head moves out as `some`, or `none`: an owned option (`true`:
+    -- it waits)
+    match ops with
+    | [o0] => if o0 == kC then M.fail else do
+        let x ← xfS x0
+        let (fp, y) ← rdF c o0
+        pure (fp, .letv x (.chanRecv (prefixN chanRecvB fb) y) rest)
+    | _ => M.fail
+  else if prefixN chanCloseB fb then
+    match ops with
+    | [o0] => if o0 == kC then M.fail else do
+        let x ← xfS x0
+        let (fp, y) ← rdF c o0
+        pure (fp, .letv x (.chanClose y) rest)
+    | _ => M.fail
   else M.fail
 
 def intrS (c : Ctx) (f : W) (ops : List W) (x0 : Option Nat) (rest : Stmt) : M Stmt := do
@@ -2487,15 +2599,13 @@ def fieldsOk : List W → Bool
     | none => false
   | _ => false
 
-/-- A `ty` line the reader accepts (`__cr_ty`), and not a destructor type
-    but one of the program's (`dts`, step 8): name, class, drops (a `d` only
-    for a type with a `drop__` of the program's own) and base, then either
-    `A n` and exactly `n` type arguments or nothing, then the fields and the
-    variants, and no column after them. The reader finds the fields at the
-    first column `F`, so no column before them is `F`. -/
-def tyOk (dts : List (W × Nat)) : List W → Bool
+/-- A `ty` line the reader accepts (`__cr_ty`): name, class, drops and
+    base, then either `A n` and exactly `n` type arguments or nothing, then
+    the fields and the variants, and no column after them. The reader finds
+    the fields at the first column `F`, so no column before them is `F`.
+    (A `d` in the drops makes the type a destructor type: `dOnlyOf`.) -/
+def tyOk : List W → Bool
   | kTy :: name :: cls :: drops :: base :: rest =>
-    (!(wordOf drops).contains 100 || dts.any (·.1 == name)) &&     -- 'd'
     ![name, cls, drops, base].contains kF &&
     match rest with
     | kA :: na :: more => match natOf na with
@@ -2507,12 +2617,11 @@ def tyOk (dts : List (W × Nat)) : List W → Bool
   | _ => false
 
 /-- The top-level lines the reader would refuse (a `sum` line without its
-    function, a `ty` line of another shape), and a destructor type that is
-    not one of the program's (`dts`), are outside the subset. -/
-def topOk (dts : List (W × Nat)) (tops : List (List W)) : Bool :=
+    function, a `ty` line of another shape) are outside the subset. -/
+def topOk (tops : List (List W)) : Bool :=
   tops.all fun l => match l with
     | [kSum] => false
-    | kTy :: _ => tyOk dts l
+    | kTy :: _ => tyOk l
     | _ => true
 
 /-- A byte of a name (`[A-Za-z0-9_]`). -/
@@ -2536,16 +2645,43 @@ def dtorKeyB (name : W) : Option (List Nat) :=
     destructor's index among the program's functions (`__dtor_f`): one for
     each `drop__X` of the program (a name `dtorKeyB` refuses refuses the
     program). The translator adds every type whose `ty` line's drops say
-    `d`; `topOk` refuses such a line for a type that is not one of these, so
-    the two sets are the same. -/
-def dtorsOf : List (Nat × CoreFn) → Option (List (W × Nat))
+    `d` (`dOnlyOf`, step 9). -/
+def dtorsOf : List (Nat × CoreFn) → Option (List (W × Option Nat))
   | [] => some []
   | (i, f) :: r => do
     let rest ← dtorsOf r
     if startsB f.name dropB then
       let k ← dtorKeyB f.name
-      pure ((encB k, i) :: rest)
+      pure ((encB k, some i) :: rest)
     else pure rest
+
+/-- (step 9) The other types the translator takes for destructor types
+    (`__emit`'s `dtor`): each type whose `ty` line's drops say `d` and that
+    has no `drop__` of the program's (a library's: `%RawBlock`,
+    `%MutexImpl`, …, which `stdlib/std/channel.nu` brings), with none for
+    its destructor. A value of one is refused wherever `tyR` meets it, as
+    the translator refuses it ("with a destructor A2's translation does not
+    see"); the line itself is not. Stricter (none refuses the program): the
+    name is `%` and a name (`identB`, not empty), a struct's name
+    (`structNameB`) other than `%String`, so `__is_dtor`'s `%t` meets no
+    type `tyOf` takes without its `%` (a number's). They follow the
+    program's own in the table, so a type with both a `drop__` and a `d`
+    is the program's (`CloTab.dtorF` reads the first). One pass, no
+    accumulator: a fold whose accumulator is read twice a step costs the
+    kernel ≈ 4× (it reduces the unevaluated accumulator again). -/
+def dOnlyOf : List (List W) → Option (List (W × Option Nat))
+  | [] => some []
+  | l :: ls =>
+    match l with
+    | kTy :: name :: _ :: drops :: _ =>
+      if (wordOf drops).contains 100 then
+        let cs := wordOf name
+        let x := cs.drop 1
+        if !x.isEmpty && x.all identB && structNameB cs && cs != stringTyB then
+          (dOnlyOf ls).map ((name, none) :: ·)
+        else none
+      else dOnlyOf ls
+    | _ => dOnlyOf ls
 
 /-- Each id below the next one's: every variable has one `v` line, in id
     order. -/
@@ -2583,7 +2719,7 @@ example : cloTysB (strs [["ty", "%P*", "2", "0-----", "", "A", "0", "F", "1", "*
     (stricter: the translator reads it as `.dtor f u`); the same struct
     without its destructor is taken. -/
 example : cloTysB (strs [["ty", "%W", "3", "1-d---", "W", "A", "0", "F", "2", "x", "i64", "y", "i64", "V", "0"]])
-      [(enc "%W", 0)] (bytesOf "{ i64 (i8*, %W)*, i8* }") = none ∧
+      [(enc "%W", some 0)] (bytesOf "{ i64 (i8*, %W)*, i8* }") = none ∧
     cloTysB (strs [["ty", "%W", "1", "0-----", "W", "A", "0", "F", "2", "x", "i64", "y", "i64", "V", "0"]])
       [] (bytesOf "{ i64 (i8*, %W)*, i8* }") = some [.int, .prod .int .int] := by decide +kernel
 
@@ -2592,7 +2728,7 @@ example : cloTysB (strs [["ty", "%W", "3", "1-d---", "W", "A", "0", "F", "2", "x
     never run (a call runs the package's code), so it is one that
     type-checks, a result of the type made fresh: a number, or an empty
     buffer of numbers (any other result stops the translator). -/
-def ifaceFn (tyls : List (List W)) (dts : List (W × Nat)) (σ : Nat) (cs : List Nat) : Option Fn := do
+def ifaceFn (tyls : List (List W)) (dts : List (W × Option Nat)) (σ : Nat) (cs : List Nat) : Option Fn := do
   let tys ← cloTysB tyls dts cs
   match tys with
   | [] => none
@@ -2626,8 +2762,9 @@ def elabL (ls : Lines) : Option (Prog × Stmt) := do
   let tops := topLines ls false
   let prog := fns.filter fun f => !startsB f.file stdlibB
   -- (step 8) the program's destructor types, and every `ty` line's
-  let dts ← dtorsOf (idxFrom 0 prog)
-  if !(topOk dts tops) then none
+  let dts0 ← dtorsOf (idxFrom 0 prog)
+  let dts := dts0 ++ (← dOnlyOf tops)
+  if !(topOk tops) then none
   let names := prog.map (·.name)
   if !(nodupB names) then none
   -- a function of the program named like a library call the translator
@@ -3406,16 +3543,20 @@ example : (elabS (irS [["ty", "%S", "1", "0-----", "S", "A", "0", "F", "2", "a",
   decide +kernel
 
 /-- A struct of no fields, and one with no `ty` line, are refused. Stricter:
-    a name the translator reads as a number behind its `%` (`%i64`), or as
-    a channel (`%Channel__…`), is refused though a `ty` line gives it
-    fields. -/
+    a name the translator reads as a number behind its `%` (`%i64`) is
+    refused though a `ty` line gives it fields. A channel's name
+    (`%Channel__…`) is never read as a struct's, as the translator reads it:
+    a channel of a struct is refused though a `ty` line gives the name
+    fields, and a channel of numbers is a channel (step 9). -/
 def irTy (t : String) (tyl : SIR) : SIR := irM [["v", "0", "1", "1", "0", "1", "-1", "x", t]] [["ret", "c"]] tyl
 example : (elabS (irTy "%S" [["ty", "%S", "1", "0-----", "S", "A", "0", "F", "0", "V", "0"]])).isNone := by decide +kernel
 example : (elabS (irTy "%S" [])).isNone := by decide +kernel
 example : (elabS (irTy "%i64" [["ty", "%i64", "1", "0-----", "S", "A", "0", "F", "2", "a", "i64", "b", "i64", "V", "0"]])).isNone := by
   decide +kernel
+example : (elabS (irTy "%Channel__S" [["ty", "%Channel__S", "1", "0-----", "S", "A", "0", "F", "2", "a", "i64", "b", "i64",
+    "V", "0"], ["ty", "%S", "1", "0-----", "S", "A", "0", "F", "2", "a", "i64", "b", "i64", "V", "0"]])).isNone := by decide +kernel
 example : (elabS (irTy "%Channel__i64" [["ty", "%Channel__i64", "1", "0-----", "S", "A", "0", "F", "2", "a", "i64", "b", "i64",
-    "V", "0"]])).isNone := by decide +kernel
+    "V", "0"]])).isSome := by decide +kernel
 /-- …and an option of a closure (the translator: a closure inside a value). -/
 example : (elabS (irTy "{ i1, { i64 (i8*)*, i8* } }" [])).isNone := by decide +kernel
 example : (elabS (irTy "{ i1, %String }" [])).isSome := by decide +kernel
@@ -3542,6 +3683,19 @@ example : (elabS (irDW "drop__%W" "1-----" "i64" [] [] [])).isNone := by decide 
 example : (elabS (irDW "drop__V" dW "i64" [] [] [])).isNone := by decide +kernel
 example : (elabS (irDW "drop__V" "1-----" "i64" [] [] [])).isSome := by decide +kernel
 
+/-- (step 9) A `ty` line whose drops say `d` for a type no value of the
+    program has (a library's, as `stdlib/std/channel.nu` brings) leaves the
+    program in the subset; a value of that type is refused, as the
+    translator refuses it, a variable's or a struct's field; a `d` on a type
+    named like a number behind its `%` refuses the program (stricter). -/
+def tyRaw (nm : String) : SIR := [["ty", nm, "3", dW, "RawBlock", "A", "0", "F", "2", "ptr", "i64", "size", "i64", "V", "0"]]
+example : (elabS (irDW "drop__W" dW "i64" [] [] (tyRaw "%RawBlock"))).isSome := by decide +kernel
+example : (elabS (irDW "drop__W" dW "i64" [["v", "2", "1", "1", "0", "1", "-1", "r", "%RawBlock"]] []
+    (tyRaw "%RawBlock"))).isNone := by decide +kernel
+example : (elabS (irDW "drop__W" dW "i64" [["v", "2", "1", "1", "0", "1", "-1", "t", "%S"]] []
+    (tyRaw "%RawBlock" ++ tyS2 "%RawBlock" "i64"))).isNone := by decide +kernel
+example : (elabS (irDW "drop__W" dW "i64" [] [] (tyRaw "%i64"))).isNone := by decide +kernel
+
 /-- The binding is a `letd` of the destructor, a struct of one number field
     padded with a number (`.prod .int .int`), its literal the pair of two
     temporaries; a value of a destructor type is never returned at once
@@ -3612,5 +3766,72 @@ example : (elabS (irNumW (cbW ++ [["v", "2", "1", "1", "0", "1", "-1", "u", "%W"
     litW callW [] (fnDropW "drop__W" ++ tyW dW "i64"))).isNone := by decide +kernel
 example : (elabS (irNumW (cbW ++ [["v", "2", "1", "1", "0", "1", "-1", "u", "i64"], ["let", "2", "use", "c"]])
     litW callW [] (fnDropW "drop__W" ++ tyW dW "i64"))).isSome := by decide +kernel
+
+/-! ### Witnesses (step 9: channels) -/
+
+/-- `tools/ncore/certify/chan_int_sent_and_received.nu`'s core IR (its
+    program's function, a library type with a destructor, as
+    `stdlib/std/channel.nu` brings, and its `sum` line; the file `a.nu`). -/
+def irChan : SIR := [
+  ["fn", "main", "i64", "0", "3", "a.nu", "0", ""],
+  ["v", "0", "2", "1", "0", "4", "-1", "", "%Channel__i64"], ["v", "1", "1", "1", "4096", "4", "-1", "ch", "%Channel__i64"],
+  ["v", "2", "2", "1", "0", "6", "-1", "", "{ i1, i64 }"], ["v", "3", "1", "1", "4096", "6", "-1", "got", "{ i1, i64 }"],
+  ["v", "4", "2", "1", "0", "7", "-1", "", "i64"], ["v", "5", "1", "2", "0", "7", "-1", "v", "i64"],
+  ["v", "6", "1", "1", "0", "7", "-1", "r", "i64"],
+  ["scope"], ["line", "4"], ["let", "0", "call", "chan_new__i64", "0"], ["let", "1", "use", "v0"], ["drop", "0"],
+  ["line", "5"], ["eval", "call", "chan_send__i64", "2", "v1", "c"],
+  ["line", "6"], ["let", "2", "call", "chan_recv__i64", "1", "v1"], ["let", "3", "use", "v2"], ["drop", "2"],
+  ["line", "7"], ["let", "4", "none"], ["match", "v3"], ["arm", "T"], ["scope"], ["let", "5", "payload", "v3", "T", "0"],
+  ["assign", "v4", "use", "v5"], ["end"], ["arm", "F"], ["scope"], ["end"], ["end"], ["let", "6", "use", "c"], ["drop", "4"],
+  ["line", "8"], ["eval", "call", "chan_close__i64", "1", "v1"],
+  ["line", "9"], ["eval", "scalar", "2", "v6", "c"], ["ret", "c"], ["end"], ["endfn"],
+  ["ty", "%MutexImpl", "3", "1-d---", "MutexImpl", "A", "0", "F", "1", "blk", "%RawBlock", "V", "0"],
+  ["sum", "main", "0", "safe=1", "vkeeps=:", "vholds=:", "rviews=:", "body_done=1"]]
+
+/-- The term `nurl-cert translate` prints for it, written out: the channel
+    a `lockNew` of a fresh queue and a 0 flag, moved into `ch`; the send a
+    `chanSend` of a temporary; the receive an owned option (`chanRecv
+    true`), matched; the close a `chanClose`. -/
+def pChan : Prog := [
+  { params := [], resTy := .int, resOwn := false, lends := [], rholds := [], outHolds := [],
+    body := .block (.seq (.letv 12 (.new .int) (.letv 13 (.expr (.lit 0)) (.letv 14 (.pair 12 13)
+      (.letv 1 (.lockNew (.prod (.vec .int) .int) 14) (.letv 2 (.var 1) (.letv 10 (.expr .any)
+      (.letv 11 (.chanSend 2 10) (.letv 3 (.chanRecv true 2) (.letv 4 (.var 3) (.letv 5 (.expr .any)
+      (.seq (.ite (.isl 4) .skip (.letv 6 (.getr 4) (.assign 5 (.expr (.var 6)))))
+        (.letv 7 (.expr .any) (.letv 9 (.chanClose 2)
+          (.letv 8 (.expr (.add .any (.lt (.add (.add (.lit 0) (.var 7)) .any) (.lit 0))))
+            (.assign 0 (.expr .any)))))))))))))))) (.exit 0)), nvars := 16 }]
+
+theorem elab_chan : elabIR (encIR irChan) = some (pChan, .letcall 0 0 [] .skip) :=
+  elabIs_sound _ _ _ (by decide +kernel)
+
+/-- A program of one channel `ch` (`v0`, of type `%Channel__<el>`, made by
+    `chan_new__<el>`), then the statements `body`. -/
+def irCh (el : String) (body : SIR) : SIR :=
+  irM [["v", "0", "1", "1", "0", "1", "-1", "ch", "%Channel__" ++ el]]
+    ([["let", "0", "call", "chan_new__" ++ el, "0"]] ++ body ++ [["ret", "c"]]) []
+
+/-- Refused as the translator refuses them: a channel of raw text or of a
+    struct (`__chan_elem`), a channel call on a literal (its rule needs a
+    variable, and no other takes the call), a `chan_new` given an argument;
+    their neighbours are in the subset: a channel of `String`s or of `Vec`s
+    of numbers, each call on the channel, a share of it, a receive that
+    does not wait. -/
+example : (elabS (irCh "i64" [])).isSome := by decide +kernel
+example : (elabS (irCh "String" [])).isSome := by decide +kernel
+example : (elabS (irCh "Vec__i64" [])).isSome := by decide +kernel
+example : (elabS (irCh "str" [])).isNone := by decide +kernel
+example : (elabS (irCh "W" [])).isNone := by decide +kernel
+example : (elabS (irCh "i64" [["eval", "call", "chan_send__i64", "2", "v0", "c"],
+    ["eval", "call", "chan_try_recv__i64", "1", "v0"], ["eval", "call", "chan_close__i64", "1", "v0"]])).isSome := by
+  decide +kernel
+example : (elabS (irCh "i64" [["eval", "call", "chan_send__i64", "2", "c", "c"]])).isNone := by decide +kernel
+example : (elabS (irCh "i64" [["eval", "call", "chan_close__i64", "1", "c"]])).isNone := by decide +kernel
+example : (elabS (irCh "i64" [["eval", "call", "chan_new__i64", "1", "c"]])).isNone := by decide +kernel
+example : (elabS (irCh "i64" [["eval", "call", "chan_send__str", "2", "v0", "c"]])).isNone := by decide +kernel
+example : (elabS (irM [["v", "0", "1", "1", "0", "1", "-1", "a", "%Channel__i64"],
+    ["v", "1", "1", "1", "0", "1", "-1", "b", "%Channel__i64"]]
+    [["let", "0", "call", "chan_new__i64", "0"], ["let", "1", "call", "Channel_share__i64", "1", "v0"], ["ret", "c"]] [])).isSome := by
+  decide +kernel
 
 end C.Elab

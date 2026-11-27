@@ -45,7 +45,7 @@ $ `words.nu`
     ( nurl_print `                   again with nurlc and the translator, and compare them\n` )
     ( nurl_print `  --formal DIR     the formal/ tree (default $NURL_FORMAL, else ./formal)\n` )
     ( nurl_print `  --nurlc PATH     the compiler (default $NURLC, else nurlc)\n` )
-    ( nurl_print `  --lake PATH      Lean's build tool (default lake)\n` )
+    ( nurl_print `  --lean PATH      Lean (default $LEAN, else lean: elan's picks formal/'s toolchain)\n` )
     ( nurl_print `  --stdlib DIR     the standard library's root (default $NURL_STDLIB, else <formal>/..)\n` )
     ( nurl_print `  --version        print the version and exit\n` )
 }
@@ -60,7 +60,7 @@ $ `words.nu`
     ( args_opt p `binary` 0 `FILE` `the built program` )
     ( args_opt p `formal` 0 `DIR` `the formal/ tree` )
     ( args_opt p `nurlc` 0 `PATH` `the compiler` )
-    ( args_opt p `lake` 0 `PATH` `Lean's build tool` )
+    ( args_opt p `lean` 0 `PATH` `Lean` )
     ( args_opt p `stdlib` 0 `DIR` `the standard library's root` )
     ^ p
 }
@@ -115,11 +115,11 @@ $ `words.nu`
     } {}
     : String formal ( __opt_abs p `formal` `NURL_FORMAL` `formal` )
     : String nurlc ( __opt_cmd p `nurlc` `NURLC` `nurlc` )
-    : String lake ( __opt_cmd p `lake` `LAKE` `lake` )
+    : String lean ( __opt_cmd p `lean` `LEAN` `lean` )
     : String binary ( __opt_abs p `binary` `` `` )
     : String sl_dflt ( nc_join ( string_data formal ) `..` )
     : String stdlib ( __opt_abs p `stdlib` `NURL_STDLIB` ( string_data sl_dflt ) )
-    : CertOpts o @ CertOpts { src out prof nurlc formal lake binary stdlib }
+    : CertOpts o @ CertOpts { src out prof nurlc formal lean binary stdlib }
     ^ ( cert_certify o )
 }
 
@@ -127,12 +127,12 @@ $ `words.nu`
     : String bundle ( nc_abs ( string_data target ) )
     : String binary ( __opt_abs p `binary` `` `` )
     : String formal ( __opt_abs p `formal` `NURL_FORMAL` `formal` )
-    : String lake ( __opt_cmd p `lake` `LAKE` `lake` )
+    : String lean ( __opt_cmd p `lean` `LEAN` `lean` )
     : b rebuild ( args_present p `rebuild` )
     : String nurlc ( __opt_cmd p `nurlc` `NURLC` `nurlc` )
     : String sl_dflt ( nc_join ( string_data formal ) `..` )
     : String stdlib ( __opt_abs p `stdlib` `NURL_STDLIB` ( string_data sl_dflt ) )
-    : VerOpts o @ VerOpts { bundle binary formal lake rebuild nurlc stdlib }
+    : VerOpts o @ VerOpts { bundle binary formal lean rebuild nurlc stdlib }
     ^ ( cert_verify o )
 }
 

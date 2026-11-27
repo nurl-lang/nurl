@@ -33,7 +33,7 @@ $ `stdlib/std/random.nu`
     String prof
     String nurlc
     String formal
-    String lake
+    String lean
     String binary
     String stdlib
 }
@@ -512,7 +512,7 @@ $ `stdlib/std/random.nu`
         // (`cert_lean_check`: the bundle's modules, combined).
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
-        : LeanRun lr ( cert_lean_check ( string_data . o lake ) ( string_data formal ) out ( string_data work ) try_elab )
+        : LeanRun lr ( cert_lean_check ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab )
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
             = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)` `the verified checker refuses the program (C.certOK2B is false)` )

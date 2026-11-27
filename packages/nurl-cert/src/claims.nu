@@ -237,11 +237,12 @@ $ `words.nu`
 // and `go`'s `.letd`), as the translator writes them:
 //   Stmt  .skip .seq .letv .letcall .assign .ite .exit .block .loop .push .free .edit .callc .letd
 //   Rhs   .expr .new .var .borrow .at .view .sat .pack .pair .fst .snd .inl .inr .getr
+//         .lockNew .lockClone .chanSend .chanRecv .chanClose (step 9, `intrP`)
 //   Expr  .any .lit .var .add .lt .len .slen .isl
 //   Edit  .push .trunc
 //   PMode .inp .sink .inout
 //   Eff   .replace .drop .realloc .dropIn
-//   Ty    .int .vec .slice .prod .sum .fn .dtor
+//   Ty    .int .vec .slice .prod .sum .fn .dtor .lk
 //   Cross .any (a closure's class; the same word as Expr's)
 // and the Bools of `resOwn := false` / `true` (a buffer, a struct or an
 // option handed back) and of `.edit true` (a change through a borrow). A
@@ -253,7 +254,7 @@ $ `words.nu`
 // Of those, the ones elabIR builds for closures alone (step 6; step 7's
 // structs build `.prod .pair .fst .snd` too).
 : s ELAB_CLO_CTORS `callc pack`
-: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc letd expr new var borrow at view sat pack pair fst snd inl inr getr any lit add lt len slen isl trunc inp sink inout replace drop realloc dropIn int vec slice prod sum fn dtor`
+: s ELAB_CTORS `skip seq letv letcall assign ite exit block loop push free edit callc letd expr new var borrow at view sat pack pair fst snd inl inr getr any lit add lt len slen isl trunc inp sink inout replace drop realloc dropIn int vec slice prod sum fn dtor lockNew lockClone chanSend chanRecv chanClose lk`
 
 // Can Program.lean's term be `elabIR`'s at all? F when it holds a
 // constructor outside ELAB_CTORS: `elabIs` compares the two terms
