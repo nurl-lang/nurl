@@ -3367,7 +3367,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) (hfo : FreshOK Γa) {Fa : List V
     have heq : (⟨.vec s, .bor, true, [⟨S.ρ y, .innerAt n⟩], (S.subE (S.liftE y Ey)).held,
         false, false, false, false⟩ : Entry) =
         S.subE ⟨.vec s, .bor, true, [⟨S.ρ y, .innerAt n⟩], (S.liftE y Ey).held, false, false, false, false⟩ := by
-      simp only [RSetup.subE, subE_held, List.flatMap_cons, List.flatMap_nil, hsd, List.append_nil]
+      simp only [RSetup.subE, List.flatMap_cons, List.flatMap_nil, hsd, List.append_nil]
     rw [heq]
     apply S.subE_weaker
     rw [S.liftE_of_bor x rfl]

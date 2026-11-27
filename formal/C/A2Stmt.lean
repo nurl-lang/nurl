@@ -786,7 +786,7 @@ theorem thruOKRB_sound {D : List Var} {Γ1 : Ctx} {F : List Var} {op : Edit} {tx
   | none => intro hr; cases hr
   | some Er =>
     intro hr
-    simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hr
+    simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hr
     obtain ⟨⟨⟨⟨hl, hc⟩, hds⟩, hsh⟩, hho⟩ := hr
     refine ⟨Er, rfl, hl, ?_, dtorSafeB_sound hs hds, hsh, heldOKB_sound hs hho⟩
     rcases hc with hc | hc
