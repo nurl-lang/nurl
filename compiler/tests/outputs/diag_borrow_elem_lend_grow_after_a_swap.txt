@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_borrow_elem_lend_grow_after_a_swap.nu:15:5: error: 'd1' borrows from 'vs', which ended at line 14 — a value lent from it was passed to 'string_push_str', which may move or free its buffer. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so 'd1' is gone too. Read it before that line, or take a copy that lives on its own where it is bound: ( mem_dup d1 ).
+    ( nurl_println d1 )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
