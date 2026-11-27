@@ -139,6 +139,8 @@ def comp : Kind → Kind → Kind
   | _, .name b t => .name b t
   | .share, _ => .share   -- A3.1: what is reached inside a payload stays inside it
   | _, .share => .share
+  -- AGORA-374: what is reached inside element `i` stays inside element `i`
+  | .innerAt i, _ => .innerAt i
   | _, _ => .inner
 
 theorem comp_self_r (a : Kind) : comp a .self = a := by cases a <;> rfl
