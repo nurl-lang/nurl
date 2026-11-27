@@ -1,4 +1,4 @@
-### Breaking
+### Changed
 
 - **Certificate bundle schema bumped from `nurl-cert/1` to `nurl-cert/2` (AGORA-1033, part of AGORA-1015).**
   `nurl-cert` now emits conditional memory-safety certificates for single-threaded programs that contain functions the translator does not yet cover, whenever each such function's signature, callee set and local `hasThru` bit can be derived unambiguously from the core IR and at least one own function is translated:
