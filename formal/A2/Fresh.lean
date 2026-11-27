@@ -29,7 +29,7 @@ theorem StmtT.freshOK {P : Prog} (_hP : ProgOK P) {Γ : Ctx} {F : List Var} {s :
     · exact (ih hs (h.weaker hw)).weaker ho
   | ite _ _ _ _ _ iha _ => intro hs h; simp only [Stmt.src, Bool.and_eq_true] at hs; exact iha hs.1 h
   | «while» => exact fun _ h => h
-  | insert _ _ _ ih => exact fun _ h => ih rfl h
+  | insert _ _ _ _ ih => exact fun _ h => ih rfl h
   | block _ ih => exact ih
   | catchR => intro hs; simp [Stmt.src] at hs
   | scope => intro hs; simp [Stmt.src] at hs
@@ -43,7 +43,7 @@ theorem StmtT.freshOK {P : Prog} (_hP : ProgOK P) {Γ : Ctx} {F : List Var} {s :
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all
     exact FreshOK.exitScope (ih hks (h1.bind hx1 hE)) x
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ _ ihs ihp =>
     intro _ h
     obtain ⟨h1, hE, _⟩ := hr.freshOK (h.kill .replace false y)
     have hx1 : Γ1 x = none := by

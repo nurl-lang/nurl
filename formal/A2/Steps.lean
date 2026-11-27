@@ -1893,18 +1893,80 @@ theorem rhs_remove {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   let m1 := m.set y ⟨true, some (.node t' c d (es.eraseIdx n ++ [es[n]]))⟩
   have hT1 : m1.st y = some ⟨true, some (.node t' c d (es.eraseIdx n ++ [es[n]]))⟩ := by simp [m1]
   have hst1 : ∀ o, o ≠ y → m1.st o = m.st o := fun o ho => by simp [m1, upd_ne _ _ ho]
-  have hpm : RhsPost m m1 Γ Γ F :=
-    ⟨hi.perm hanch hyF hT hp, rfl, Nat.le_refl _,
+  have hm : E.mode = .own := by
+    rcases hcan with h | ⟨b, h, _⟩
+    · exact h
+    · exact absurd h (hi.noInout y E b hy)
+  have popMn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      Eff.drop.kills t.holdsView d.kind = true → d.root ≠ y := by
+    intro _ _ _ _ ⟨r, k⟩ _ hb hk; cases k <;> simp_all [Kind.bound, Eff.kills]
+  -- (AGORA-374: the reordering in the context the pop leaves, `y` kept: a
+  -- dependency on `y` inside an element by its index, which the reordering
+  -- would move, ends there.)
+  let Γ1 := upd (kill .drop t.holdsView y Γ) y (some E)
+  obtain ⟨Ey, hyE, hpg⟩ := hi.perm_gen hanch hyF hT hp (e := .drop) (hv := t.holdsView) popMn
+    (HeldSpared.of_none hno .drop _) hds (fun k hk _ i h => by subst h; simp [Eff.kills] at hk)
+  rw [hy] at hyE; cases hyE
+  have hpm : RhsPost m m1 Γ Γ1 F :=
+    ⟨hpg, rfl, Nat.le_refl _,
       fun o => by
         by_cases ho : o = y
         · subst ho; rw [hT1, hT]; rfl
         · rw [hst1 o ho],
-      fun o ho => hst1 o (fun h => hyF (h ▸ ho)), fun _ _ h _ => h, fun _ => rfl,
-      fun _ E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ [], BlkLe.refl _⟩
-  obtain ⟨post, out⟩ := rhs_pop hpm.inv hanch hy hl hty hcan hyF (HeldSpared.of_none hno .drop) hT1 hds
+      fun o ho => hst1 o (fun h => hyF (h ▸ ho)),
+      fun p Ep hp' hrb => by
+        have hpy : p ≠ y := fun h => by subst h; rw [hy] at hp'; cases hp'; rw [hm] at hrb; cases hrb
+        simp only [Γ1, upd_ne _ _ hpy, A2.kill, hp', Option.map_some]
+        rw [killE_rootb hanch hyF _ _ popMn (HeldSpared.of_none hno _ _) hp' hrb],
+      fun o => by
+        by_cases ho : o = y
+        · subst ho; simp [Γ1, hy]
+        · simp only [Γ1, upd_ne _ _ ho]; exact kill_dom _ _ _ _,
+      fun o E1 h => by
+        by_cases ho : o = y
+        · subst ho; simp only [Γ1, upd_same, Option.some.injEq] at h; subst h; exact ⟨E, hy, rfl, rfl⟩
+        · simp only [Γ1, upd_ne _ _ ho] at h; exact kill_cmode h,
+      fun o E' h hd hos hn _ => by
+        by_cases ho : o = y
+        · subst ho; simp only [Γ1, upd_same, Option.some.injEq] at h; subst h
+          exact ⟨_, hy, hd, hos, hn, fun _ h _ => h⟩
+        · simp only [Γ1, upd_ne _ _ ho] at h
+          exact (DKeep.refl Γ []).kill .drop t.holdsView y o E' h hd hos hn (by simp),
+      BlkLe.refl _⟩
+  have hy1 : Γ1 y = some E := by simp [Γ1]
+  have hno1 : NoHeld Γ1 y := by
+    intro p Ep hp' hrb d hd hdr
+    have hpy : p ≠ y := fun h => by subst h; rw [hy1] at hp'; cases hp'; rw [hm] at hrb; cases hrb
+    obtain ⟨E0, h0, hmo, _⟩ := hpm.cmode p Ep hp'
+    have hEp : Ep = E0 := by
+      have := hpm.rootb p E0 h0 (hmo ▸ hrb); rw [hp'] at this; cases this; rfl
+    subst hEp
+    exact hno p Ep h0 hrb d hd hdr
+  have hds1 : DtorSafe Γ1 .drop t.holdsView y := by
+    intro o Eo ho hd hos
+    by_cases hoy : o = y
+    · subst hoy; rw [hy1] at ho; cases ho; exact hds _ _ hy hd hos
+    · simp only [Γ1, upd_ne _ _ hoy] at ho
+      exact (hds.kill .drop t.holdsView y) o Eo ho hd hos
+  have hanch1 : RootbAnch Γ1 F := fun p Ep hp' hrb => by
+    obtain ⟨E0, h0, hmo, _⟩ := hpm.cmode p Ep hp'
+    have := hpm.rootb p E0 h0 (hmo ▸ hrb); rw [hp'] at this; cases this
+    exact hanch p _ h0 hrb
+  obtain ⟨post, out⟩ := rhs_pop hpm.inv hanch1 hy1 hl hty hcan hyF
+    (HeldSpared.of_none hno1 .drop) hT1 hds1
   have hm2 : m1.set y ⟨true, some (.node t' c d (es.eraseIdx n))⟩ =
       m.set y ⟨true, some (.node t' c d (es.eraseIdx n))⟩ :=
     Mem.set_set _ _ _ _
+  -- the pop's kill of `Γ1` is the pop's kill of `Γ`
+  have hkk : kill .drop t.holdsView y Γ1 = kill .drop t.holdsView y Γ := by
+    funext o
+    by_cases ho : o = y
+    · subst ho; simp [Γ1, A2.kill, hy]
+    · simp only [Γ1, A2.kill, upd_ne _ _ ho]
+      cases Γ o with
+      | none => rfl
+      | some Eo => simp only [Option.map_some, Option.some.injEq]; unfold killE; by_cases h : hits .drop t.holdsView y Eo <;> simp [h]
+  rw [hkk] at post out
   exact ⟨hpm.trans (hm2 ▸ post), hm2 ▸ out⟩
 
 /-- `= x r`'s store and context, from what the right-hand side left
@@ -3012,11 +3074,12 @@ theorem push_growN {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
               obtain ⟨d0, o0, l0, hvv, hvo⟩ := hp.vs s' _ hin
               cases hvv
               exact viewOr_home hi.heap hvo))
-  · intro k hk
+  · intro k hk _
     have hev : Evolve m1 m' x t' c d d' es (es ++ [v]) := ⟨hT, by simp [m'], hwT', rfl⟩
-    have hpre : ∀ e ∈ es, e ∈ es ++ [v] := fun e he => List.mem_append_left _ he
+    have hpfx : ∀ (i : Nat) (e : Val), es[i]? = some e → (es ++ [v])[i]? = some e := fun i e h => by
+      rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp h).1]; exact h
     have hkv : k ≠ .view := by intro h; subst h; simp [Eff.kills] at hk
-    exact ⟨hev.grow_vkeep hpre hkv, hev.grow_hkeep hpre (fun h => by subst h; simpa [Eff.kills] using hk)
+    exact ⟨hev.grow_vkeep hpfx hkv, hev.grow_hkeep hpfx (fun h => by subst h; simpa [Eff.kills] using hk)
       hkv hshN⟩
   · refine ⟨⟨true, some (.node t' c d' (es ++ [v]))⟩, by simp [m'], by rw [hty]; exact hi.tyok hx ▸ (by
         rw [hty]), ⟨by simp [hos], fun _ => ⟨by rw [hty]; rfl, fun U hU => by cases hU; rw [hty]; exact hwT',
@@ -3164,7 +3227,7 @@ theorem reroot_sub {D D' ds : List Dep} (h : D ⊆ D') : reroot p D ds ⊆ reroo
   · exact mem_reroot_of_eq hk (h hd')
 
 theorem lands_notName {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.isName = false := by
-  rcases h with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ <;> rfl
+  rcases h with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> rfl
 
 /-- What lands through `p`, a borrowed slot, lands through one of `p`'s own
     dependencies, composed: `p` reaches memory only through them. A3.1: so

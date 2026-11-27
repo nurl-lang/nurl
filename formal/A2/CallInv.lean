@@ -710,25 +710,21 @@ theorem CallH.heldZ' (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk 
           by_cases hvt : (argE Γ (args.getD k' 0)).ty = .int
           · rw [if_pos hvt] at hheld; simp at hheld
           rw [if_neg hvt] at hheld
-          have hdv : d ∈ (argE Γ (args.getD k' 0)).vdeps := by
-            have hsub : ∀ {t : Ty} {ds : List Dep}, d ∈ typedDeps t ds → d ∈ ds := by
-              intro t ds hd'
-              unfold typedDeps at hd'
-              split at hd'
-              · rcases List.mem_append.mp hd' with h1 | h1
-                · exact (List.mem_filter.mp h1).1
-                · exact (List.mem_filter.mp h1).1
-              · exact (List.mem_filter.mp hd').1
-            exact List.mem_append_right _ (hsub hheld)
+          -- (AGORA-374: the anchor is the coarse image of one the argument holds,
+          -- on the same root, changing nothing by name)
+          obtain ⟨d0, hd0, hdd⟩ := typedDeps_coarse hheld
+          have hdv : d0 ∈ (argE Γ (args.getD k' 0)).vdeps := List.mem_append_right _ hd0
+          have hb0 : d0.kind.bound = .none := by rw [hdd] at hb'; simpa using hb'
+          have hr0 : d.root = d0.root := by rw [hdd]; rfl
           have hA : ∀ a ∈ args, ∀ o V, m.st a = some ⟨o, some V⟩ → LiveGood m d.root V := by
             intro a ha o V hs
             obtain ⟨Ea, hEa, hla⟩ := hargs a ha
             by_cases hat : Ea.ty = .int
             · exact hi.toMInv.goodInt hEa hla hat hs
             · have hat' : (argE Γ a).ty ≠ .int := by simp [argE, hEa, hat]
-              have hnm := NamesFree.noMut h.nfree ha hat' hvvm hvt hdv hb'
+              have hnm := NamesFree.noMut h.nfree ha hat' hvvm hvt hdv hb0
               simp only [argE, hEa, Option.getD_some] at hnm
-              exact hi.toMInv.goodOf hEa hla hs hnm
+              rw [hr0]; exact hi.toMInv.goodOf hEa hla hs hnm
           exact hA
       exact hb.frameCaps hi.toMInv hlt hargs hA (fun v o V hv hs => by
         rcases not_mem_callZ hv with hge | hio | hmn

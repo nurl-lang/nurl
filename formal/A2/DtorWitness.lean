@@ -522,7 +522,7 @@ theorem withElem_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {v x : Var} {
     ∃ (Ev : Entry) (t : Ty), Γ v = some Ev ∧ Ev.ty = .vec t ∧ t.dtorFree = true := by
   generalize hst : Stmt.withElem v i x s = st at h
   induction h with
-  | @withElem _ Γ _ _ _ _ _ _ _ _ Ev _ _ _ _ hv _ _ _ _ hr _ _ _ _ hdf _ _ =>
+  | @withElem _ Γ _ _ _ _ _ _ _ _ Ev _ _ _ _ hv _ _ _ _ hr _ _ _ _ _ hdf _ _ =>
     cases hst
     cases hr with
     | @pop _ E0 t hy _ hty _ _ _ =>
@@ -2515,7 +2515,7 @@ theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
   have hER : (callRes Kb implS [2]).mode ≠ .rootb ∧
       ∀ d ∈ (callRes Kb implS [2]).vdeps, d.root = 4 ∧ d.kind.isName = false := by
     simp [callRes, resMode, implS, heldOfArgs, argNames, argE, hb2, hEW, Entry.vdeps, ownHeld, Mode.ownSlot,
-      memDeps, nameDeps, Kind.isName, argMem, compAll, comp]
+      memDeps, nameDeps, Kind.isName, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll, comp]
     intro d _ hd
     rcases hd with rfl | rfl | rfl | rfl <;> exact ⟨rfl, rfl⟩
   let Kc : Ctx := A2.setE Kb 3 (callRes Kb implS [2])
@@ -2752,7 +2752,7 @@ theorem main2_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main2 Δ := by
   have hpost : callPost (fun _ => none) mk [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, mk, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) mk [] = Ecr := by
-    simp [callRes, mk, resMode, Ecr, heldOfArgs, ownHeld, argNames, argMem, compAll]
+    simp [callRes, mk, resMode, Ecr, heldOfArgs, ownHeld, argNames, argMem, coarseMem, compAll]
   have hc : CallT P (fun _ => none) [] 1 [] Ecr (fun _ => none) := by
     refine ⟨mk, rfl, rfl, fun i hi => by simp [mk] at hi, ?_, CallDtorSafe.of_none (fun _ _ h => by cases h) _ _,
       hres.symm, hpost.symm, fun _ => by simp [callR]⟩

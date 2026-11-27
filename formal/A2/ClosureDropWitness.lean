@@ -257,7 +257,7 @@ theorem glue_body : ∃ Δ, StmtT Pc ξ (sigCtx glue) [] glue.body Δ ∧
     simp only [callPost, hps, callPostAux, hmn, killNames, List.foldr, hae, hSd.kill_eq]
     rfl
   have hres : callRes (sigCtx glue) glue [0] = intE := by
-    simp [callRes, heldOfArgs, argMem, compAll, han, hae, ECD, memDeps, ownHeld, resMode, intE,
+    simp [callRes, heldOfArgs, argMem, coarseMem, compAll, han, hae, ECD, memDeps, ownHeld, resMode, intE,
       show glue.resTy = Ty.int from rfl, show glue.resOwn = false from rfl, show glue.lends = [] from rfl,
       show glue.rholds = [] from rfl]
   have hcall : CallT Pc (kill .replace false 0 (sigCtx glue)) [] 2 [0] intE G1 := by
@@ -636,7 +636,7 @@ theorem glue_body2 : ∃ Δ, StmtT Pd ξ (sigCtx glueD) [] glueD.body Δ ∧
     simp only [callPost, hps, callPostAux, hmn, killNames, List.foldr, hae, hSd.kill_eq]
     rfl
   have hres : callRes (sigCtx glueD) glueD [0] = intE := by
-    simp [callRes, heldOfArgs, argMem, compAll, han, hae, ECD2, memDeps, ownHeld, resMode, intE,
+    simp [callRes, heldOfArgs, argMem, coarseMem, compAll, han, hae, ECD2, memDeps, ownHeld, resMode, intE,
       show glueD.resTy = Ty.int from rfl, show glueD.resOwn = false from rfl, show glueD.lends = [] from rfl,
       show glueD.rholds = [] from rfl]
   have hcall : CallT Pd (kill .replace false 0 (sigCtx glueD)) [] 2 [0] intE G1 := by

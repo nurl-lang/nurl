@@ -1347,22 +1347,25 @@ theorem deep_self_hkeep {m m' : Mem} {o : Var} {T T' : Val} {t : Ty} {c d d' : N
   · -- a share at the top of the tree stays at its top
     obtain ⟨n0, hrn, hl⟩ := hla.root (by intro h; cases h)
     have htop := rootNode_own hT hrn
-    rcases hl with ⟨_, rfl⟩ | ⟨h, _⟩ | ⟨h, _⟩
+    rcases hl with ⟨_, rfl⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, h, _⟩
     · exact Or.inl ⟨_, Or.inl ⟨T', hT', hr.top_arc htop⟩, Or.inl ⟨rfl, rfl⟩⟩
+    · cases h
     · cases h
     · cases h
   · -- A3.5's third cut: so does a cell share
     obtain ⟨n0, hrn, hl⟩ := hla
     have htop := rootNode_own hT hrn
-    rcases hl with ⟨_, rfl⟩ | ⟨h, _⟩ | ⟨h, _⟩
+    rcases hl with ⟨_, rfl⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, h, _⟩
     · exact ⟨_, Or.inl ⟨T', hT', hr.top_cell htop⟩, Or.inl ⟨rfl, rfl⟩⟩
+    · cases h
     · cases h
     · cases h
   obtain ⟨n0, hrn, hla⟩ := hlan.root (by intro h; cases h)
   have htop := rootNode_own hT hrn
   have hN : Val.node t2 c2 d2 es2 = n0 := by
-    rcases hla with ⟨_, h⟩ | ⟨h, _⟩ | ⟨h, _⟩
+    rcases hla with ⟨_, h⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, h, _⟩
     · exact h
+    · cases h
     · cases h
     · cases h
   subst hN
@@ -1405,6 +1408,68 @@ theorem EHA_repl_below {n n' T T' : Val} (hr : Repl n n' T T') (hb : Below n T) 
   | inl hr' => exact ⟨_, Child.inl, hr'.sub'⟩
   | inr hr' => exact ⟨_, Child.inr, hr'.sub'⟩
   | pkg hr' => exact ⟨_, Child.pkg, hr'.sub'⟩
+
+/-- AGORA-374: …and a hole inside element `j` of a node whose addresses
+    are distinct is rewritten inside element `j`: a hole that holds an
+    address (`ha`) lies in that element alone, so the rewrite is there. -/
+theorem EHA_repl_belowAt {n n' T T' : Val} (hr : Repl n n' T T') {j : Nat} (hb : BelowAt j n T)
+    (hnd : T.ids.Nodup) {a : Nat} (ha : a ∈ n.ids) : BelowAt j n' T' := by
+  obtain ⟨ty, c, d, es, e, rfl, he, hs⟩ := hb
+  cases hr with
+  | here => exact (Below.not_self (BelowAt.below ⟨ty, c, d, es, e, rfl, he, hs⟩)).elim
+  | @elem _ _ _ pre post e0 e0' hr' =>
+    simp only [ids_node, List.nodup_cons] at hnd
+    have hk : (pre ++ e0 :: post)[pre.length]? = some e0 := by simp
+    have hj := nodup_idsL_index hnd.2.2 he hk (hs.ids a ha) (hr'.sub.ids a ha)
+    subst hj
+    exact ⟨_, _, _, _, e0', rfl, by simp, hr'.sub'⟩
+
+/-- AGORA-374: a hole inside element `j` of a node at the top of a tree
+    whose addresses are distinct is rewritten inside element `j` of that
+    node's counterpart, at the top of the new tree. -/
+theorem EHA_belowAt_hole {n n' n0 T T' : Val} (ht : Top n0 T) {j : Nat} (hb : BelowAt j n n0)
+    (hr : Repl n n' T T') (hnd : T.ids.Nodup) {i : Nat} (hi : i ∈ n.ids) :
+    ∃ n0', Top n0' T' ∧ BelowAt j n' n0' := by
+  induction ht generalizing T' with
+  | refl => exact ⟨T', Top.refl _, EHA_repl_belowAt hr hb hnd hi⟩
+  | @fst a b h ih =>
+    cases hr with
+    | here => exact (Below.not_self (Sub.of_below_sub hb.below (Sub.fst h.sub))).elim
+    | fst hr' =>
+      simp only [ids_pair, List.nodup_append] at hnd
+      obtain ⟨n0', h1, h2⟩ := ih hr' hnd.1
+      exact ⟨n0', Top.fst h1, h2⟩
+    | snd hr' =>
+      simp only [ids_pair, List.nodup_append] at hnd
+      exact (hnd.2.2 i ((hb.below.sub.trans h.sub).ids i hi) i (hr'.sub.ids i hi) rfl).elim
+  | @snd a b h ih =>
+    cases hr with
+    | here => exact (Below.not_self (Sub.of_below_sub hb.below (Sub.snd h.sub))).elim
+    | fst hr' =>
+      simp only [ids_pair, List.nodup_append] at hnd
+      exact (hnd.2.2 i (hr'.sub.ids i hi) i ((hb.below.sub.trans h.sub).ids i hi) rfl).elim
+    | snd hr' =>
+      simp only [ids_pair, List.nodup_append] at hnd
+      obtain ⟨n0', h1, h2⟩ := ih hr' hnd.2.1
+      exact ⟨n0', Top.snd h1, h2⟩
+  | @inl a h ih =>
+    cases hr with
+    | here => exact (Below.not_self (Sub.of_below_sub hb.below (Sub.inl h.sub))).elim
+    | inl hr' =>
+      obtain ⟨n0', h1, h2⟩ := ih hr' (by simpa using hnd)
+      exact ⟨n0', Top.inl h1, h2⟩
+  | @inr a h ih =>
+    cases hr with
+    | here => exact (Below.not_self (Sub.of_below_sub hb.below (Sub.inr h.sub))).elim
+    | inr hr' =>
+      obtain ⟨n0', h1, h2⟩ := ih hr' (by simpa using hnd)
+      exact ⟨n0', Top.inr h1, h2⟩
+  | @pkg a fs te ms cs h ih =>
+    cases hr with
+    | here => exact (Below.not_self (Sub.of_below_sub hb.below (Sub.pkg h.sub))).elim
+    | pkg hr' =>
+      obtain ⟨n0', h1, h2⟩ := ih hr' (by simpa using hnd)
+      exact ⟨n0', Top.pkg h1, h2⟩
 
 /-- A hole at the top of a tree whose addresses are distinct is rewritten
     at the top of the new one: a hole that holds an address (`hi`) occurs
@@ -1502,7 +1567,11 @@ theorem editB_hrefAt' {m' : Mem} {o : Var} {T T' n0 : Val} {t : Ty} {c d d' : Na
     (hsh' : SharesOK m' (.vec t) (.node t c d' es')) :
     HrefAt m' ⟨o, k⟩ c t H := by
   have hc : c ∈ (Val.node t c d es).ids := by simp
-  rcases hla with ⟨rfl, hn⟩ | ⟨rfl, hn⟩ | ⟨rfl, hb⟩
+  rcases hla with ⟨rfl, hn⟩ | ⟨rfl, hn⟩ | ⟨rfl, hb⟩ | ⟨j, rfl, hba⟩
+  rotate_left 3
+  · -- AGORA-374: inside element `j` of a node at the top: inside element `j` of its counterpart
+    obtain ⟨n0', ht', hb'⟩ := EHA_belowAt_hole htop hba hr hnd hc
+    exact ⟨d', es', Or.inl ⟨n0', Or.inl ⟨T', hT', ht'⟩, Or.inr (Or.inr (Or.inr ⟨j, rfl, hb'⟩))⟩, hw', hV, hN, hsh'⟩
   · -- the borrowed node is at the top: so is the new one
     subst hn
     exact ⟨d', es', Or.inl ⟨.node t c d' es', Or.inl ⟨T', hT', EHA_top_hole htop hr hnd hc⟩,
@@ -1512,7 +1581,7 @@ theorem editB_hrefAt' {m' : Mem} {o : Var} {T T' n0 : Val} {t : Ty} {c d d' : Na
       Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hw', hV, hN, hsh'⟩
   · -- strictly inside a node at the top: strictly inside its counterpart
     obtain ⟨n0', ht', hb'⟩ := EHA_below_hole htop hb hr hnd hc
-    exact ⟨d', es', Or.inl ⟨n0', Or.inl ⟨T', hT', ht'⟩, Or.inr (Or.inr ⟨rfl, hb'⟩)⟩, hw', hV, hN, hsh'⟩
+    exact ⟨d', es', Or.inl ⟨n0', Or.inl ⟨T', hT', ht'⟩, Or.inr (Or.inr (Or.inl ⟨rfl, hb'⟩))⟩, hw', hV, hN, hsh'⟩
 
 theorem editB_hrefAt {m' : Mem} {o : Var} {T T' n0 : Val} {t : Ty} {c d d' : Nat}
     {es es' : List Val} {k : Kind} {H : List Dep} (hT' : m'.st o = some ⟨true, some T'⟩)
@@ -1753,6 +1822,7 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi : MI
     | name b t0 => exact vkeep_name _ _ _ _ _
     | self => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
     | inner => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
+    | innerAt _ => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
     | view => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
     | share => exact (keep_notx hi hanch hoF hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
   -- ... and none is valid through `o` (`SelfFree`, `ViewsOK.keep_except`)
@@ -1888,6 +1958,7 @@ theorem NewSlot.edit_ne {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi :
     | name b t0 => exact vkeep_name _ _ _ _ _
     | self => exact (keep_notx_ne hi hanch hxa hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
     | inner => exact (keep_notx_ne hi hanch hxa hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
+    | innerAt _ => exact (keep_notx_ne hi hanch hxa hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
     | view => exact (keep_notx_ne hi hanch hxa hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
     | share => exact (keep_notx_ne hi hanch hxa hst (h _ hd rfl) hne (BlkLe.of_eq hblk)).1
   -- ... and none is valid through `o` (`SelfFree`, `ViewsOK.keep_except`)
@@ -2024,7 +2095,8 @@ theorem PkgKeep.of_repl {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hr : Repl (.node t c d es) (.node t c d' es') T T')
     (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m i)
     (hvw : (∀ i o l, ¬ Sub (.view i o l) (.node t c d' es')) ∨
-      (e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
+      (e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true ∧
+        ∀ j, e.kills hv (.innerAt j) = true))
     (hself : ∀ Ex' o v, ox = some Ex' → Alive Ex' → m'.st x = some ⟨o, some v⟩ →
       ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
     PkgKeep m m' Γ e hv x ox := by
@@ -2076,7 +2148,8 @@ theorem PkgKeep.of_repl_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hr : Repl (.node t c d es) (.node t c d' es') T T')
     (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m i)
     (hvw : (∀ i o l, ¬ Sub (.view i o l) (.node t c d' es')) ∨
-      (e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
+      (e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true ∧
+        ∀ j, e.kills hv (.innerAt j) = true))
     (hself : ∀ Ex' o v, ox = some Ex' → Alive Ex' → m'.st x = some ⟨o, some v⟩ →
       ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
     PkgKeep m m' Γ e hv x ox := by
@@ -2257,9 +2330,10 @@ theorem vkeep_view_below {m m' : Mem} {o : Var} {T T' n n' : Val}
       all_goals (rw [hT] at h0; cases h0)
     subst hn0
     have heq : Val.node s c d es = .node u cT dT esT := by
-      rcases hl with ⟨h1, _⟩ | ⟨_, h2⟩ | ⟨h1, _⟩
+      rcases hl with ⟨h1, _⟩ | ⟨_, h2⟩ | ⟨h1, _⟩ | ⟨_, h1, _⟩
       · simp at h1
       · exact h2
+      · simp at h1
       · simp at h1
     cases heq
     cases hr with
@@ -2287,10 +2361,11 @@ theorem effAt_dropE {op : Edit} {k : Kind} {s : Bool} {Eo : Entry} {T n0 n : Val
     cases hwT with
     | node _ =>
       cases htop
-      rcases hla with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨_, hb⟩
+      rcases hla with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨_, hb⟩ | ⟨_, h1, _⟩
       · cases h1
       · cases h1
       · exact ⟨⟨_, _, _, _, rfl⟩, hb⟩
+      · cases h1
 
 /-! ### The owner's change -/
 
@@ -2325,6 +2400,7 @@ theorem MInv.edit_dropE {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi :
       intro _ _ _ _ ⟨_, _, hks, _⟩
       exact absurd rfl hks
     | inner => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
+    | innerAt _ => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
     | view =>
       rcases he with rfl | ⟨rfl, hTn, hb⟩
       · simp [Eff.kills] at hk
@@ -2338,7 +2414,7 @@ theorem MInv.edit_dropE {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi :
     rw [killE_nil (root_vdeps (by rw [hmo]; rfl) hh0)]; exact ⟨hl0, hh0⟩
   have hne : e ≠ .replace := by rcases he with rfl | ⟨rfl, _⟩ <;> decide
   have h := hi.change hanch ho hoF (hmn_of_ne_replace false hne o) hhs (by rw [hmo]; simp) hst hheap
-    hnv hkeep (NewSlot.edit hi hanch ho hoF hmo hT hT' hst hhv hr hw' hblk hsh') hds (fun h => by cases h)
+    hnv (fun k hk _ => hkeep k hk) (NewSlot.edit hi hanch ho hoF hmo hT hT' hst hhv hr hw' hblk hsh') hds (fun h => by cases h)
     (fun h => by cases h) hnew
     (PkgKeep.of_repl hi hanch ho hoF hT hT' hst hr hfree hes
       (Or.inl fun i o l hv => hw'.noView (by simpa [Ty.holdsView] using hhv) hv)
@@ -2400,6 +2476,7 @@ theorem MInv.edit_dropE_ne {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (h
       intro _ _ _ _ ⟨_, _, hks, _⟩
       exact absurd rfl hks
     | inner => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
+    | innerAt _ => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
     | view =>
       rcases he with rfl | ⟨rfl, hTn, hb⟩
       · simp [Eff.kills] at hk
@@ -2413,7 +2490,7 @@ theorem MInv.edit_dropE_ne {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (h
     rw [killE_nil (root_vdeps (by rw [hmo]; rfl) hh0)]; exact ⟨hl0, hh0⟩
   have hne : e ≠ .replace := by rcases he with rfl | ⟨rfl, _⟩ <;> decide
   have h := hi.change_ne hanch ho hxa hnr (by rw [hmo]; simp) hst hheap
-    hnv hkeep (NewSlot.edit_ne hi hanch ho hxa hmo hT hT' hst hhv hr hw' hblk hsh') hds (fun h => by cases h)
+    hnv (fun k hk _ => hkeep k hk) (NewSlot.edit_ne hi hanch ho hxa hmo hT hT' hst hhv hr hw' hblk hsh') hds (fun h => by cases h)
     (fun h => by cases h) hnew
     (PkgKeep.of_repl_ne hi hanch ho hxa hT hT' hst hr hfree hes
       (Or.inl fun i o l hv => hw'.noView (by simpa [Ty.holdsView] using hhv) hv)
@@ -2549,9 +2626,10 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       obtain ⟨cT, dT, esT, hTe⟩ : ∃ cT dT esT, T = .node t cT dT esT := by
         cases hwT with | node _ => exact ⟨_, _, _, rfl⟩
       have hTn : T = .node t c d es := by
-        rcases hla with ⟨_, hnn⟩ | ⟨hkv, _⟩ | ⟨hki, _⟩
+        rcases hla with ⟨_, hnn⟩ | ⟨hkv, _⟩ | ⟨hki, _⟩ | ⟨_, hki, _⟩
         · rw [hnn]; rw [hTe] at htop ⊢; exact htop.node.symm
         · rw [hk] at hkv; cases hkv
+        · rw [hk] at hki; cases hki
         · rw [hk] at hki; cases hki
       subst hTn
       have hT'n : T' = .node t c d (es ++ [v]) := hr.here_inv
@@ -2644,9 +2722,10 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
       obtain ⟨cT, dT, esT, hTe⟩ : ∃ cT dT esT, T = .node t cT dT esT := by
         cases hwT with | node _ => exact ⟨_, _, _, rfl⟩
       have hTn : T = .node t c d es := by
-        rcases hla with ⟨_, hnn⟩ | ⟨hkv, _⟩ | ⟨hki, _⟩
+        rcases hla with ⟨_, hnn⟩ | ⟨hkv, _⟩ | ⟨hki, _⟩ | ⟨_, hki, _⟩
         · rw [hnn]; rw [hTe] at htop ⊢; exact htop.node.symm
         · rw [hk] at hkv; cases hkv
+        · rw [hk] at hki; cases hki
         · rw [hk] at hki; cases hki
       subst hTn
       have hT'n : T' = .node t c m1.nid (es ++ [v]) := hr.here_inv

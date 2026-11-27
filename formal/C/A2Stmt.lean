@@ -1474,7 +1474,12 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
       | none => none
     else none
   | Γ, F, .push x y => pushB D Γ F x y
-  | Γ, F, .insert x i y => if checkExpr2 Γ i && decide (x ∉ F) then pushB D Γ F x y else none
+  | Γ, F, .insert x i y =>
+    if checkExpr2 Γ i && decide (x ∉ F) then
+      match pushB D Γ F x y with
+      | some Δ => if noIdxB D Δ x then some Δ else none
+      | none => none
+    else none
   | Γ, F, .free x =>
     match liveE2 Γ x with
     | some E =>
@@ -1545,7 +1550,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
               match checkStmt2 P R C D (setE Γ1 x E) F s with
               | some Δ1 =>
                 match pushB D Δ1 F v x with
-                | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+                | some Δ => if noIdxB D Δ v && endOK2B D Δ x then some (exitScope x Δ) else none
                 | none => none
               | none => none
             else none
@@ -1845,9 +1850,16 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     split at h
     · rename_i hc
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-      obtain ⟨t0, s0⟩ := pushB_sound (P := P) (ξ := .none) hs
-        (fun v hv => hD v (by simp [Stmt.vars] at hv ⊢; rcases hv with h | h <;> simp [h])) h
-      exact ⟨.insert (checkExpr2_sound hc.1) hc.2 t0, s0⟩
+      split at h
+      · rename_i Δ0 h0
+        split at h
+        · rename_i hnx
+          simp only [Option.some.injEq] at h; subst h
+          obtain ⟨t0, s0⟩ := pushB_sound (P := P) (ξ := .none) hs
+            (fun v hv => hD v (by simp [Stmt.vars] at hv ⊢; rcases hv with h | h <;> simp [h])) h0
+          exact ⟨.insert (checkExpr2_sound hc.1) hc.2 t0 (noIdxB_sound s0 hnx), s0⟩
+        · cases h
+      · cases h
     · cases h
   | free x =>
     intro ξ Γ F Δ hs hD h
@@ -1999,6 +2011,8 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                 · rename_i Δ0 h0
                   split at h
                   · rename_i he
+                    simp only [Bool.and_eq_true] at he
+                    obtain ⟨hnx, he⟩ := he
                     simp only [Option.some.injEq] at h; subst h
                     have hvD : v ∈ D := hD v (by simp [Stmt.vars])
                     have hxD : x ∈ D := hD x (by simp [Stmt.vars])
@@ -2009,7 +2023,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                     obtain ⟨t2, s2⟩ := pushB_sound (P := P) (ξ := .none) s1
                       (fun w hw => by simp [Stmt.vars] at hw; rcases hw with hw | hw <;> subst hw <;> assumption) h0
                     exact ⟨.withElem hsrc hx hF hEv hm (checkExpr2_sound hi) (noPinB_sound hs hnp)
-                      (dtorSafeB_sound hs hds) hrt t1 t2 (endOK2B_sound s2 he) hvs hdf,
+                      (dtorSafeB_sound hs hds) hrt t1 t2 (noIdxB_sound s2 hnx) (endOK2B_sound s2 he) hvs hdf,
                       supported2_exitScope s2 x⟩
                   · cases h
                 · cases h

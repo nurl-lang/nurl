@@ -793,6 +793,47 @@ theorem PkgKeep.noval {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv : B
       (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, by rw [← hst r hrx]; exact hT1, hs1, hvn⟩))))
   · exact hfr i (hi.pkgFree y Ey o v hEy hla hs i (Or.inr (Or.inr (Or.inr h4))))
 
+/-- A kill that ends every dependency inside an element by index leaves
+    none in a live entry; and an armed one, which an effect `e'` that ends
+    them too spares (`DtorSafe` of the killed context), has none either
+    (AGORA-374). -/
+theorem NoIdx.of_kill {Γ : Ctx} {e e' : Eff} {hv hv' : Bool} {x : Var}
+    (hk : ∀ i, e.kills hv (.innerAt i) = true) (hk' : ∀ i, e'.kills hv' (.innerAt i) = true)
+    (hds : DtorSafe (A2.kill e hv x Γ) e' hv' x) :
+    NoIdx (A2.kill e hv x Γ) x := by
+  rintro k ⟨v, E', hE', hn, hl, hd⟩ i rfl
+  rcases hl with hl | ⟨hdt, hos⟩
+  · simp only [A2.kill] at hE'
+    cases hE : Γ v with
+    | none => rw [hE] at hE'; cases hE'
+    | some E =>
+      rw [hE] at hE'; simp only [Option.map_some, Option.some.injEq] at hE'; subst hE'
+      rw [killE_ty, killE_mode] at hn
+      rw [killE_vdeps] at hd
+      obtain ⟨_, hnot⟩ := killE_live_dep hl hn
+      have := hnot _ hd rfl; rw [hk i] at this; cases this
+  · have hm := hds v E' hE' hdt hos
+    unfold hitsMem at hm
+    have : (E'.ty != .int || E'.mode == .rootb) = true := by
+      rcases hn with h | h <;> simp [h]
+    rw [this, Bool.true_and] at hm
+    have hany : E'.vdeps.any (fun d => d.root == x && !d.kind.isName && e'.kills hv' d.kind) = true :=
+      List.any_eq_true.mpr ⟨_, hd, by simp [Kind.isName, hk' i]⟩
+    rw [hany] at hm; cases hm
+
+/-- AGORA-374: a binding set to an entry that depends on `x` inside no
+    element by index keeps a context free of such dependencies. -/
+theorem NoIdx.setE {Γ : Ctx} {x y : Var} {E : Entry} (h : NoIdx Γ x)
+    (hE : ∀ d ∈ E.vdeps, d.root = x → d.kind.isIdx = false) : NoIdx (setE Γ y E) x := by
+  rintro k ⟨v, E', hE', hn, hl, hd⟩ i rfl
+  by_cases hv : v = y
+  · subst hv
+    have hEE : E' = E := by unfold A2.setE at hE'; rw [upd_same] at hE'; exact (Option.some.inj hE').symm
+    subst hEE
+    have := hE _ hd rfl; simp [Kind.isIdx] at this
+  · unfold A2.setE at hE'; rw [upd_ne _ _ hv] at hE'
+    exact h _ ⟨v, E', hE', hn, hl, hd⟩ i rfl
+
 /-- One binding `x` changes (effect `e`), its slot becomes `ox`: every other
     binding stays valid, or is ended by `kill`. -/
 theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -803,7 +844,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hhs : HeldSpared Γ e hv x)
     (hxr : Ex.mode ≠ .rootb)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
-    (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
+    (hkeep : ∀ k, e.kills hv k = false → KindUsed Γ x k → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
     {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
     (hds : DtorSafe Γ e hv x)
     (hdb : ox = none → DbindSafe Γ x)
@@ -820,7 +861,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     by_cases hr : dep.root = x
     · obtain ⟨r, k⟩ := dep
       simp only at hr; subst hr
-      exact hkeep k (hnot _ hd rfl)
+      exact hkeep k (hnot _ hd rfl) ⟨v, E, hv', Or.inl hnint, Or.inl hlE, hd⟩
     · obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hv' hlE (Or.inl hnint) dep.root (List.mem_map_of_mem hd)
       have hk := rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot
         (hst _ hr) (BlkLe.of_eq hblk)
@@ -1089,7 +1130,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       by_cases hr : dep.root = x
       · obtain ⟨r, k⟩ := dep
         simp only at hr; subst hr
-        exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
+        exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm) ⟨v, E, hE, Or.inl hnint, Or.inr ⟨hdt, hos⟩, hdv⟩).1
       · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
         exact (rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hr)
           (BlkLe.of_eq hblk)).vkeep (BlkLe.of_eq hblk)
@@ -1139,7 +1180,7 @@ theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hnr : ∀ p E, Γ p = some E → E.mode = .rootb → hits e hv x E = false)
     (hxr : Ex.mode ≠ .rootb)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
-    (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
+    (hkeep : ∀ k, e.kills hv k = false → KindUsed Γ x k → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
     {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
     (hds : DtorSafe Γ e hv x)
     (hdb : ox = none → DbindSafe Γ x)
@@ -1156,7 +1197,7 @@ theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     by_cases hr : dep.root = x
     · obtain ⟨r, k⟩ := dep
       simp only at hr; subst hr
-      exact hkeep k (hnot _ hd rfl)
+      exact hkeep k (hnot _ hd rfl) ⟨v, E, hv', Or.inl hnint, Or.inl hlE, hd⟩
     · obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hv' hlE (Or.inl hnint) dep.root (List.mem_map_of_mem hd)
       have hk := rootKeep_frame_ne hi hanch hxa (fun o _ hox => hst o hox) hEr hroot
         (hst _ hr) (BlkLe.of_eq hblk)
@@ -1427,7 +1468,7 @@ theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       by_cases hr : dep.root = x
       · obtain ⟨r, k⟩ := dep
         simp only at hr; subst hr
-        exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
+        exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm) ⟨v, E, hE, Or.inl hnint, Or.inr ⟨hdt, hos⟩, hdv⟩).1
       · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
         exact (rootKeep_frame_ne hi hanch hxa (fun o _ hox => hst o hox) hEr hroot (hst _ hr)
           (BlkLe.of_eq hblk)).vkeep (BlkLe.of_eq hblk)
@@ -1652,7 +1693,8 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
       (∃ t1 d1 es1, Sub (.node t1 c d1 es1) T0 ∧ ∀ i o l, Sub (.view i o l) (.node t c d es) →
         Sub (.view i o l) (.node t1 c d1 es1)) ∨ FreshAddr m c ∨
       (∃ t0 d0 es0, T0 = .node t0 c d0 es0 ∧ e.kills hv .self = true ∧ e.kills hv .view = true) ∨
-      (c ∈ T0.ids ∧ e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
+      (c ∈ T0.ids ∧ e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true ∧
+        ∀ j, e.kills hv (.innerAt j) = true))
     (hself : ∀ Ex' o v, ox = some Ex' → Alive Ex' → m'.st x = some ⟨o, some v⟩ →
       ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
     PkgKeep m m' Γ e hv x ox := by
@@ -1680,7 +1722,7 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
       · by_cases hrx : r = x
         · subst hrx
           rcases hnode T1 hT1 t c d es hs1 with ⟨t1, d1, es1, hs0, hvw⟩ | hfc | ⟨t0, d0, es0, rfl, hks, hkv⟩ |
-              ⟨hcT, hks, hkv, hki⟩
+              ⟨hcT, hks, hkv, hki, hkj⟩
           · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, _, t1, d1, es1, hb, hT, hs0, o', l, hvw i o' l hvn⟩))
           · exfalso
             have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
@@ -1723,7 +1765,7 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
                 rw [hs] at hw; cases hw
                 rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
               rw [hnt, Bool.true_and, List.any_eq_true]
-              exact ⟨dep, hdv, by rcases hdk with h | h | h <;> simp [hdr, h, hks, hkv, hki]⟩
+              exact ⟨dep, hdv, by rcases hdk with h | h | h | ⟨j, h⟩ <;> simp [hdr, h, hks, hkv, hki, hkj]⟩
             exact hl.killed hhit hos
         · rw [hst r hrx] at hT1
           exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩))
@@ -1748,7 +1790,8 @@ theorem PkgKeep.of_edit_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
       (∃ t1 d1 es1, Sub (.node t1 c d1 es1) T0 ∧ ∀ i o l, Sub (.view i o l) (.node t c d es) →
         Sub (.view i o l) (.node t1 c d1 es1)) ∨ FreshAddr m c ∨
       (∃ t0 d0 es0, T0 = .node t0 c d0 es0 ∧ e.kills hv .self = true ∧ e.kills hv .view = true) ∨
-      (c ∈ T0.ids ∧ e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
+      (c ∈ T0.ids ∧ e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true ∧
+        ∀ j, e.kills hv (.innerAt j) = true))
     (hself : ∀ Ex' o v, ox = some Ex' → Alive Ex' → m'.st x = some ⟨o, some v⟩ →
       ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
     PkgKeep m m' Γ e hv x ox := by
@@ -1776,7 +1819,7 @@ theorem PkgKeep.of_edit_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
       · by_cases hrx : r = x
         · subst hrx
           rcases hnode T1 hT1 t c d es hs1 with ⟨t1, d1, es1, hs0, hvw⟩ | hfc | ⟨t0, d0, es0, rfl, hks, hkv⟩ |
-              ⟨hcT, hks, hkv, hki⟩
+              ⟨hcT, hks, hkv, hki, hkj⟩
           · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, _, t1, d1, es1, hb, hT, hs0, o', l, hvw i o' l hvn⟩))
           · exfalso
             have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
@@ -1819,7 +1862,7 @@ theorem PkgKeep.of_edit_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
                 rw [hs] at hw; cases hw
                 rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
               rw [hnt, Bool.true_and, List.any_eq_true]
-              exact ⟨dep, hdv, by rcases hdk with h | h | h <;> simp [hdr, h, hks, hkv, hki]⟩
+              exact ⟨dep, hdv, by rcases hdk with h | h | h | ⟨j, h⟩ <;> simp [hdr, h, hks, hkv, hki, hkj]⟩
             exact hl.killed hhit hos
         · rw [hst r hrx] at hT1
           exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩))

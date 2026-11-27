@@ -68,7 +68,7 @@ theorem ArcLanded.keep {m m' : Mem} {dep : Dep} {n : Val} (hr : RootKeep m m' de
 theorem Landed.pay {m m' : Mem} {dep : Dep} {n : Val} (hb : BlkLe m.blk m'.blk)
     (hk : dep.kind = .share) (hro : RootMem m' dep.root) (h : Landed m dep n) : Landed m' dep n := by
   rcases h with ⟨n0, _, hl⟩ | ⟨hk, _, k, bl, hkb, hs⟩
-  · rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [hk] at h <;> cases h
+  · rcases hl with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, h, _⟩ <;> rw [hk] at h <;> cases h
   · exact Or.inr ⟨hk, hro, InPay.grow hb ⟨k, bl, hkb, hs⟩⟩
 
 theorem RootKeep.vkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root)
@@ -339,10 +339,11 @@ theorem DataAtM.kind_of {m : Mem} (hh : HeapOK m) {d : Nat} {n : Val} (h : DataA
     · exact .inl h1
 
 theorem Lands.sub {k : Kind} {n n0 : Val} (h : Lands k n n0) : Sub n n0 := by
-  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, hb⟩
+  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, hb⟩ | ⟨_, _, hb⟩
   · exact Sub.refl _
   · exact Sub.refl _
   · exact hb.sub
+  · exact hb.below.sub
 
 theorem Top.sub {n v : Val} (h : Top n v) : Sub n v := by
   induction h with
@@ -381,17 +382,19 @@ theorem RootNode.owned {m : Mem} {r : Var} {n : Val} (h : RootNode m r n) :
 
 /-- Nothing lies below a share: a payload is the block's, not the share's. -/
 theorem lands_arc {kd : Kind} {n : Val} {k : Nat} {q : Val} (h : Lands kd n (.arc k q)) : n = .arc k q := by
-  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, e, hc, _⟩
+  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, e, hc, _⟩ | ⟨_, _, _, _, _, _, _, hn, _⟩
   · rfl
   · rfl
   · cases hc
+  · cases hn
 
 /-- A3.5's third cut: nothing lies below a cell share either. -/
 theorem lands_cell {kd : Kind} {n : Val} {k : Nat} (h : Lands kd n (.cell k)) : n = .cell k := by
-  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, e, hc, _⟩
+  rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, e, hc, _⟩ | ⟨_, _, _, _, _, _, _, hn, _⟩
   · rfl
   · rfl
   · cases hc
+  · cases hn
 
 /-- What lands through a dependency is in an owned tree or a live payload,
     or is a share (A3.5's third cut: or a cell share) a borrowed root holds. -/
@@ -706,7 +709,7 @@ theorem bor_arcLanded {m : Mem} (hh : HeapOK m) {p : Var} {τ : Ty} {w : Val} {P
 /-- What a dependency reaches in memory is reached through one of the
     three kinds that reach memory. -/
 theorem lands_bound {k : Kind} {n n0 : Val} (h : Lands k n n0) : k.bound = .none := by
-  rcases h with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ <;> rfl
+  rcases h with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> rfl
 
 /-- ... so what lands through a dependency lands through one of no bound. -/
 theorem lands_bound' {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : dep.kind.bound = .none := by
@@ -1255,57 +1258,78 @@ theorem NamesIn.ownHeld {t : Ty} {T : Val} {H : List Dep} (hw : WFv t T) (o : Bo
     intro c hc'; rw [hw.names_nil hc.2] at hc'; cases hc'
   · exact h
 
-/-- Growing (`vec_push`): what is below the root stays below it. -/
+/-- AGORA-374: a list whose every element keeps its index in `es'` (a
+    prefix of it) has its elements in `es'`. -/
+theorem pfx_mem {es es' : List Val} (h : ∀ (i : Nat) (e : Val), es[i]? = some e → es'[i]? = some e) :
+    ∀ e ∈ es, e ∈ es' := by
+  intro e he
+  obtain ⟨i, hi⟩ := List.mem_iff_getElem?.mp he
+  exact List.mem_iff_getElem?.mpr ⟨i, h i e hi⟩
+
+/-- Growing (`vec_push`): what is below the root stays below it, and what
+    is inside element `i` stays inside element `i` (AGORA-374). -/
 theorem Evolve.grow_vkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
-    (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind} (hk : k ≠ .view) :
-    VKeep m m' ⟨x, k⟩ := by
+    (hev : Evolve m m' x t c d d' es es') (hpfx : ∀ (i : Nat) (e : Val), es[i]? = some e → es'[i]? = some e) {k : Kind}
+    (hk : k ≠ .view) : VKeep m m' ⟨x, k⟩ := by
+  have hpre := pfx_mem hpfx
   intro dd o l s ⟨c', es2, hks, hla, hl, hw⟩
   rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
   · have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨hv, _⟩ | ⟨hv, _⟩ | ⟨hki, hb⟩
+    rcases hkk with ⟨hv, _⟩ | ⟨hv, _⟩ | ⟨hki, hb⟩ | hb
     · exact absurd hv hks
     · exact absurd hv hk
     · obtain ⟨e, hc, hs⟩ := hb
       cases hc with
       | elem he =>
         exact ⟨c', es2, hks, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
-          Or.inr (Or.inr ⟨hki, e, Child.elem (hpre e he), hs⟩)⟩, hl, hw⟩
+          Or.inr (Or.inr (Or.inl ⟨hki, e, Child.elem (hpre e he), hs⟩))⟩, hl, hw⟩
+    · obtain ⟨i, hki, ty, c0, d0, es0, e, heq, hei, hs⟩ := hb
+      cases heq
+      exact ⟨c', es2, hks, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
+        Or.inr (Or.inr (Or.inr ⟨i, hki, _, _, _, _, e, rfl, hpfx i e hei, hs⟩))⟩, hl, hw⟩
   · exact ⟨c', es2, hks, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hev.blk]; exact hk0, hs⟩, hl, hw⟩
 
 theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es' : List Val}
-    (hev : Evolve m m' x t c d d' es es') (hpre : ∀ e ∈ es, e ∈ es') {k : Kind}
+    (hev : Evolve m m' x t c d d' es es') (hpfx : ∀ (i : Nat) (e : Val), es[i]? = some e → es'[i]? = some e) {k : Kind}
     (hk : k = .self → t.holdsView = false) (hkv : k ≠ .view)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : HKeep m m' ⟨x, k⟩ := by
+  have hpre := pfx_mem hpfx
   refine ⟨fun c2 t2 H hH hb ⟨d2, es2, hla, hw, hv, hn, hsh⟩ => ?_, fun k2 p2 hb hla => ?_,
     fun k2 hla => ?_⟩
   rotate_left
   · rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _⟩
     · have := rootNode_node hev.before hr
       subst this
-      rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩
+      rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩ | ⟨i, hin, hbl⟩
       · cases heq
       · cases heq
       · obtain ⟨e, hc, hs⟩ := hbl
         cases hc with
         | elem he =>
-          exact Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩)⟩
+          exact Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr (Or.inl ⟨hin, e, Child.elem (hpre e he), hs⟩))⟩
+      · obtain ⟨ty, c0, d0, es0, e, heq, hei, hs⟩ := hbl
+        cases heq
+        exact Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr (Or.inr ⟨i, hin, _, _, _, _, e, rfl, hpfx i e hei, hs⟩))⟩
     · exact Or.inr ⟨hsk, RootMem.own hev.after⟩
   · -- A3.5's third cut: a cell share in an element stays in the element
     obtain ⟨n0, hr, hkk⟩ := hla
     have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩
+    rcases hkk with ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨hin, hbl⟩ | ⟨i, hin, hbl⟩
     · cases heq
     · cases heq
     · obtain ⟨e, hc, hs⟩ := hbl
       cases hc with
       | elem he =>
-        exact ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩)⟩
+        exact ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr (Or.inl ⟨hin, e, Child.elem (hpre e he), hs⟩))⟩
+    · obtain ⟨ty, c0, d0, es0, e, heq, hei, hs⟩ := hbl
+      cases heq
+      exact ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inr (Or.inr (Or.inr ⟨i, hin, _, _, _, _, e, rfl, hpfx i e hei, hs⟩))⟩
   rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _, k0, bl, hk0, hs⟩
   · have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨hs, heq⟩ | ⟨hvw, _⟩ | ⟨hin, hbl⟩
+    rcases hkk with ⟨hs, heq⟩ | ⟨hvw, _⟩ | ⟨hin, hbl⟩ | ⟨i, hin, hbl⟩
     · cases heq
       exact ⟨d', es', Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨hs, rfl⟩⟩, hev.wf,
         no_views (hk hs) _ _ _, no_names hev.wf (hk hs) _, hsh'⟩
@@ -1314,7 +1338,11 @@ theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
       cases hc with
       | elem he =>
         exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
-          Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩)⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
+          Or.inr (Or.inr (Or.inl ⟨hin, e, Child.elem (hpre e he), hs⟩))⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
+    · obtain ⟨ty, c0, d0, es0, e, heq, hei, hs⟩ := hbl
+      cases heq
+      exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
+        Or.inr (Or.inr (Or.inr ⟨i, hin, _, _, _, _, e, rfl, hpfx i e hei, hs⟩))⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
   · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn,
       hsh.of_blk hb⟩
 
@@ -1328,25 +1356,28 @@ theorem Evolve.self_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
   · rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _⟩
     · have := rootNode_node hev.before hr
       subst this
-      rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
+      rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩ | ⟨_, hin, _⟩
       · cases heq
+      · cases hin
       · cases hin
       · cases hin
     · cases hsk
   · obtain ⟨n0, hr, hkk⟩ := hla
     have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
+    rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩ | ⟨_, hin, _⟩
     · cases heq
+    · cases hin
     · cases hin
     · cases hin
   rcases hla with ⟨n0, hr, hkk⟩ | ⟨hsk, _⟩
   · have := rootNode_node hev.before hr
     subst this
-    rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩
+    rcases hkk with ⟨_, heq⟩ | ⟨hin, _⟩ | ⟨hin, _⟩ | ⟨_, hin, _⟩
     · cases heq
       exact ⟨d', es', Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩, Or.inl ⟨rfl, rfl⟩⟩, hev.wf,
         no_views ht _ _ _, no_names hev.wf ht _, hsh'⟩
+    · cases hin
     · cases hin
     · cases hin
   · cases hsk
@@ -1355,19 +1386,28 @@ theorem Evolve.self_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
 
 theorem comp_self_left (k : Kind) : comp .self k = k := by cases k <;> rfl
 
+/-- AGORA-374: what lies inside a value inside element `i` is inside element `i`. -/
+theorem BelowAt.of_sub {i : Nat} {n t m : Val} (h : BelowAt i n t) (hs : Sub m n) : BelowAt i m t := by
+  obtain ⟨ty, c, d, es, e, rfl, he, hn⟩ := h
+  exact ⟨ty, c, d, es, e, rfl, he, Sub.trans hs hn⟩
+
 /-- What lands in `p`'s node with kind `k` lands in the node `p` borrows
     from, with the composed kind. -/
-theorem lands_comp {n0 n1 N : Val} {kp k : Kind}
-    (hp : kp = .self ∧ n0 = n1 ∨ kp = .view ∧ n0 = n1 ∨ kp = .inner ∧ Below n0 n1)
-    (hk : k = .self ∧ N = n0 ∨ k = .view ∧ N = n0 ∨ k = .inner ∧ Below N n0) :
-    comp kp k = .self ∧ N = n1 ∨ comp kp k = .view ∧ N = n1 ∨ comp kp k = .inner ∧ Below N n1 := by
-  rcases hp with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb⟩ <;>
-    rcases hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb'⟩
+theorem lands_comp {n0 n1 N : Val} {kp k : Kind} (hp : Lands kp n0 n1) (hk : Lands k N n0) :
+    Lands (comp kp k) N n1 := by
+  rcases hp with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb⟩ | ⟨i, rfl, hba⟩ <;>
+    rcases hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, hb'⟩ | ⟨j, rfl, hba'⟩
   all_goals first
     | exact Or.inl ⟨rfl, rfl⟩
     | exact Or.inr (Or.inl ⟨rfl, rfl⟩)
-    | exact Or.inr (Or.inr ⟨rfl, hb'⟩)
-    | exact Or.inr (Or.inr ⟨rfl, hb⟩)
-    | exact Or.inr (Or.inr ⟨rfl, Below.of_sub_below hb'.sub hb⟩)
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, hb'⟩))
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, hba'.below⟩))
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, hb⟩))
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, Below.of_sub_below hb'.sub hb⟩))
+    | exact Or.inr (Or.inr (Or.inl ⟨rfl, Below.of_sub_below hba'.below.sub hb⟩))
+    | exact Or.inr (Or.inr (Or.inr ⟨_, rfl, hba'⟩))
+    | exact Or.inr (Or.inr (Or.inr ⟨_, rfl, hba⟩))
+    | exact Or.inr (Or.inr (Or.inr ⟨_, rfl, hba.of_sub hb'.sub⟩))
+    | exact Or.inr (Or.inr (Or.inr ⟨_, rfl, hba.of_sub hba'.below.sub⟩))
 
 end A2

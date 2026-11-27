@@ -162,10 +162,10 @@ theorem vecSetD_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x y z : Var} {f :
     (hfix : kill .drop false x Γ = Γ) (hi : ExprT Γ i)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
     (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y)
-    (hpush : StmtT P .none Γ F (.push x z) Δ) :
+    (hpush : StmtT P .none Γ F (.push x z) Δ) (hnix : NoIdx Δ x) :
     StmtT P ξ Γ F (Stmt.vecSetD y f x i z) Δ :=
   StmtT.seq rfl (removeD_typed hw hx hl hcd hty hxF hds hfix hi hv hst hfn hok hy hyF he)
-    (StmtT.insert hi hxF hpush)
+    (StmtT.insert hi hxF hpush hnix)
 
 /-- `withElem v i x s` over a `Vec` of destructor values (an element handed
     to a callee that changes it): element `i` moves out to `x`, a destructor
@@ -195,7 +195,7 @@ theorem withElemD_typed {P : Prog} {Γ Δ1 Δ : Ctx} {F : List Var} {v x : Var} 
     (hss : s.src = true) (hH : HeldUp (kill .drop false v Γ) (popE v E (.dtor f t)) H)
     (hs : StmtT P (ξ.underD x) (setE (kill .drop false v Γ) x
       (Entry.arm { popE v E (.dtor f t) with ty := .dtor f t, held := H })) F s Δ1)
-    (hi1 : ExprT Δ1 i) (hpush : StmtT P .none Δ1 F (.push v x) Δ) (he : EndOK Δ x)
+    (hi1 : ExprT Δ1 i) (hpush : StmtT P .none Δ1 F (.push v x) Δ) (hnix : NoIdx Δ v) (he : EndOK Δ x)
     (hna : x ∉ s.assigns)
     -- faithful to the in-place pass (unused by the typing)
     (_hvs : v ∉ s.vars) (_hiv : ∀ w ∈ i.vars, w ∉ s.vars) (_hnp : NoPin Γ v) :
@@ -207,7 +207,7 @@ theorem withElemD_typed {P : Prog} {Γ Δ1 Δ : Ctx} {F : List Var} {v x : Var} 
   have hτ : LetdTy f t (popE v E (.dtor f t)).ty (.dtor f t) := Or.inl ⟨rfl, Or.inr ⟨f, rfl⟩⟩
   exact StmtT.letd (P := P) (x := x) (f := f) (r := .remove v i) (s := .seq s (.insert v i x))
     (t := t) (H := H) (τ := .dtor f t) (by simp [Stmt.src, hss]) hxn hxF hr rfl hτ hst hfn
-    (letd_fn hok) hH (StmtT.seq rfl hs (StmtT.insert hi1 hvF hpush)) he
+    (letd_fn hok) hH (StmtT.seq rfl hs (StmtT.insert hi1 hvF hpush hnix)) he
     (by simp [Stmt.assigns, hna])
 
 end A2.Dtor
@@ -416,11 +416,17 @@ theorem mainSet_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainSet Δ := by
     (Or.inl (by rw [hEV6])) (by simp) (by simp [K7, A2.setE]) (by rw [hEDe]) (by rw [hEDe])
     (by decide) hmove8 (by rw [hEDe]; simp [roots]) hK83 (by rw [hEV6])
     (DtorSafe.of_none (fun v E h => (hK8 v E h).2.1) _ _ _) (by rw [hEV6]; simp)
+  -- (AGORA-374: what the push leaves depends on `3` inside no element by index)
+  have hnix9 : ∀ H, NoIdx (A2.setE (kill .realloc DT.holdsView 3 K8) 3
+      { EV6 with held := EV6.held ++ ownHeld true DT H }) 3 := fun H =>
+    (NoIdx.of_kill (e := .realloc) (e' := .realloc) (hv' := false) (fun _ => rfl) (fun _ => rfl)
+      (DtorSafe.of_none (fun v E h => ((hK8.kill _ _ _) v E h).2.1) _ _ _)).setE
+      (fun d hd _ => by simp [hEV6, ownHeld, DT, T, Ty.holdsView, Entry.vdeps, Mode.ownSlot] at hd)
   have hset := vecSetD_typed (ξ := .none) (P := P) (F := []) (y := 5) (f := 0) (t := T) (i := .lit 0)
     hw7 h73 (by rw [hEV6]) (Or.inl (by rw [hEV6])) (by rw [hEV6]; rfl) (by simp)
     (DtorSafe.of_none (fun v E h => (hK7 v E h).2.1) _ _ _) hfix ExprT.lit
     rfl rfl rfl drop_ok (by simp [K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp)
-    (hK7.endOK _) hpush8
+    (hK7.endOK _) hpush8 (hnix9 ED.held)
   let EV9 : Entry := { EV6 with held := EV6.held ++ ownHeld true DT ED.held }
   have hK9 : NoRootb (A2.setE (kill .realloc DT.holdsView 3 K8) 3 EV9) :=
     (hK8.kill _ _ _).setE (by simp [EV9, hEV6])
@@ -540,6 +546,12 @@ theorem mainElem_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainElem Δ := by
     (Or.inl (by rw [hEV6])) (by simp) (by simp [K7, A2.setE]) (by rw [hEAe]) (by rw [hEAe])
     (by decide) hmove8 (by rw [hEAe]; simp [roots]) hK83 (by rw [hEV6])
     (DtorSafe.of_none (fun v E h => (hK8 v E h).2.1) _ _ _) (by rw [hEV6]; simp)
+  -- (AGORA-374: what the push leaves depends on `3` inside no element by index)
+  have hnix9 : ∀ H, NoIdx (A2.setE (kill .realloc DT.holdsView 3 K8) 3
+      { EV6 with held := EV6.held ++ ownHeld true DT H }) 3 := fun H =>
+    (NoIdx.of_kill (e := .realloc) (e' := .realloc) (hv' := false) (fun _ => rfl) (fun _ => rfl)
+      (DtorSafe.of_none (fun v E h => ((hK8.kill _ _ _) v E h).2.1) _ _ _)).setE
+      (fun d hd _ => by simp [hEV6, ownHeld, DT, T, Ty.holdsView, Entry.vdeps, Mode.ownSlot] at hd)
   let EV9 : Entry := { EV6 with held := EV6.held ++ ownHeld true DT EA.held }
   have hK9 : NoRootb (A2.setE (kill .realloc DT.holdsView 3 K8) 3 EV9) :=
     (hK8.kill _ _ _).setE (by simp [EV9, hEV6])
@@ -547,7 +559,7 @@ theorem mainElem_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainElem Δ := by
     (s := .skip) (H := (popE 3 EV6 DT).held)
     h63 (by rw [hEV6]) (Or.inl (by rw [hEV6])) (by rw [hEV6]; rfl) (by simp)
     (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _) ExprT.lit rfl rfl rfl drop_ok h64 (by simp)
-    rfl (HeldUp.refl _ _) hs.ofNone ExprT.lit hpush8.ofNone (hK9.endOK _) (by simp [Stmt.assigns])
+    rfl (HeldUp.refl _ _) hs.ofNone ExprT.lit hpush8.ofNone (hnix9 EA.held) (hK9.endOK _) (by simp [Stmt.assigns])
     (by simp [Stmt.vars]) (by simp [Expr.vars]) (hK6.noPin _)
   have hK10 := hK9.exitScope 4
   have hbody := StmtT.seq (P := P) rfl hpush hel
