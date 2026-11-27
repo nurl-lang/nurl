@@ -54,7 +54,7 @@ for a in "$@"; do
 done
 [ "${#corpora[@]}" -gt 0 ] || { echo "usage: coverage.sh CORPUS... [--readme]" >&2; exit 2; }
 [ -x "$CERT" ] || { echo "coverage.sh: no nurl-cert at $CERT" >&2; exit 2; }
-if [ -n "${COV_OUT:-}" ]; then OUT="$COV_OUT"; mkdir -p "$OUT"; else
+if [ -n "${COV_OUT:-}" ]; then mkdir -p "$COV_OUT"; OUT="$(cd "$COV_OUT" && pwd)"; else
     OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 fi
 

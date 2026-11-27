@@ -305,16 +305,16 @@ $ `stdlib/std/random.nu`
     ^ -1
 }
 
-// Why the functions after the last one in `miss` were not reached (its
-// entry with an empty name), or empty.
-@ __ct_stopped ( Vec TlMiss ) miss → String {
+// The index in `miss` of its entry with an empty name (the translation
+// stopped, or never reached the functions), or -1.
+@ __ct_stop_ix ( Vec TlMiss ) miss → i {
     : i n ( vec_len [TlMiss] miss )
     : ~ i k 0
     ~ < k n {
-        ? == ( string_len . ( vec_at [TlMiss] miss k ) name ) 0 { ^ ( string_clone . ( vec_at [TlMiss] miss k ) why ) } {}
+        ? == ( string_len . ( vec_at [TlMiss] miss k ) name ) 0 { ^ k } {}
         = k + k 1
     }
-    ^ ( string_new )
+    ^ -1
 }
 
 // One more of status `st`: its count in `counts`, beside `keys` in order of
@@ -718,8 +718,18 @@ $ `stdlib/std/random.nu`
     // A function the translation does not cover is `unsupported` with its
     // own reason (`error` where the translation stopped on it), whatever the
     // others are (AGORA-1015). One it covers in a program that is not
-    // translated whole is `open`: no claim is proved for it.
-    : String stopped ( __ct_stopped . tr miss )
+    // translated whole is `open`: no claim is proved for it. The functions
+    // after the one the translation stopped in are `error`, not reached; and
+    // where it refused the program before it translated any function (no
+    // `main`), every one is `unsupported`, with the program's reason.
+    : i six ( __ct_stop_ix . tr miss )
+    : ~ String stopped ( string_new )
+    // (the function it stopped in: the entry before the mark)
+    : ~ String stop_at ( string_new )
+    ? >= six 0 { = stopped ( string_clone . ( vec_at [TlMiss] . tr miss six ) why ) } {}
+    ? > six 0 { = stop_at ( string_clone . ( vec_at [TlMiss] . tr miss - six 1 ) name ) } {}
+    : b none_reached == six 0
+    : ~ b past F
     : ( Vec String ) cst ( vec_new [String] )
     : ( Vec i ) ccount ( vec_new [i] )
     : ~ i j 0
@@ -732,16 +742,23 @@ $ `stdlib/std/random.nu`
                 ? >= mi 0 {
                     = why ( string_clone . ( vec_at [TlMiss] . tr miss mi ) why )
                     = st ( string_from ? ( string_starts_with why `internal: ` ) `error` `unsupported` )
+                    ? & > ( string_len stop_at ) 0 ( nc_is . f name ( string_data stop_at ) ) { = past T } {}
                 } {
-                    ? > ( string_len stopped ) 0 {
-                        = st ( string_from `error` )
-                        = why ( string_clone stopped )
+                    ? none_reached {
+                        = st ( string_from `unsupported` )
+                        = why ( string_from `not translated: the program is refused before its functions are: ` )
+                        ( string_push_str why ( string_data stopped ) )
                     } {
-                        ? ( nc_is verdict `unsupported` ) {
-                            = st ( string_from `open` )
-                            = why ( string_from `translated; the program is not: ` )
-                            ( string_push_str why ( string_data reason ) )
-                        } {}
+                        ? past {
+                            = st ( string_from `error` )
+                            = why ( string_clone stopped )
+                        } {
+                            ? ( nc_is verdict `unsupported` ) {
+                                = st ( string_from `open` )
+                                = why ( string_from `translated; the program is not: ` )
+                                ( string_push_str why ( string_data reason ) )
+                            } {}
+                        }
                     }
                 }
                 ( __ct_count cst ccount ( string_data st ) )

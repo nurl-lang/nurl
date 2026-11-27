@@ -3174,8 +3174,10 @@ $ `coreir.nu`
 // why it is not translated; each of its own functions not translated goes
 // into `miss`, and `cur` holds the name of the function being translated.
 // With `all` F it stops at the first one, as tolean.py does: the verdict
-// and its reason are the same either way.
-@ __emit s text ( Vec TlMiss ) miss ( Vec String ) cur b all → !String String {
+// and its reason are the same either way. `reached` gets an entry once the
+// functions are translated at all (a program refused before, as one with
+// no `main`, has none of its functions translated).
+@ __emit s text ( Vec TlMiss ) miss ( Vec String ) cur b all ( Vec i ) reached → !String String {
     : CoreIR ir \ ( core_read text )
     // The standard library's functions are A2's constructs (`intrinsic`),
     // not bodies to check: their code is phase B's.
@@ -3233,6 +3235,7 @@ $ `coreir.nu`
     // its own records; of the state across functions, the closure types it
     // met and the types it was expanding are set back to where they were
     // before it, so the functions after it translate as they would without it.
+    ( vec_push [i] reached 1 )
     : ~ i p 0
     : ~ String first ( string_new )
     : ~ b failed F
@@ -3361,7 +3364,9 @@ $ `coreir.nu`
 // core IR. The program is refused with the first one's reason, exactly as
 // tolean_translate refuses it. Where the translation stops on an internal
 // error (a panic), the function it stopped in goes into `miss` with it, then
-// an entry with an empty name: the functions after it were not reached.
+// an entry with an empty name: the functions after it were not reached. A
+// program refused before any function is translated (no `main`, say) gets
+// that entry alone: none was reached.
 @ tolean_translate_fns s text ( Vec TlMiss ) miss → !String String { ^ ( __translate text miss T ) }
 
 @ __translate s text ( Vec TlMiss ) miss b all → !String String {
@@ -3370,8 +3375,9 @@ $ `coreir.nu`
     : ~ b ok F
     : String tx ( string_from text )
     : ( Vec String ) cur ( vec_new [String] )
+    : ( Vec i ) reached ( vec_new [i] )
     : !v PanicInfo r ( recover \ → v {
-        ?? ( __emit ( string_data tx ) miss cur all ) {
+        ?? ( __emit ( string_data tx ) miss cur all reached ) {
             T o → {
                 = res o
                 = ok T
@@ -3402,5 +3408,8 @@ $ `coreir.nu`
         }
     }
     ? ok { ^ @ !String String { T res } } {}
+    // (refused before any function was translated: an entry with an empty
+    // name, and no function named before it, says that none was reached)
+    ? == ( vec_len [i] reached ) 0 { ( vec_push [TlMiss] miss @ TlMiss { ( string_new ) ( string_clone why ) } ) } {}
     ^ @ !String String { F why }
 }

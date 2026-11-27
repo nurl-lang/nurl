@@ -693,6 +693,24 @@ if grep -q '^| 1 | 0 | 0 | 1 | 0 |$' "$TMP/cov.md" && grep -q '^| by count (4) |
     && grep -q '^| 2 | [0-9]* | `type %u8\*` | `two_gaps.cert peek_a` |$' "$TMP/cov.md"; then
     ok "coverage: programs by verdict, functions by status, one row per reason family"
 else bad "coverage: the table"; cat "$TMP/cov.md"; fi
+# A program refused before any function is translated (no main): none of
+# its functions is `open` ("translated"); each is unsupported, with the
+# program's reason.
+mkdir -p "$TMP/nomain"
+printf '@ add i a i b → i { ^ + a b }\n\n@ twice i a → i { ^ ( add a a ) }\n' > "$TMP/nomain/lib.nu"
+"$C" certify "$TMP/nomain/lib.nu" "${CA[@]}" --out "$TMP/nomain/lib.cert" > /dev/null 2>&1
+if python3 - "$TMP/nomain/lib.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+fs = m["coverage"]["functions"]
+ok = (m["program"]["verdict"] == "unsupported" and m["program"]["reason"] == "no main" and len(fs) == 2
+      and all(f["status"] == "unsupported" and f["reason"].startswith("not translated: ") and f["reason"].endswith("no main")
+              for f in fs)
+      and m["coverage"].get("unsupported") == 2 and "open" not in m["coverage"])
+sys.exit(0 if ok else 1)
+EOF3
+then ok "a program refused before its functions are translated: each unsupported, none open"
+else bad "a program refused before its functions are translated"; head -c 1500 "$TMP/nomain/lib.cert/manifest.json"; fi
 
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then

@@ -7,9 +7,10 @@
 //   - the reasons of the `unsupported` ones, most frequent first.
 // A function's span is its first line up to the next function's in the same
 // file (a closure's lines are its own, not its parent's), the last one's to
-// the file's end. A reason is counted without the function's name in front
-// and with its variable ids and parenthesised details left out, so one
-// family is one row.
+// the file's end. Functions that start on the same line (a generic's
+// instances) count its lines once, with the first of them. A reason is
+// counted without the function's name in front and with its variable ids
+// and parenthesised details left out, so one family is one row.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -142,10 +143,20 @@ $ `manifest.nu`
 }
 
 // The span of function `k` of `fns` (one bundle's functions): up to the
-// next function's first line in the same file, else the file's end.
+// next function's first line in the same file, else the file's end; 0 for
+// a function that starts where an earlier one does.
 @ __cov_span ( Vec CovFn ) fns i k ( Vec String ) paths ( Vec i ) counts → i {
     : CovFn f ( vec_at [CovFn] fns k )
     : i n ( vec_len [CovFn] fns )
+    // (functions that start on one line of one file, as the instances of a
+    // generic template do, share its lines: the first of them counts them,
+    // so a line is counted once)
+    : ~ i e 0
+    ~ < e k {
+        : CovFn h ( vec_at [CovFn] fns e )
+        ? & ( nc_is . h file ( string_data . f file ) ) == . h line . f line { ^ 0 } {}
+        = e + e 1
+    }
     : ~ i next -1
     : ~ i j 0
     ~ < j n {
