@@ -453,13 +453,13 @@ theorem held_cases (h : CallH P Γ F x fn args m.nv) {j : Nat} (hj : j < fn.para
 /-- AGORA-937 (3d): what an argument holds in memory is what its
     parameter's region stands for, composed with its handle. -/
 theorem σmap_mem (_h : CallH P Γ F x fn args m.nv) {j : Nat} (hj : j < fn.params.length) {Ea : Entry}
-    (hEa : Γ (args.getD j 0) = some Ea) (hn : Ea.ty ≠ .int) {d : Dep} (hd : d ∈ memDeps Ea.held) :
+    (hEa : Γ (args.getD j 0) = some Ea) (hn : Ea.ty ≠ .int) {d : Dep} (hd : d ∈ coarseMem Ea.held) :
     d ∈ ((callS Γ F fn args m.nv x).σ (fn.nvars + j)).map (fun e => ⟨e.root, comp e.kind .self⟩) := by
   have hae : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
-  have hσ : (callS Γ F fn args m.nv x).σ (fn.nvars + j) = memDeps Ea.held := by
+  have hσ : (callS Γ F fn args m.nv x).σ (fn.nvars + j) = coarseMem Ea.held := by
     show (if fn.nvars ≤ fn.nvars + j ∧ fn.nvars + j < fn.nvars + fn.params.length then
       (if (argE Γ (args.getD (fn.nvars + j - fn.nvars) 0)).ty = .int then []
-        else memDeps (argE Γ (args.getD (fn.nvars + j - fn.nvars) 0)).held) else []) = _
+        else coarseMem (argE Γ (args.getD (fn.nvars + j - fn.nvars) 0)).held) else []) = _
     rw [ite_eq_left (⟨Nat.le_add_right _ _, Nat.add_lt_add_left hj _⟩ : _ ∧ _), Nat.add_sub_cancel_left, hae,
       ite_eq_right hn]
   rw [hσ]; exact List.mem_map.mpr ⟨d, hd, by rw [comp_self_r]⟩
@@ -480,14 +480,14 @@ theorem slot_ownArg (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
     obtain ⟨ht, _⟩ := hown (by rw [hm]; rfl)
     intro h0; rw [h0] at ht; cases ht
   -- AGORA-937 (3d): what it holds in memory is what its parameter's region stands for
-  have hσm : ∀ d ∈ memDeps Ea.held,
+  have hσm : ∀ d ∈ coarseMem Ea.held,
       d ∈ ((callS Γ F fn args m.nv x).σ (fn.nvars + j)).map (fun e => ⟨e.root, comp e.kind .self⟩) := by
     intro d hd
     have hae : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
-    have hσ : (callS Γ F fn args m.nv x).σ (fn.nvars + j) = memDeps Ea.held := by
+    have hσ : (callS Γ F fn args m.nv x).σ (fn.nvars + j) = coarseMem Ea.held := by
       show (if fn.nvars ≤ fn.nvars + j ∧ fn.nvars + j < fn.nvars + fn.params.length then
         (if (argE Γ (args.getD (fn.nvars + j - fn.nvars) 0)).ty = .int then []
-          else memDeps (argE Γ (args.getD (fn.nvars + j - fn.nvars) 0)).held) else []) = _
+          else coarseMem (argE Γ (args.getD (fn.nvars + j - fn.nvars) 0)).held) else []) = _
       rw [ite_eq_left (⟨Nat.le_add_right _ _, Nat.add_lt_add_left hj _⟩ : _ ∧ _), Nat.add_sub_cancel_left, hae,
         ite_eq_right hn]
     rw [hσ]; exact List.mem_map.mpr ⟨d, hd, by rw [comp_self_r]⟩
@@ -501,7 +501,7 @@ theorem slot_ownArg (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
       exact (h.keep_R hi hb e ((callS Γ F fn args m.nv x).compAll_Rd_ak h.sOK
         (mem_compAll.mpr ⟨e, hrd, .self, Or.inl rfl, by rw [comp_self_r]⟩))).1
     · exact (h.keep_A hi hb dep hd).1
-  refine ⟨T, hT, hw, ViewsOK.ownHeld true (((hv.memDeps).mono (fun d hd =>
+  refine ⟨T, hT, hw, ViewsOK.ownHeld true (((hv.memDeps.coarse).mono (fun d hd =>
     List.mem_append_left _ (hσm d hd))).keep hkeep (BlkLe.of_eq hb.blk)), ?_⟩
   cases hhv : Ea.ty.holdsView
   · exact NamesIn.nil _ (hw.names_nil hhv)
@@ -610,10 +610,12 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         exact ⟨hk'.vkeep (BlkLe.of_eq hb.blk), hk'.hkeep⟩
     have hok1 := hok0.keep (fun dep hd => hkeep dep fun hdn => ?_) (fun dep hd => hkeep dep fun hdn => ?_)
       hb.blk
-    · cases hf : Ea.ty.hasFn
-      · rw [typedDeps_noFn hf, typedDeps_noFn hf]; exact hok1.memDeps hf
+    · -- (AGORA-374: the parameter sees its argument coarsened, `ValOK.coarse`)
+      cases hf : Ea.ty.hasFn
+      · rw [typedDeps_noFn hf, typedDeps_noFn hf, memDeps_map_coarse, memDeps_map_coarse]
+        exact (hok1.memDeps hf).coarse
       · rw [typedDeps_hasFn hf, typedDeps_hasFn hf]
-        exact hok1.mono (fun _ hd => mem_memDeps_nameDeps.mpr hd) (fun _ hd => mem_memDeps_nameDeps.mpr hd)
+        exact hok1.coarse.mono (fun _ hd => mem_memDeps_nameDeps.mpr hd) (fun _ hd => mem_memDeps_nameDeps.mpr hd)
     · rcases derive_roots_cases (List.mem_map_of_mem (f := Dep.root) hd) with h' | ⟨hnr, _⟩
       · exact Or.inl h'
       · -- a borrow: the handle passes on what it borrows from, kind for kind
@@ -952,7 +954,7 @@ theorem own_param_free (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {j : N
     (_hj : j < fn.params.length) {Ea : Entry} (hEa : Γ (args.getD j 0) = some Ea) (hl : Ea.live = true)
     (hm : Ea.mode = .own) {T : Val} (hT : m.st (args.getD j 0) = some ⟨true, some T⟩) {X : List Dep}
     (hc : CleanDeps ((callS Γ F fn args m.nv x).canon (sigCtx fn)) X)
-    (hX : Ea.ty.holdsView = true → ∀ d ∈ memDeps Ea.held, d ∈ X)
+    (hX : Ea.ty.holdsView = true → ∀ d ∈ memDeps Ea.held, d.coarse ∈ X)
     {i o l : Nat} (hv : Sub (.view i o l) T) : PkgFreeId m i := by
   have hos : Ea.mode.ownSlot = true := by rw [hm]; rfl
   obtain ⟨T', hT', hw, _⟩ := hi.own_val hEa hl hos
@@ -961,8 +963,14 @@ theorem own_param_free (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {j : N
   · exact absurd hv (hw.noView hhv)
   · have hn : Ea.ty ≠ .int := fun e => by rw [e] at hhv; cases hhv
     have hcl : CleanDeps Γ Ea.held := by
-      refine h.cleanDeps_back hi (D := Ea.held) (fun d hd => hc d (List.mem_filter.mpr
-        ⟨hX hhv d hd, (List.mem_filter.mp hd).2⟩)) (fun d hd => ?_)
+      -- (AGORA-374: what is clean reads a dependency's root and whether it is
+      -- a share, which forgetting an index keeps)
+      refine h.cleanDeps_back hi (D := Ea.held) (fun d hd => by
+        obtain ⟨hs, hcl⟩ := hc d.coarse (List.mem_filter.mpr ⟨hX hhv d hd, by simpa using (List.mem_filter.mp hd).2⟩)
+        refine ⟨?_, hcl⟩
+        rcases hs with hs | hs
+        · exact Or.inl fun e => hs (by simp [e, Kind.coarse])
+        · exact Or.inr hs) (fun d hd => ?_)
       obtain ⟨Er, hEr, _⟩ := hi.wf.live _ Ea hEa hl (Or.inl hn) d.root (by
         unfold Entry.vdeps; exact List.mem_map.mpr ⟨d, List.mem_append_right _ (List.mem_filter.mp hd).1, rfl⟩)
       rw [hEr]; rfl
@@ -1188,7 +1196,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
             · simp only [Option.bind, lendSlot, Option.some.injEq] at hT; subst hT; exact hV
             · simp only [Option.bind, lendSlot, Option.some.injEq] at hT; subst hT; exact hV.lendOf
           have hcp : (callPe Γ fn.params args k).held =
-              if Ea.ty = .int then [] else typedDeps Ea.ty Ea.held := by
+              if Ea.ty = .int then [] else typedDeps Ea.ty (Ea.held.map Dep.coarse) := by
             unfold callPe; rw [hk]; simp only; rw [hae]; split <;> rfl
           rw [hcp]
           split
@@ -1217,7 +1225,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
               · simp only [Option.bind, lendSlot, Option.some.injEq] at hT; subst hT
                 exact List.eq_nil_iff_forall_not_mem.mpr fun c hc => by
                   have := names_lendOf V c hc; rw [hVn] at this; cases this
-            · rw [typedDeps_hasFn hf]; exact hTV.mono fun _ hd => mem_memDeps_nameDeps.mpr hd
+            · rw [typedDeps_hasFn hf]; exact hTV.coarse.mono fun _ hd => mem_memDeps_nameDeps.mpr hd
     · -- a `sink` parameter: the argument's value, moved
       rw [h.st_sink hb hk] at hst; cases hst
       have hkl := lt_of_get hk
@@ -1458,7 +1466,8 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         obtain ⟨n, rfl⟩ := valOK_int.mp hok
         exact absurd hn PkgNames.none_int
       · have hcp : callPe Γ fn.params args k = ⟨Ea.ty, .rootb, true,
-            typedDeps Ea.ty (derive (args.getD k 0) Ea .self), typedDeps Ea.ty Ea.held, false, false, false, false⟩ := by
+            typedDeps Ea.ty ((derive (args.getD k 0) Ea .self).map Dep.coarse),
+            typedDeps Ea.ty (Ea.held.map Dep.coarse), false, false, false, false⟩ := by
           unfold callPe; rw [hk]; simp only; rw [hae]; simp [hint]
         rw [hcp] at hnm
         have hdD := MInv.dom_roots (wf_derive hi hEa hla hint .self)
@@ -1466,10 +1475,10 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         have hnΓ : PkgNames m Γ ⟨Ea.ty, .rootb, true, derive (args.getD k 0) Ea .self, Ea.held, false, false, false, false⟩
             v i :=
           PkgNames.mapClean (fun h => by exact h) (fun h => by exact h)
-            (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc) hdD)
-            (fun hc => (h.cleanDeps_back hi (CleanDeps.typed.mp hc.left) hdD).append
-              (h.cleanDeps_back hi (CleanDeps.typed.mp hc.right) hdH))
-            (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc) hdH) hnm
+            (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc).of_map_coarse hdD)
+            (fun hc => (h.cleanDeps_back hi (CleanDeps.typed.mp hc.left).of_map_coarse hdD).append
+              (h.cleanDeps_back hi (CleanDeps.typed.mp hc.right).of_map_coarse hdH))
+            (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc).of_map_coarse hdH) hnm
         refine hfr ?_
         cases hsa : m.st (args.getD k 0) with
         | none => rw [hsa] at hsv; cases hsv
@@ -1525,7 +1534,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       subst hty
       exact hfr (h.own_param_free hi hkl hEa hla hm hT' hc (fun hhv d hd => List.mem_append_left _ (by
         rw [ite_eq_left (show regioned _ = true by simpa [regioned] using hhv)]
-        exact h.σmap_mem hkl hEa (fun e => by rw [e] at hhv; cases hhv) hd)) hv)
+        exact h.σmap_mem hkl hEa (fun e => by rw [e] at hhv; cases hhv) (mem_coarseMem.mpr ⟨d, hd, rfl⟩))) hv)
     · -- an `inout` parameter: the argument itself
       have hkl := lt_of_get hk
       obtain ⟨Ea, hEa, hla, hok, _⟩ := h.arg k hkl
@@ -1545,7 +1554,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       subst hty
       exact hfr (h.own_param_free hi hkl hEa hla hm hT' hc (fun hhv d hd => List.mem_append_left _ (by
         rw [ite_eq_left (show regioned _ = true by simpa [regioned] using hhv)]
-        exact h.σmap_mem hkl hEa (fun e => by rw [e] at hhv; cases hhv) hd)) hv)
+        exact h.σmap_mem hkl hEa (fun e => by rw [e] at hhv; cases hhv) (mem_coarseMem.mpr ⟨d, hd, rfl⟩))) hv)
     · -- the frame: as the caller has it
       obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
       by_cases hs : ∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ args.getD k 0 = y

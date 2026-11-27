@@ -160,6 +160,87 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
 theorem ValOK.mono {m : Mem} {τ : Ty} {v : Val} {P P' H H' : List Dep} (hp : P ⊆ P')
     (hs : H ⊆ H') (h : ValOK m τ v P H) : ValOK m τ v P' H' := h.mono' hp hs
 
+/-! ### AGORA-374: forgetting an index keeps what a dependency lands
+
+A dependency inside element `i` (`BelowAt i`) lies strictly inside its
+root's node (`Below`): so its coarse image (`Kind.coarse`, `.inner`) lands
+whatever it does. This is what a call's boundary relies on: it speaks of
+its arguments in the four memory ways. -/
+
+theorem Lands.coarse {k : Kind} {n n0 : Val} (h : Lands k n n0) : Lands k.coarse n n0 := by
+  rcases h with ⟨rfl, h⟩ | ⟨rfl, h⟩ | ⟨rfl, h⟩ | ⟨i, rfl, h⟩
+  · exact Or.inl ⟨rfl, h⟩
+  · exact Or.inr (Or.inl ⟨rfl, h⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨rfl, h⟩))
+  · exact Or.inr (Or.inr (Or.inl ⟨rfl, h.below⟩))
+
+theorem Landed.coarse {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : Landed m dep.coarse n := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hk, hr, hp⟩
+  · exact Or.inl ⟨n0, hr, hl.coarse⟩
+  · exact Or.inr ⟨by simp [hk, Kind.coarse], hr, hp⟩
+
+theorem ArcLanded.coarse {m : Mem} {dep : Dep} {n : Val} (h : ArcLanded m dep n) : ArcLanded m dep.coarse n := by
+  rcases h with ⟨n0, hr, hl⟩ | ⟨hk, hr⟩
+  · exact Or.inl ⟨n0, hr, hl.coarse⟩
+  · exact Or.inr ⟨by simp [hk, Kind.coarse], hr⟩
+
+theorem CellLanded.coarse {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) : CellLanded m dep.coarse k := by
+  obtain ⟨n0, hr, hl⟩ := h; exact ⟨n0, hr, hl.coarse⟩
+
+theorem Kind.coarse_ne_self {k : Kind} (h : k ≠ .self) : k.coarse ≠ .self := by
+  cases k <;> simp_all [Kind.coarse]
+
+theorem ViewAt.coarse {m : Mem} {dep : Dep} {d o l : Nat} {t : Ty} (h : ViewAt m dep d o l t) :
+    ViewAt m dep.coarse d o l t := by
+  obtain ⟨c, es, hk, hl, ho, hw⟩ := h
+  exact ⟨c, es, Kind.coarse_ne_self hk, hl.coarse, ho, hw⟩
+
+theorem ViewsOK.coarse {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) :
+    ViewsOK m τ T (H.map Dep.coarse) := by
+  intro s v hv
+  obtain ⟨d, o, l, rfl, hd | hs⟩ := h s v hv
+  · obtain ⟨dep, hdep, ha⟩ := hd
+    exact ⟨d, o, l, rfl, Or.inl ⟨dep.coarse, List.mem_map_of_mem hdep, ha.coarse⟩⟩
+  · exact ⟨d, o, l, rfl, Or.inr hs⟩
+
+theorem NamesIn.coarse {T : Val} {H : List Dep} (h : NamesIn T H) : NamesIn T (H.map Dep.coarse) :=
+  fun c hc => List.mem_map.mpr ⟨_, h c hc, rfl⟩
+
+theorem HrefAt.coarse {m : Mem} {dep : Dep} {c : Nat} {t : Ty} {H : List Dep} (h : HrefAt m dep c t H) :
+    HrefAt m dep.coarse c t (H.map Dep.coarse) := by
+  obtain ⟨d, es, hl, hw, hv, hn, hs⟩ := h
+  exact ⟨d, es, hl.coarse, hw, hv.coarse, hn.coarse, hs⟩
+
+theorem envDeps_map_coarse (cs : List (Var × PMode × Ty)) (H : List Dep) :
+    envDeps cs (H.map Dep.coarse) = (envDeps cs H).map Dep.coarse := by
+  unfold envDeps
+  rw [List.filter_map]
+  congr 1
+  apply List.filter_congr
+  intro d _
+  simp only [ownWriter, Dep.coarse_kind, Dep.coarse_root, Kind.coarse_bound, Function.comp_apply]
+
+theorem ValOK.coarse {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ValOK m τ v (P.map Dep.coarse) (H.map Dep.coarse) := by
+  induction h with
+  | int => exact .int
+  | href h => obtain ⟨dep, hd, ha⟩ := h; exact .href ⟨dep.coarse, List.mem_map_of_mem hd, ha.coarse⟩
+  | view h => obtain ⟨dep, hd, ha⟩ := h; exact .view ⟨dep.coarse, List.mem_map_of_mem hd, ha.coarse⟩
+  | sview h => exact .sview h
+  | pair _ _ ihx ihy => rw [List.map_append] at ihx ihy; exact .pair ihx ihy
+  | inl _ ih => rw [List.map_append] at ih; exact .inl ih
+  | inr _ ih => rw [List.map_append] at ih; exact .inr ih
+  | pkg _ hq ih =>
+    rw [List.map_append, ← envDeps_map_coarse] at ih
+    exact .pkg ih hq
+  | arc h hw hv hl =>
+    obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep.coarse, List.mem_map_of_mem hd, hla.coarse⟩
+  | rguard h hw hv hl =>
+    obtain ⟨dep, hd, hla⟩ := hl; exact .rguard h hw hv ⟨dep.coarse, List.mem_map_of_mem hd, hla.coarse⟩
+  | lk h => exact .lk h
+  | cell h hl => obtain ⟨dep, hd, hla⟩ := hl; exact .cell h ⟨dep.coarse, List.mem_map_of_mem hd, hla.coarse⟩
+  | dtor _ ih => exact .dtor ih
+
 /-- What a value's handles need of what it depends on is views, never names:
     keeping only what changes nothing by name keeps it valid. -/
 theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :

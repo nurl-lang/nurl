@@ -1580,6 +1580,16 @@ def CleanDeps (Γ : Ctx) (D : List Dep) : Prop := ∀ d ∈ memDeps D, ShareOK �
 theorem CleanDeps.mono {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {D : List Dep}
     (hc : CleanDeps Γ' D) : CleanDeps Γ D := fun d hd => ⟨(hc d hd).1.mono h, h.clean _ (hc d hd).2⟩
 
+/-- AGORA-374: what is clean reads roots and shares, which forgetting an index keeps. -/
+theorem CleanDeps.of_map_coarse {Γ : Ctx} {D : List Dep} (h : CleanDeps Γ (D.map Dep.coarse)) : CleanDeps Γ D := by
+  intro d hd
+  obtain ⟨hs, hc⟩ := h d.coarse (List.mem_filter.mpr ⟨List.mem_map_of_mem (List.mem_filter.mp hd).1,
+    by simpa using (List.mem_filter.mp hd).2⟩)
+  refine ⟨?_, hc⟩
+  rcases hs with hs | hs
+  · exact Or.inl fun e => hs (by simp [e, Kind.coarse])
+  · exact Or.inr hs
+
 theorem CleanDeps.sub {Γ : Ctx} {D D' : List Dep} (hs : D ⊆ D') (hc : CleanDeps Γ D') : CleanDeps Γ D :=
   fun d hd => hc d (List.mem_filter.mpr ⟨hs (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
 
