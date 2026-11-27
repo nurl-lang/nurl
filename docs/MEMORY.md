@@ -3193,6 +3193,13 @@ Their cycles are rejected at compile time instead:
   stored there is judged by its type, so a structure of shared handles is
   built from its leaves up or points back with a weak reference. A closure
   whose captures cannot be followed is rejected rather than guessed at.
+  A trait object is not such a closure: it holds a value of one of the
+  types implementing its trait, every one known once the program's impls
+  are registered, so it is judged by what those types hold, as an enum by
+  its variants. A value holding one, out of a `Vec` element or a join, is
+  stored or sent across threads when no impl can hold a closure or a
+  handle leading back; a trait no type implements has no object and holds
+  nothing.
 
 A cycle through raw memory (a hand-written `*T`, `rc_ptr` stores,
 `mem_forget`) is invisible, as raw memory always is (§7.4), and exists
