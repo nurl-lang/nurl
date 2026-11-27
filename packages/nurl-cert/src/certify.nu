@@ -23,6 +23,7 @@ $ `lean.nu`
 $ `manifest.nu`
 $ `tolean.nu`
 $ `words.nu`
+$ `caps.nu`
 $ `stdlib/std/random.nu`
 
 : s NURLCERT_VERSION ( pkg_version )
@@ -397,7 +398,7 @@ open A2 C
 // (`Cert.elab`): the translation is what is left of it, the core IR's
 // words (`core-ir-words`), and the encodings the term uses (`enc`,
 // cert_enc_ids), each a row (AGORA-1029).
-@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab ( Vec String ) enc → Json {
+@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab ( Vec String ) enc b caps → Json {
     // the claims a shared row backs: M.race too, for a threaded program
     : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
     : s muc ? threads `M.unsafe M.safe M.leak M.race` `M.unsafe M.safe M.leak`
@@ -447,6 +448,8 @@ open A2 C
         `M.race is A3's race freedom of the program's model; that a race-free program behaves sequentially consistently in the binary is the memory model's theorem, cited, not mechanized`
         `formal/CLAIM.md (trusted base), A3/DESIGN.md` `the C11 and LLVM memory models (Batty et al.; LLVM LangRef)` `M.race` ) )
     } {}
+    // N.cap's own rows, when it is proved (AGORA-1013)
+    ? caps { ( cert_caps_rows L ) } {}
     ( json_arr_push L ( mj_row `unsafe-report` `nurlc --unsafe-report: the program's own hand-vouched code`
     `M.unsafe is what this report says, not a theorem` `compiler/nurlc.nu (--unsafe-report)` `nurlc` `M.unsafe` ) )
     : i n ( vec_len [String] unsafe_rows )
@@ -457,13 +460,20 @@ open A2 C
                 : String id ( string_from `unsafe-` )
                 ( string_push_int id + k 1 )
                 ( json_arr_push L ( mj_row ( string_data id ) ( string_data r ) `the program vouches for this by hand (unsafe), no rule checks it`
-                ( string_data r ) `the program's author` muc ) )
+                ( string_data r ) `the program's author` ? caps ( string_data ( __ct_with_ncap muc ) ) muc ) )
             }
             F _ → {}
         }
         = k + k 1
     }
     ^ L
+}
+
+// The claims a hand-vouched place backs, and N.cap too.
+@ __ct_with_ncap s c → String {
+    : String o ( string_from c )
+    ( string_push_str o ` N.cap` )
+    ^ o
 }
 
 // ── Certify ──────────────────────────────────────────────────────────
@@ -500,6 +510,8 @@ open A2 C
     ?? ( file_delete ( string_data ( nc_join out `Claims.lean` ) ) ) { T _ → {} F _ → {} }
     ?? ( file_delete ( string_data ( nc_join out `manifest.json` ) ) ) { T _ → {} F _ → {} }
     ?? ( file_delete ( string_data ( nc_join out `Elab.lean` ) ) ) { T _ → {} F _ → {} }
+    ?? ( file_delete ( string_data ( nc_join out `Caps.lean` ) ) ) { T _ → {} F _ → {} }
+    ?? ( file_delete ( string_data ( nc_join out `caps.tsv` ) ) ) { T _ → {} F _ → {} }
 
     // nurlc runs from the standard library's root: the core IR then names
     // the library's files `stdlib/…`, which is how the translation tells
@@ -610,6 +622,16 @@ open A2 C
     : ~ b elab F
     // why a candidate the checker accepts has no Cert.elab (printed)
     : ~ String elab_why ( string_new )
+    // N.cap: attempted, proved, why not, and what the manifest says of it
+    : String caps_path ( nc_join out `Caps.lean` )
+    : String ctab_path ( nc_join out `caps.tsv` )
+    : ~ b try_caps F
+    : ~ b caps F
+    : ~ String caps_why ( string_from `the program is not accepted: nothing is claimed of it` )
+    : ~ Json caps_json ( json_obj_new )
+    : ~ ( Vec String ) caps_doors ( vec_new [String] )
+    : ~ ( Vec String ) caps_axioms ( vec_new [String] )
+    : ~ String caps_status ( string_from `open` )
     ? ( nc_is verdict `accepted` ) {
         : String claims ( cert_claims_lean prof nv threads )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
@@ -625,12 +647,32 @@ open A2 C
                 F → {}
             }
         } {}
+        // N.cap (AGORA-1013): the functions a run can enter, the classes
+        // they reach (the core IR, through the capability table), and
+        // Caps.lean, which Lean checks in the same run, as an optional part.
+        : String ctab_src ( nc_join ( string_data . o stdlib ) `stdlib/caps.tsv` )
+        ?? ( nc_read ( string_data ctab_src ) ) {
+            T tab → {
+                ?? ( cert_caps_make . tr lean . r1 out tab ) {
+                    T cm → {
+                        ? & ( nc_write ( string_data caps_path ) ( string_data ( cert_caps_lean . cm runs prof threads ) ) )
+                        ( nc_write ( string_data ctab_path ) ( string_data tab ) ) {
+                            = try_caps T
+                            = caps_json . cm json
+                            = caps_doors ( vec_clone [String] . . cm res doors )
+                        } {}
+                    }
+                    F e → { = caps_why e }
+                }
+            }
+            F → { = caps_why ( string_from `no capability table (stdlib/caps.tsv) under the standard library's root` ) }
+        }
         : String work ( nc_join out `.build` )
         // A fresh directory for the one Lean file the check runs
         // (`cert_lean_check`: the bundle's modules, combined).
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
-        : LeanRun lr ( cert_lean_check ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab )
+        : LeanRun lr ( cert_lean_check2 ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab try_caps )
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
             = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)` `the verified checker refuses the program (C.certOK2B is false)` )
@@ -660,6 +702,30 @@ open A2 C
         } {}
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ? ! elab { ?? ( file_delete ( string_data elab_path ) ) { T _ → {} F _ → {} } } {}
+        = caps & & try_caps ( nc_is verdict `accepted` ) ( cert_caps_proved lr )
+        ? caps {
+            ?? ( cert_lean_axioms . lr caps_log `Cert.n_cap` ) {
+                T ax → { = caps_axioms ( cert_axiom_list ax ) }
+                F → {}
+            }
+            = caps_status ( string_from ( cert_status_of prof caps_axioms ) )
+            = caps_why ( string_new )
+            ? ( nc_is caps_status `open` ) {
+                = caps F
+                = caps_why ( string_from `Cert.n_cap rests on axioms beyond the profile's` )
+            } {}
+        } {
+            ? & try_caps ( nc_is verdict `accepted` ) {
+                = caps_why ( string_from `Lean did not check the list of functions a run can enter: ` )
+                ( string_push_str caps_why ( string_data ( __ct_first_err . lr caps_log ) ) )
+            } {}
+        }
+        ? ! caps {
+            ?? ( file_delete ( string_data caps_path ) ) { T _ → {} F _ → {} }
+            ?? ( file_delete ( string_data ctab_path ) ) { T _ → {} F _ → {} }
+            = caps_status ( string_from `open` )
+            = caps_axioms ( vec_new [String] )
+        } {}
         : ~ i k 0
         ~ < k nclaims {
             ?? ( cert_lean_axioms . lr log ( cert_claim_lean k ) ) {
@@ -729,7 +795,15 @@ open A2 C
     : s uwhy ? compiled `nurlc --unsafe-report` `nurlc refuses to compile the program, so its unsafe report is incomplete`
     ( json_arr_push cl ( __ct_claim `M.unsafe` `` ust ( string_data uen ) ( string_data ufi )
     uwhy ( vec_new [String] ) `unsafe-report` ) )
+    // N.cap: which functions a run can enter (Cert.n_cap), and the classes
+    // they reach (AGORA-1013)
+    : String cen ? caps ( cert_caps_sentence_en caps_doors ) ( string_from ( cert_caps_open_en ) )
+    : String cfi ? caps ( cert_caps_sentence_fi caps_doors ) ( string_from ( cert_caps_open_fi ) )
+    : String cprem ( cert_caps_premises prof caps elab enc nu )
+    ( json_arr_push cl ( __ct_claim `N.cap` `Cert.n_cap` ( string_data caps_status ) ( string_data cen ) ( string_data cfi )
+    ( string_data caps_why ) caps_axioms ( string_data cprem ) ) )
     ( mj_set m `claims` cl )
+    ? caps { ( mj_set m `capabilities` caps_json ) } {}
 
     // Coverage: the program's own functions.
     : ( Vec FnRow ) fns ( __ct_functions ( string_data . r1 out ) )
@@ -840,6 +914,10 @@ open A2 C
     ? elab {
         ?? ( nc_sha256_file ( string_data elab_path ) ) { T h → ( mj_str hs `elab_lean` ( string_data h ) ) F → {} }
     } {}
+    ? caps {
+        ?? ( nc_sha256_file ( string_data caps_path ) ) { T h → ( mj_str hs `caps_lean` ( string_data h ) ) F → {} }
+        ?? ( nc_sha256_file ( string_data ctab_path ) ) { T h → ( mj_str hs `caps_tsv` ( string_data h ) ) F → {} }
+    } {}
     ? > ( string_len . o binary ) 0 {
         : Json bo ( json_obj_new )
         ( mj_str bo `path` ( string_data . o binary ) )
@@ -868,7 +946,7 @@ open A2 C
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab enc ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab enc caps ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )
@@ -893,6 +971,12 @@ open A2 C
             }
             = z + z 1
         }
+        ( nurl_print `  N.cap ` )
+        ( nurl_println ( string_data caps_status ) )
+        ? > ( string_len caps_why ) 0 {
+            ( nurl_print `  N.cap not proved: ` )
+            ( nurl_println ( string_data caps_why ) )
+        } {}
         ( nurl_println ? elab `  term: Cert.elab (the kernel built it from the core IR's words)` `  term: the translator's (the translation ledger row)` )
         ? > ( string_len elab_why ) 0 {
             ( nurl_print `  Cert.elab not proved: ` )

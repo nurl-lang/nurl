@@ -95,6 +95,9 @@ $ `stdlib/ext/json.nu`
     // `elab`: Elab.lean checked too, and its part of the output
     b elab_ran
     String elab_log
+    // `caps`: Caps.lean (N.cap, AGORA-1013) checked too, and its part
+    b caps_ran
+    String caps_log
 }
 
 // A blank line, or a comment line (`--`).
@@ -164,7 +167,7 @@ $ `stdlib/ext/json.nu`
 // before Lean runs). Only lines checked to be exactly the expected ones are
 // left out; anything else is none (`why`). No `.olean` passes from one
 // process to the next any more.
-@ __lt_combined String prog String claims ? String elab inout String why inout i estart → ?String {
+@ __lt_combined String prog String claims ? String elab ? String caps inout String why inout i estart inout i cstart → ?String {
     : s head `import C.Cert\nopen A2 C\n`
     ? ! ( string_starts_with prog head ) {
         = why ( string_from `Program.lean does not start with its two lines 'import C.Cert' and 'open A2 C'` )
@@ -205,10 +208,39 @@ $ `stdlib/ext/json.nu`
         }
         F → {}
     }
-    : String o ( string_with_cap + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) 256 )
+    : ~ String kbody ( string_new )
+    : ~ b has_caps F
+    // (a threaded program's Caps.lean imports C.Caps3, another's C.Caps)
+    : ~ b caps3 F
+    ?? caps {
+        T c → {
+            ?? ( __lt_unimport c ( __lt_v2 `import Program` `import C.Caps` ) ) {
+                T x → {
+                    = kbody x
+                    = has_caps T
+                }
+                F → {
+                    ?? ( __lt_unimport c ( __lt_v2 `import Program` `import C.Caps3` ) ) {
+                        T x → {
+                            = kbody x
+                            = has_caps T
+                            = caps3 T
+                        }
+                        F → {
+                            = why ( string_from `Caps.lean's imports are not the template's` )
+                            ^ @ ?String { F }
+                        }
+                    }
+                }
+            }
+        }
+        F → {}
+    }
+    : String o ( string_with_cap + + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) ( string_len kbody ) 256 )
     ( string_push_str o `import C.Cert\n` )
     ? threads { ( string_push_str o `import C.Cert3\n` ) } {}
     ? has_elab { ( string_push_str o `import C.Elab\n` ) } {}
+    ? has_caps { ( string_push_str o ? caps3 `import C.Caps3\n` `import C.Caps\n` ) } {}
     ( string_push_str o `section\nopen A2 C\n` )
     ( string_push_str o ( string_data pbody ) )
     ( string_push_str o `\nend\n\n` )
@@ -223,6 +255,17 @@ $ `stdlib/ext/json.nu`
         ~ < k n { ? == ( slice_byte t k ) 10 { = nl + nl 1 } {} = k + k 1 }
         = estart + nl 1
         ( string_push_str o ( string_data ebody ) )
+    } {}
+    ? has_caps {
+        ( string_push_str o `\n` )
+        // (the line the Caps.lean part starts at)
+        : ( Slice u ) t ( slice_of_str ( string_data o ) )
+        : i n ( slice_len [u] t )
+        : ~ i nl 0
+        : ~ i k 0
+        ~ < k n { ? == ( slice_byte t k ) 10 { = nl + nl 1 } {} = k + k 1 }
+        = cstart + nl 1
+        ( string_push_str o ( string_data kbody ) )
     } {}
     ^ @ ?String { T o }
 }
@@ -263,6 +306,12 @@ $ `stdlib/ext/json.nu`
 // alone (they only mean that Cert.elab is not proved); Elab.lean's counts
 // only on an exit 0.
 @ cert_lean_check s lean s formal s bundle s work b elab → LeanRun {
+    ^ ( cert_lean_check2 lean formal bundle work elab F )
+}
+
+// ... and with Caps.lean too (`caps`, N.cap): its messages, from line
+// `cstart` on, are its own part (`caps_log`), as Elab.lean's are.
+@ cert_lean_check2 s lean s formal s bundle s work b elab b caps → LeanRun {
     : ~ String log ( string_new )
     : String prog ( nc_join bundle `Program.lean` )
     : String claims ( nc_join bundle `Claims.lean` )
@@ -276,20 +325,28 @@ $ `stdlib/ext/json.nu`
             F → {}
         }
     } {}
+    : ~ ? String ktext @ ?String { F }
+    ? caps {
+        ?? ( nc_read ( string_data ( nc_join bundle `Caps.lean` ) ) ) {
+            T x → { = ktext @ ?String { T x } }
+            F → {}
+        }
+    } {}
     : ~ String why ( string_new )
     : ~ String text ( string_new )
     : ~ i estart 0
-    ?? ( __lt_combined ptext ctext etext why estart ) {
+    : ~ i cstart 0
+    ?? ( __lt_combined ptext ctext etext ktext why estart cstart ) {
         T t → { = text t }
         F → {
             ( string_push_str log ( string_data why ) )
-            ^ @ LeanRun { F log F ( string_new ) }
+            ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
         }
     }
     ? ! ( nc_write ( string_data all ) ( string_data text ) ) {
         ( string_push_str log `cannot write the combined Lean file ` )
         ( string_push_str log ( string_data all ) )
-        ^ @ LeanRun { F log F ( string_new ) }
+        ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
     } {}
     : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
     ?? ( env_chdir formal ) {
@@ -297,7 +354,7 @@ $ `stdlib/ext/json.nu`
         F _ → {
             ( string_push_str log `cannot enter the formal tree ` )
             ( string_push_str log formal )
-            ^ @ LeanRun { F log F ( string_new ) }
+            ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
         }
     }
     : ( Vec String ) a1 ( vec_new [String] )
@@ -314,7 +371,7 @@ $ `stdlib/ext/json.nu`
         F _ → {
             ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
             ( string_push_str log `cannot set LEAN_PATH for Lean` )
-            ^ @ LeanRun { F log F ( string_new ) }
+            ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
         }
     }
     ( vec_push [String] a1 ( string_from `--json` ) )
@@ -322,7 +379,9 @@ $ `stdlib/ext/json.nu`
     : Run r ( nc_run lean a1 )
     ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     : b has_elab ?? etext { T _ → T F → F }
+    : b has_caps ?? ktext { T _ → T F → F }
     : ~ String elog ( string_new )
+    : ~ String klog ( string_new )
     : ( Vec String ) ls ( nc_lines ( string_data . r out ) )
     : i n ( vec_len [String] ls )
     : ~ i k 0
@@ -343,11 +402,15 @@ $ `stdlib/ext/json.nu`
                         T ln → {
                             ? & ( string_eq file all ) | ( nc_is_s ( string_data sev ) `error` ) | ( nc_is_s ( string_data sev ) `warning` ) ( nc_is_s ( string_data sev ) `information` ) {
                                 : String mt ( __lt_msg_text ( string_data file ) ln col ( string_data sev ) ( string_data data ) )
-                                ? & has_elab >= ln estart {
-                                    ( string_push_str elog ( string_data mt ) )
+                                ? & has_caps >= ln cstart {
+                                    ( string_push_str klog ( string_data mt ) )
                                 } {
-                                    ( string_push_str log ( string_data mt ) )
-                                    ? ( nc_is_s ( string_data sev ) `error` ) { = cerr T } {}
+                                    ? & has_elab >= ln estart {
+                                        ( string_push_str elog ( string_data mt ) )
+                                    } {
+                                        ( string_push_str log ( string_data mt ) )
+                                        ? ( nc_is_s ( string_data sev ) `error` ) { = cerr T } {}
+                                    }
                                 }
                                 = placed T
                             } {}
@@ -374,24 +437,38 @@ $ `stdlib/ext/json.nu`
         ( string_push_char log 10 )
     } {}
     : b ok0 & . r started == . r code 0
-    : b elab_failed & & & & has_elab . r started == . r code 1 ( cert_lean_has_error elog ) ! ( cert_lean_has_error log )
+    // (an error in an optional part, Elab.lean's or Caps.lean's, and none in
+    // the claims': the claims stand, the part is not proved)
+    : b elab_failed & & & & | has_elab has_caps . r started == . r code 1 | ( cert_lean_has_error elog ) ( cert_lean_has_error klog ) ! ( cert_lean_has_error log )
     // A run that ended otherwise (killed, out of memory, an exit Lean does
     // not give for an error) with no error of Lean's in the claims' part
     // may have ended in the optional Elab.lean part: the claims are checked
     // again alone, once, and Elab.lean is not proved. (Without Elab.lean,
     // as in verify of a bundle that holds it, Cert.elab then fails.)
-    ? & & has_elab ! | ok0 elab_failed ! cerr {
-        : LeanRun again ( cert_lean_check lean formal bundle work F )
+    ? & & | has_elab has_caps ! | ok0 elab_failed ! cerr {
+        : LeanRun again ( cert_lean_check2 lean formal bundle work F F )
         : String note ( string_from `the Lean run ended abnormally (exit ` )
         ( string_push_int note . r code )
         ( string_push_str note `) before the Elab.lean part was checked; the claims were checked again alone` )
-        ^ @ LeanRun { . again ran . again log F note }
+        ^ @ LeanRun { . again ran . again log F note F ( string_new ) }
     } {}
-    ^ @ LeanRun { | ok0 elab_failed log & ok0 has_elab elog }
+    // (each optional part ran when the run did and held no error of its
+    // own: a failed Caps.lean part leaves Elab.lean's proof standing)
+    : b ran_ok | ok0 elab_failed
+    : b eran & & ran_ok has_elab ! ( cert_lean_has_error elog )
+    : b kran & & ran_ok has_caps ! ( cert_lean_has_error klog )
+    ^ @ LeanRun { ran_ok log eran elog kran klog }
 }
 
 // Lean proved `Cert.elab` on the standard axioms alone: the run exited 0,
 // reported no error, and `#print axioms` lists no other axiom.
+// Caps.lean (N.cap) proved: its part ran with no error, and Lean lists
+// `Cert.n_cap`'s axioms (which the status is read off).
+@ cert_caps_proved LeanRun lr → b {
+    ? | ! . lr caps_ran ( cert_lean_has_error . lr caps_log ) { ^ F } {}
+    ^ ?? ( cert_lean_axioms . lr caps_log `Cert.n_cap` ) { T _ → T F → F }
+}
+
 @ cert_elab_proved LeanRun lr → b {
     ? | ! . lr elab_ran ( cert_lean_has_error . lr elab_log ) { ^ F } {}
     ^ ?? ( cert_lean_axioms . lr elab_log `Cert.elab` ) {

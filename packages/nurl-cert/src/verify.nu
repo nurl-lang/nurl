@@ -15,6 +15,7 @@ $ `shape.nu`
 $ `lean.nu`
 $ `manifest.nu`
 $ `certify.nu`
+$ `caps.nu`
 
 : VerOpts {
     String bundle
@@ -107,7 +108,10 @@ $ `certify.nu`
     // certify reads them: their ledger rows and premises)
     : ~ ( Vec String ) enc ( vec_new [String] )
     ? elab { = enc ( cert_enc_ids ( string_data ptext0 ) ) } {}
-    ( __vf_structure t m ( string_data prof ) threads elab enc )
+    // N.cap is proved in the bundle when the manifest records Caps.lean's
+    // hash (AGORA-1013): Caps.lean, caps.tsv and `capabilities` are there
+    : b caps ( __vf_has m `hashes.caps_lean` )
+    ( __vf_structure t m ( string_data prof ) threads elab enc caps )
 
     // The sources.
     : ~ i k 0
@@ -189,12 +193,42 @@ $ `certify.nu`
             ( __vf_check t esame `Elab.lean is Program.core's words and the template, byte for byte`
             `its words, statement or proof are not what nurl-cert makes of Program.core` )
         } {}
+        ? caps {
+            // N.cap: the list, the classes and their chains made again from
+            // the bundle's own Program.lean, Program.core and caps.tsv;
+            // Caps.lean the template over that list, byte for byte
+            ( __vf_hash t m bundle `Caps.lean` `caps_lean` )
+            ( __vf_hash t m bundle `caps.tsv` `caps_tsv` )
+            : String core_text2 ?? ( nc_read ( string_data ( nc_join bundle `Program.core` ) ) ) { T x → x F → ( string_new ) }
+            : String tab_text ?? ( nc_read ( string_data ( nc_join bundle `caps.tsv` ) ) ) { T x → x F → ( string_new ) }
+            ?? ( cert_caps_make ptext core_text2 tab_text ) {
+                T cm → {
+                    : String khave ?? ( nc_read ( string_data ( nc_join bundle `Caps.lean` ) ) ) { T x → x F → ( string_new ) }
+                    ( __vf_check t ( string_eq ( cert_caps_lean . cm runs ( string_data prof ) threads ) khave )
+                    `Caps.lean is the template over the functions the term can enter, byte for byte` `its list, statement or proof were edited` )
+                    : String jwant ( json_stringify . cm json )
+                    : String jhave ?? ( json_get m `capabilities` ) { T j → ( json_stringify j ) F → ( string_new ) }
+                    ( __vf_check t ( string_eq jwant jhave )
+                    `the capabilities are the ones the term, the core IR and caps.tsv give (list, classes, chains)` `` )
+                    : i ncl ( cert_claim_count threads )
+                    : String sen ( mj_get_str m ( string_data ( __vf_path `claims.` + ncl 1 `.sentence.en` ) ) )
+                    : String sfi ( mj_get_str m ( string_data ( __vf_path `claims.` + ncl 1 `.sentence.fi` ) ) )
+                    ( __vf_check t & ( string_eq sen ( cert_caps_sentence_en . . cm res doors ) ) ( string_eq sfi ( cert_caps_sentence_fi . . cm res doors ) )
+                    `N.cap's sentences name exactly the classes it reaches` `` )
+                }
+                F e → ( __vf_bad t `the capabilities can be made again from the bundle` ( string_data e ) )
+            }
+        } {
+            ( __vf_check t & ! ( file_exists ( string_data ( nc_join bundle `Caps.lean` ) ) ) ! ( __vf_has m `capabilities` )
+            `no Caps.lean and no capabilities, as the manifest records no N.cap proof` `` )
+        }
         // Lean, again, and only on files every check above passed: Lean runs
         // code while it elaborates a file (`#eval`, `run_cmd`), so a file
         // the grammar, the template or a hash refused is never handed to it.
         ? > . t bad 0 {
             ( __vf_bad t `Lean checks Program.lean and Claims.lean` `not run: the bundle failed the checks above` )
             ? elab { ( __vf_bad t `Lean proves Cert.elab (Elab.lean) on the standard axioms` `not run` ) } {}
+            ? caps { ( __vf_bad t `Lean proves Cert.n_cap (Caps.lean)` `not run` ) } {}
             : ~ i c 0
             ~ < c nclaims {
                 : String what ( string_from ( cert_claim_id c ) )
@@ -209,7 +243,7 @@ $ `certify.nu`
         // (`cert_lean_check`: the bundle's modules, combined).
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
-        : LeanRun lr ( cert_lean_check ( string_data . o lean ) ( string_data . o formal ) bundle ( string_data work ) elab )
+        : LeanRun lr ( cert_lean_check2 ( string_data . o lean ) ( string_data . o formal ) bundle ( string_data work ) elab caps )
         : b clean & . lr ran ! ( cert_lean_has_error . lr log )
         ( __vf_check t clean `Lean checks Program.lean and Claims.lean` ( string_data ( __vf_first . lr log ) ) )
         // The term is the kernel's: Lean proves Cert.elab again, in the same
@@ -218,6 +252,21 @@ $ `certify.nu`
             ( __vf_check t ( cert_elab_proved lr ) `Lean proves Cert.elab (Elab.lean) on the standard axioms`
             ( string_data ( __vf_first . lr elab_log ) ) )
         } {}
+        // N.cap: Lean proves Cert.n_cap again, and its status and axioms are
+        // the manifest's
+        : String nst ( mj_get_str m ( string_data ( __vf_path `claims.` + nclaims 1 `.status` ) ) )
+        ? caps {
+            : b kp ( cert_caps_proved lr )
+            ( __vf_check t kp `Lean proves Cert.n_cap (Caps.lean)` ( string_data ( __vf_first . lr caps_log ) ) )
+            : ( Vec String ) kal ?? ( cert_lean_axioms . lr caps_log `Cert.n_cap` ) { T ax → ( cert_axiom_list ax ) F → ( vec_new [String] ) }
+            : String kst ( string_from ? kp ( cert_status_of ( string_data prof ) kal ) `open` )
+            ( __vf_check t ( string_eq kst nst ) `N.cap: the manifest's status is what Lean reports` ( string_data nst ) )
+            : String kaxp ( __vf_path `claims.` + nclaims 1 `.axioms` )
+            : ( Vec String ) mkal ?? ( json_get m ( string_data kaxp ) ) { T j → ( __vf_strs j ) F → ( vec_new [String] ) }
+            ( __vf_check t ( string_eq ( string_join kal `, ` ) ( string_join mkal `, ` ) ) `N.cap: the manifest lists the axioms Lean lists` `` )
+        } {
+            ( __vf_check t ( nc_is nst `open` ) `N.cap is open, as the bundle holds no proof of it` ( string_data nst ) )
+        }
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         : ~ i c 0
         ~ < c nclaims {
@@ -272,6 +321,9 @@ $ `certify.nu`
         : String plp ( nc_join bundle `Program.lean` )
         ? ( file_exists ( string_data plp ) ) { ( __vf_hash t m bundle `Program.lean` `program_lean` ) } {}
         ( __vf_check t ! ( file_exists ( string_data claims_path ) ) `no Claims.lean beside a program the checker did not accept` `` )
+        : String nst0 ( mj_get_str m ( string_data ( __vf_path `claims.` + nclaims 1 `.status` ) ) )
+        ( __vf_check t & & & ( nc_is nst0 `open` ) ! caps ! ( file_exists ( string_data ( nc_join bundle `Caps.lean` ) ) ) ! ( __vf_has m `capabilities` )
+        `N.cap is open, with no Caps.lean, beside a program the checker did not accept` ( string_data nst0 ) )
         : ~ i c 0
         ~ < c nclaims {
             : String mst ( mj_get_str m ( string_data ( __vf_path `claims.` c `.status` ) ) )
@@ -331,7 +383,9 @@ $ `certify.nu`
     : b has_ir ?? ( json_get m `hashes.llvm_ir` ) { T _ → T F → F }
     : s uwant ? has_ir `assumed` `open`
     ( __vf_check t & ( nc_is uid `M.unsafe` ) ( nc_is ust uwant ) `M.unsafe is assumed (nurlc's report, not a theorem), open without one` ( string_data ust ) )
-    : String xk ( __vf_path `claims.` + nclaims 1 `.id` )
+    : String nid ( mj_get_str m ( string_data ( __vf_path `claims.` + nclaims 1 `.id` ) ) )
+    ( __vf_check t ( nc_is nid `N.cap` ) `the claim after M.unsafe is N.cap` ( string_data nid ) )
+    : String xk ( __vf_path `claims.` + nclaims 2 `.id` )
     : b extra ?? ( json_get m ( string_data xk ) ) { T _ → T F → F }
     ( __vf_check t ! extra `the manifest claims nothing beyond the template's claims` `` )
 
@@ -360,10 +414,10 @@ $ `certify.nu`
 
 @ __vf_has Json m s path → b { ^ ?? ( json_get m path ) { T _ → T F → F } }
 
-@ __vf_structure inout Tally t Json m s prof b threads b elab ( Vec String ) enc → v {
+@ __vf_structure inout Tally t Json m s prof b threads b elab ( Vec String ) enc b caps → v {
     // the top-level members, exactly
     : ( Vec String ) keys ( json_obj_keys m )
-    : ( Vec String ) want ( string_split ( string_from `schema tool profile program claims coverage hashes versions ledger` ) ` ` )
+    : ( Vec String ) want ( string_split ( string_from ? caps `schema tool profile program claims coverage hashes versions ledger capabilities` `schema tool profile program claims coverage hashes versions ledger` ) ` ` )
     ( nc_sort keys )
     ( nc_sort want )
     ( __vf_check t ( cert_same keys want ) `the manifest has the schema's members and no others` ( string_data ( string_join keys ` ` ) ) )
@@ -372,7 +426,7 @@ $ `certify.nu`
     : ~ String bad ( string_new )
     ( __vf_obj m `tool` `name version` `` bad )
     ( __vf_obj m `program` `source verdict reason slots` `` bad )
-    ( __vf_obj m `hashes` `sources core_ir` `llvm_ir program_lean claims_lean elab_lean binary` bad )
+    ( __vf_obj m `hashes` `sources core_ir` `llvm_ir program_lean claims_lean elab_lean caps_lean caps_tsv binary` bad )
     ( __vf_obj m `versions` `nurlc formal_tree formal_commit lean_toolchain` `` bad )
     ? ! ( nc_is ( mj_get_str m `tool.name` ) `nurl-cert` ) { ( string_push_str bad `tool.name ` ) } {}
     ( __vf_strings m `tool.version program.source program.verdict program.reason hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain` bad )
@@ -383,6 +437,23 @@ $ `certify.nu`
     ( __vf_sha m `hashes.program_lean` F bad )
     ( __vf_sha m `hashes.claims_lean` F bad )
     ( __vf_sha m `hashes.elab_lean` F bad )
+    ( __vf_sha m `hashes.caps_lean` F bad )
+    ( __vf_sha m `hashes.caps_tsv` caps bad )
+    ? caps {
+        ( __vf_obj m `capabilities` `runs functions classes` `` bad )
+        : ( Vec String ) carr ( string_split ( string_from `capabilities.runs capabilities.functions capabilities.classes` ) ` ` )
+        : i nca ( vec_len [String] carr )
+        : ~ i ca 0
+        ~ < ca nca {
+            : String cpth ( string_clone ( vec_at [String] carr ca ) )
+            : b isa ?? ( json_get m ( string_data cpth ) ) { T j → ( json_is_arr j ) F → F }
+            ? ! isa {
+                ( string_push_str bad ( string_data cpth ) )
+                ( string_push_str bad `(not an array) ` )
+            } {}
+            = ca + ca 1
+        }
+    } {}
     ( __vf_sha m `versions.formal_tree` T bad )
     ? ( __vf_has m `hashes.binary` ) {
         ( __vf_obj m `hashes.binary` `path sha256` `` bad )
@@ -400,7 +471,7 @@ $ `certify.nu`
         = q + q 1
     }
     ? == q 0 { ( string_push_str bad `hashes.sources ` ) } {}
-    : i ncl + ( cert_claim_count threads ) 1
+    : i ncl + ( cert_claim_count threads ) 2
     : ~ i c 0
     ~ < c ncl {
         : String cp ( __vf_path `claims.` c `` )
@@ -498,6 +569,33 @@ $ `certify.nu`
         ? ! ( cert_same have wantp ) { = claims_ok F } {}
         = c + c 1
     }
+    // N.cap: its id, theorem and premises; an open one's sentences are the
+    // open ones (a proved one's are checked against the classes made again)
+    : i nk + nc 1
+    ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` nk `.id` ) ) ) `N.cap` ) { = claims_ok F } {}
+    ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` nk `.lean` ) ) ) `Cert.n_cap` ) { = claims_ok F } {}
+    : ~ i nus 0
+    : ~ i qu 0
+    : ~ b moreu T
+    ~ moreu {
+        : String lik ( __vf_path `ledger.` qu `.id` )
+        ?? ( json_get m ( string_data lik ) ) {
+            T ij → {
+                : String id ( string_from ( json_as_str ij ) )
+                ? & ( string_starts_with id `unsafe-` ) ! ( nc_is id `unsafe-report` ) { = nus + nus 1 } {}
+                = qu + qu 1
+            }
+            F → { = moreu F }
+        }
+    }
+    : String kprem ( cert_caps_premises prof caps elab enc nus )
+    : String kpk ( __vf_path `claims.` nk `.premises` )
+    : ( Vec String ) khave ?? ( json_get m ( string_data kpk ) ) { T j → ( __vf_strs j ) F → ( vec_new [String] ) }
+    ? ! ( cert_same khave ( string_split kprem ` ` ) ) { = claims_ok F } {}
+    ? ! caps {
+        ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` nk `.sentence.en` ) ) ) ( cert_caps_open_en ) ) { = claims_ok F } {}
+        ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` nk `.sentence.fi` ) ) ) ( cert_caps_open_fi ) ) { = claims_ok F } {}
+    } {}
     ( __vf_check t claims_ok `the claims are the template's: ids, theorems, sentences, premises` `` )
     // the ledger, as certify writes it
     : ( Vec String ) urows ( vec_new [String] )
@@ -516,7 +614,7 @@ $ `certify.nu`
             F → { = more F }
         }
     }
-    : Json lw ( cert_ledger prof urows threads elab enc )
+    : Json lw ( cert_ledger prof urows threads elab enc caps )
     : String lws ( json_stringify lw )
     : String lhs ?? ( json_get m `ledger` ) { T j → ( json_stringify j ) F → ( string_new ) }
     ( __vf_check t ( string_eq lws lhs ) `the trust ledger is the one certify writes (no row dropped or reworded)` `` )

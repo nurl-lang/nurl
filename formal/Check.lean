@@ -1145,5 +1145,6 @@ import D
 #print axioms C.caps3_names
 #print axioms C.caps3_runs
 #print axioms C.caps_witness_runs
+#print axioms C.caps_witness_open
 -- Phase D2: an accepted drop-validation path is safe on a concrete heap
 #print axioms D.validated_safe

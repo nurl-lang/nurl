@@ -3,7 +3,10 @@
 **Review the certificate, not the code.** `nurl-cert` turns a NURL program
 into a bundle of Lean theorems about that program: it never touches memory
 it does not own, and it frees everything it allocates, also when a panic
-ends it. The Lean kernel checks the proofs. Anyone can check the bundle
+ends it. It also says what the program can do outside its memory, and what
+it never does (`N.cap`): which of its functions a run can enter is a
+theorem, and what those functions reach is read off their calls through a
+capability table. The Lean kernel checks the proofs. Anyone can check the bundle
 again, without the compiler.
 
 ```sh
@@ -20,7 +23,8 @@ nurl-cert coverage bundles/             # the coverage table of bundles/*.cert
 accepted
   M.safe proved
   M.leak proved
-  term: the translator's (the translation ledger row)
+  N.cap proved
+  term: Cert.elab (the kernel built it from the core IR's words)
 ```
 
 `prog.cert/` holds:
@@ -46,6 +50,14 @@ accepted
   matched);
   when the proof fails, there is no Elab.lean and the bundle keeps the
   translator's ledger row;
+- `Caps.lean` and `caps.tsv`, when Lean proves `Cert.n_cap`: the list of
+  functions a run can enter, the kernel's check that it is closed under
+  the program's names, and the theorem that a program with the same
+  functions there has the same runs; and the capability table
+  (`stdlib/caps.tsv`) the classes were read with. The manifest's
+  `capabilities` gives each class with a chain of calls to the runtime
+  function that has it, and N.cap's sentence lists what the program can do
+  and what it never does;
 - `manifest.json`, with:
   - each claim's status, read off `#print axioms`;
   - the program's functions;
@@ -85,7 +97,7 @@ Needs:
 - `nurlc`;
 - `lean` on `PATH` (elan's: run inside `formal/`, it picks `formal/`'s
   toolchain), or `--lean PATH` / `$LEAN`;
-- `formal/` built (`cd formal && lake build C.Cert C.Cert3 C.Elab`).
+- `formal/` built (`cd formal && lake build C.Cert C.Cert3 C.Elab C.Caps C.Caps3`).
 
 `verify` needs only Lean.
 

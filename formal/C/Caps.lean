@@ -1,6 +1,5 @@
-import C.Cert3
+import C.Cert
 import A2.Reach
-import A3.Reach
 
 /-!
 # C16: what a program can run, decided (AGORA-1013)
@@ -21,7 +20,9 @@ run from `s` on the empty store:
   network or a write to a file, and no run would change.
 
 For a program that spawns threads (A3, `C/Cert3.lean`), the same for every
-interleaving: `caps3_names` and `caps3_runs`, from `A3/Reach.lean`.
+interleaving: `caps3_names` and `caps3_runs` (`C/Caps3.lean`, apart so that
+a single-threaded program's certificate does not load A3), from
+`A3/Reach.lean`.
 
 `reachB P s` computes such a list, the closure of the entry's names; the
 certificate does not trust it, it checks it (`capsOKB`). What each function
@@ -209,26 +210,6 @@ theorem caps_runs {P : Prog} {s : Stmt} {L : List Nat} (h : capsOKB P s L = true
   obtain ⟨hs, hP⟩ := capsOKB_parts h
   exact steps_agree_iff hP hag (memFns_empty _ nv) hs
 
-/-! ### Threads -/
-
-/-- Every configuration an interleaving of an accepted program's threads
-    reaches names only functions of `L`, on every thread and in the shared
-    blocks. -/
-theorem caps3_names {P : Prog} {s : Stmt} {L : List Nat} (h : capsOKB P s L = true)
-    (spawn : Nat → Bool) (nv : Nat) :
-    ∀ C, A3.Reach P spawn (A3.Cfg.init s nv) C → A3.CfgFns (· ∈ L) C := by
-  obtain ⟨hs, hP⟩ := capsOKB_parts h
-  exact fun C hr => hr.fns hP (A3.cfgFns_init hs nv)
-
-/-- **`N.cap`'s theorem for threads: a function outside `L` runs on no
-    thread.** Any program with the same functions at the indices of `L` has
-    exactly the interleavings of `P` from `s`. -/
-theorem caps3_runs {P : Prog} {s : Stmt} {L : List Nat} (h : capsOKB P s L = true) {P' : Prog}
-    (hag : ∀ f ∈ L, P'[f]? = P[f]?) (spawn : Nat → Bool) (nv : Nat) (C : A3.Cfg) :
-    A3.Reach P spawn (A3.Cfg.init s nv) C ↔ A3.Reach P' spawn (A3.Cfg.init s nv) C := by
-  obtain ⟨hs, hP⟩ := capsOKB_parts h
-  exact A3.reach_agree_iff hP hag (A3.cfgFns_init hs nv)
-
 /-! ### The closure -/
 
 /-- `L` with each of `xs` added once, in order (structural, so the kernel
@@ -290,6 +271,10 @@ def capsWitness : Prog :=
 theorem caps_witness_reach : reachB capsWitness (.letcall 0 0 [] .skip) = [0, 1] := by decide +kernel
 
 theorem caps_witness_ok : capsOKB capsWitness (.letcall 0 0 [] .skip) [0, 1] = true := by decide +kernel
+
+/-- ... and a list that leaves out a function the entry's code calls is no
+    claim: `main` calls function 1, so `[0]` is not closed. -/
+theorem caps_witness_open : capsOKB capsWitness (.letcall 0 0 [] .skip) [0] = false := by decide +kernel
 
 /-- Function 2 replaced by anything at all: the runs are the same. -/
 theorem caps_witness_runs (fn : Fn) (nv : Nat) (r : Res) :

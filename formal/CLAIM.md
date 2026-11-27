@@ -9,7 +9,8 @@
 > checker decides A1–A3 and certifies one program at a time (C13, C14:
 > `nurl --certify`, `docs/dev/CERTIFICATE.md`, with the translation from
 > nurlc's core IR a trusted step), and D is under way (D0–D2); the
-> README's phase table says what each covers.
+> README's phase table says what each covers. A certificate also states
+> which functions a run can enter (C16, `N.cap`, below).
 
 ## Statement
 
@@ -2307,6 +2308,34 @@ that may panic exactly when one of the module's drop methods may (Agora
 #650). That is the run Agora #609 gives the calculus: the closure's
 glue calls its drop method, each destructor capture in a frame of its
 own. Test: `compiler/tests/panic_in_drop_of_closure_capture.nu`.
+
+## What a certified program can run (N.cap)
+
+A certificate's `N.cap` (C16, AGORA-1013) is a statement about runs, not
+about memory: **of the program's functions, only those of a list `L`
+ever run.** The theorem (`C.caps_runs`, `C.caps3_runs`) says it the way a
+reviewer can rely on: any program with the same functions at the indices
+of `L`, whatever its functions elsewhere, has exactly the same runs from
+the entry (A2's `Steps`), and the same interleavings of its threads (A3's
+`Reach`). The kernel decides that `L` is closed under the program's names
+(`C.capsOKB`): every call's callee, every `recover`'s, every destructor a
+binding or a block's type hands to a frame, every call's result frame's
+and every closure literal's code, in the entry and in each function of `L`.
+`A2/Reach.lean` and `A3/Reach.lean` prove that such a list holds every
+function any configuration of a run names, in what is left to run and in
+what memory holds, and that a step reads the program only there
+(`A2.fns_step`, `A2.step_agree`, `A3.TStep.fns`, `A3.TStep.agree`). They
+are layers over A2 and A3: no rule changes, and no theorem's statement.
+
+What the functions of `L` do outside the program's memory is not a step
+of the model: the library's calls are A2's constructs. A certificate reads
+it off the core IR's calls, through the library's bodies, down to the
+runtime functions, each classed by `stdlib/caps.tsv`. That table, that
+reading, and the binary doing what its model does (`M.safe`, phase D) are
+the claim's trusted rows (`caps-table`, `caps-attribution`, `caps-binary`),
+and every `unsafe` place of the program is one more. The claim's sentence
+says what the program can do and what it never does; the theorem says
+that nothing outside `L` runs.
 
 ## Trusted base
 

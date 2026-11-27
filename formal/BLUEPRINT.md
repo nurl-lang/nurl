@@ -3,8 +3,8 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,449 lines of Lean 4**, **941 theorems**, **1119 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **91 modules**, **87,303 lines of Lean 4**, **3869 theorems**, **4929 total declarations**
+* **Phase A3 (Threads & Data-Race Freedom):** **34 modules**, **19,640 lines of Lean 4**, **955 theorems**, **1134 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **92 modules**, **88,253 lines of Lean 4**, **3921 theorems**, **4990 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (91 Modules)
+## 4. Phase A2 Module Dependency DAG (92 Modules)
 
 ```mermaid
 flowchart BT
@@ -190,6 +190,7 @@ flowchart BT
   PopWitness["PopWitness<br/>(262L, 13 thms)"]
   Preservation["Preservation<br/>(5419L, 123 thms)"]
   Progress["Progress<br/>(948L, 14 thms)"]
+  Reach["Reach<br/>(950L, 52 thms)"]
   Region["Region<br/>(35L, 1 thms)"]
   RegionChangeWitness["RegionChangeWitness<br/>(86L, 5 thms)"]
   RegionMem["RegionMem<br/>(418L, 22 thms)"]
@@ -303,6 +304,8 @@ flowchart BT
   CapsLive --> Preservation
   FrameClause --> Preservation
   Preservation --> Progress
+  Codes --> Reach
+  SweepD --> Reach
   Typing --> Region
   HeldViewThruWitness --> RegionChangeWitness
   ThruPre --> RegionMem
@@ -410,6 +413,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/InoutViewArgWitness.lean`](A2/InoutViewArgWitness.lean) | 409 | 34 | 25 |  |
 | 3. Proof Infrastructure | [`A2/KillVarsStep.lean`](A2/KillVarsStep.lean) | 281 | 11 | 4 |  |
 | 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 457 | 21 | 6 |  |
+| 3. Proof Infrastructure | [`A2/Reach.lean`](A2/Reach.lean) | 950 | 52 | 9 |  |
 | 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 35 | 1 | 0 |  |
 | 3. Proof Infrastructure | [`A2/RegionChangeWitness.lean`](A2/RegionChangeWitness.lean) | 86 | 5 | 3 |  |
 | 3. Proof Infrastructure | [`A2/RegionMem.lean`](A2/RegionMem.lean) | 418 | 22 | 6 |  |

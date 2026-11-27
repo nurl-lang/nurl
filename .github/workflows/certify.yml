@@ -18,6 +18,7 @@ on:
       - 'tools/ncore/**'
       - 'compiler/nurlc.nu'
       - 'stdlib/runtime_core.c'
+      - 'stdlib/caps.tsv'
       - 'nurl.sh'
       - 'nurl.bat'
       - 'build.bat'
@@ -31,6 +32,7 @@ on:
       - 'tools/ncore/**'
       - 'compiler/nurlc.nu'
       - 'stdlib/runtime_core.c'
+      - 'stdlib/caps.tsv'
       - 'nurl.sh'
       - 'nurl.bat'
       - 'build.bat'
@@ -79,9 +81,9 @@ jobs:
             chmod +x "$HOME/leanbin/$t"
           done
           echo "$HOME/leanbin" >> "$GITHUB_PATH"
-      - name: Build the checker's modules (C.Cert, C.Cert3, C.Elab and what they import)
+      - name: Build the checker's modules (C.Cert, C.Cert3, C.Elab, C.Caps and what they import)
         working-directory: formal
-        run: lake build C.Cert C.Cert3 C.Elab
+        run: lake build C.Cert C.Cert3 C.Elab C.Caps
       - name: Build the toolchain
         run: ./build.sh --no-tests
       - name: Build nurl-cert
@@ -172,7 +174,7 @@ jobs:
       - name: Build the checker's modules
         working-directory: formal
         shell: bash
-        run: lake build C.Cert C.Cert3 C.Elab
+        run: lake build C.Cert C.Cert3 C.Elab C.Caps
       - name: Certify and verify one program of each kind
         shell: bash
         run: |
