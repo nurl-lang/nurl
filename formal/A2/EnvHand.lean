@@ -1568,7 +1568,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     rcases hd with h | h
     · left
       refine compAll_mono (fun d0 hd0 => ?_) h
-      simp only [argMem, List.flatMap_cons, List.mem_append, List.mem_flatMap] at hd0 ⊢
+      simp only [argMem, coarseMem, Dep.coarse, Kind.coarse, List.flatMap_cons, List.mem_append, List.mem_flatMap] at hd0 ⊢
       rcases hd0 with hr | ⟨z, hz, hrz⟩
       · left
         rw [hyE] at hr; simp only [hEyt, ↓reduceIte] at hr; rw [hck]; simp only [hτ, ↓reduceIte]

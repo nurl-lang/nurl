@@ -821,6 +821,19 @@ theorem NoIdx.of_kill {Γ : Ctx} {e e' : Eff} {hv hv' : Bool} {x : Var}
       List.any_eq_true.mpr ⟨_, hd, by simp [Kind.isName, hk' i]⟩
     rw [hany] at hm; cases hm
 
+/-- AGORA-374: a binding set to an entry that depends on `x` inside no
+    element by index keeps a context free of such dependencies. -/
+theorem NoIdx.setE {Γ : Ctx} {x y : Var} {E : Entry} (h : NoIdx Γ x)
+    (hE : ∀ d ∈ E.vdeps, d.root = x → d.kind.isIdx = false) : NoIdx (setE Γ y E) x := by
+  rintro k ⟨v, E', hE', hn, hl, hd⟩ i rfl
+  by_cases hv : v = y
+  · subst hv
+    have hEE : E' = E := by unfold A2.setE at hE'; rw [upd_same] at hE'; exact (Option.some.inj hE').symm
+    subst hEE
+    have := hE _ hd rfl; simp [Kind.isIdx] at this
+  · unfold A2.setE at hE'; rw [upd_ne _ _ hv] at hE'
+    exact h _ ⟨v, E', hE', hn, hl, hd⟩ i rfl
+
 /-- One binding `x` changes (effect `e`), its slot becomes `ox`: every other
     binding stays valid, or is ended by `kill`. -/
 theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)

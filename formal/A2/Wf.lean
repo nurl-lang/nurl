@@ -822,7 +822,7 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
     simp only [heldOfArgs, roots, List.map_append, List.mem_append] at hr
     rcases hr with hr | hr
     · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp (roots_compAll hr)
-      simp only [argMem, List.mem_flatMap] at hd
+      simp only [argMem, coarseMem, Dep.coarse, Kind.coarse, List.mem_flatMap] at hd
       obtain ⟨a, ha, hda⟩ := hd
       obtain ⟨i, hi, rfl⟩ := mem_args ha
       obtain ⟨Ea, hEa, hl⟩ := hent i (hlen ▸ hi)

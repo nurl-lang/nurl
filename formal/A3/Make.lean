@@ -211,7 +211,7 @@ theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK 
     refine ⟨fn, hf, by simp [hps], fun i hi => absurd hi (by simp [hps]), fun dd hdd => ?_,
       CallDtorSafe.of_inp (by simp [hps]) (by simp [mutNames, argNames]), ?_, ?_, fun _ => by simp [callR]⟩
     · simp [mutNames, argNames] at hdd
-    · simp [callRes, resE, hrt, resMode, hro, heldOfArgs, argNames, argMem, compAll, ownHeld, argDeps, argE, intE]
+    · simp [callRes, resE, hrt, resMode, hro, heldOfArgs, argNames, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll, ownHeld, argDeps, argE, intE]
     · funext v
       simp [callPost, mutNames, argNames, killNames, hps, callPostAux]
   have hΓ0 : (setE (fun _ => none) 0 (resE d.ty)) 0 = some (resE d.ty) := upd_same _ _ _
