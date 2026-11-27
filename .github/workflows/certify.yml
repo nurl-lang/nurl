@@ -96,6 +96,11 @@ jobs:
         env:
           NURL_CERT: ${{ github.workspace }}/build/nurl-cert
         run: packages/nurl-cert/tests/nurl-cert_test.sh
+      - name: Coverage of the certify corpus, function by function (AGORA-1015)
+        # The four large corpora run nightly (certify-coverage.yml).
+        env:
+          NURL_CERT: ${{ github.workspace }}/build/nurl-cert
+        run: packages/nurl-cert/tests/coverage.sh certify | tee -a "$GITHUB_STEP_SUMMARY"
       - name: elab in Lean builds the translator's term (AGORA-1029; scalar subset)
         env:
           NURL_STDLIB: ${{ github.workspace }}

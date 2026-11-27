@@ -51,6 +51,10 @@ $ `stdlib/std/random.nu`
     b ok
     String lean
     String why
+    // the program's own functions the translation does not cover, each with
+    // its reason (AGORA-1015); an empty name: the ones after the last were
+    // not reached
+    ( Vec TlMiss ) miss
 }
 
 @ __ct_reframe s text → String {
@@ -79,14 +83,18 @@ $ `stdlib/std/random.nu`
     ^ o
 }
 
-@ cert_translate s core_path → Translated {
+// With `all` T, every function the translation does not cover goes into
+// `miss` (certify's coverage); with F it stops at the first (verify).
+@ cert_translate s core_path b all → Translated {
     : String text ?? ( nc_read core_path ) {
         T x → x
-        F → { ^ @ Translated { F ( string_new ) ( string_from `cannot read the core IR` ) } }
+        F → { ^ @ Translated { F ( string_new ) ( string_from `cannot read the core IR` ) ( vec_new [TlMiss] ) } }
     }
-    ^ ?? ( tolean_translate ( string_data text ) ) {
-        T lean → @ Translated { T ( __ct_reframe ( string_data lean ) ) ( string_new ) }
-        F why → @ Translated { F ( string_new ) why }
+    : ( Vec TlMiss ) miss ( vec_new [TlMiss] )
+    : !String String r ? all ( tolean_translate_fns ( string_data text ) miss ) ( tolean_translate ( string_data text ) )
+    ^ ?? r {
+        T lean → @ Translated { T ( __ct_reframe ( string_data lean ) ) ( string_new ) miss }
+        F why → @ Translated { F ( string_new ) why miss }
     }
 }
 
@@ -284,6 +292,47 @@ $ `stdlib/std/random.nu`
     ? == rank 2 { ^ ( string_from `proved` ) } {}
     ? == rank 1 { ^ ( string_from `validated` ) } {}
     ^ ( string_from `open` )
+}
+
+// The index in `miss` of function `name`, -1 when the translation covers it.
+@ __ct_miss_at ( Vec TlMiss ) miss s name → i {
+    : i n ( vec_len [TlMiss] miss )
+    : ~ i k 0
+    ~ < k n {
+        ? ( nc_is . ( vec_at [TlMiss] miss k ) name name ) { ^ k } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
+// Why the functions after the last one in `miss` were not reached (its
+// entry with an empty name), or empty.
+@ __ct_stopped ( Vec TlMiss ) miss → String {
+    : i n ( vec_len [TlMiss] miss )
+    : ~ i k 0
+    ~ < k n {
+        ? == ( string_len . ( vec_at [TlMiss] miss k ) name ) 0 { ^ ( string_clone . ( vec_at [TlMiss] miss k ) why ) } {}
+        = k + k 1
+    }
+    ^ ( string_new )
+}
+
+// One more of status `st`: its count in `counts`, beside `keys` in order of
+// first use.
+@ __ct_count ( Vec String ) keys ( Vec i ) counts s st → v {
+    : i n ( vec_len [String] keys )
+    : ~ i at -1
+    : ~ i k 0
+    ~ < k n {
+        ? & < at 0 ( nc_is ( vec_at [String] keys k ) st ) { = at k } {}
+        = k + k 1
+    }
+    ? < at 0 {
+        ( vec_push [String] keys ( string_from st ) )
+        ( vec_push [i] counts 1 )
+    } {
+        : b _s ( vec_set [i] counts at + ( vec_at [i] counts at ) 1 )
+    }
 }
 
 // ── The ledger ───────────────────────────────────────────────────────
@@ -510,7 +559,7 @@ $ `stdlib/std/random.nu`
     // 3. The translation, held to the program grammar.
     : ~ String verdict ( string_from `accepted` )
     : ~ String reason ( string_new )
-    : Translated tr ( cert_translate ( string_data core_path ) )
+    : Translated tr ( cert_translate ( string_data core_path ) T )
     : String prog_path ( nc_join out `Program.lean` )
     : String claims_path ( nc_join out `Claims.lean` )
     : String elab_path ( nc_join out `Elab.lean` )
@@ -666,16 +715,42 @@ $ `stdlib/std/random.nu`
     // when accepted (`proved` only when every M claim is kernel-proved),
     // else the verdict.
     : String fst ( __ct_cov_status verdict statuses )
+    // A function the translation does not cover is `unsupported` with its
+    // own reason (`error` where the translation stopped on it), whatever the
+    // others are (AGORA-1015). One it covers in a program that is not
+    // translated whole is `open`: no claim is proved for it.
+    : String stopped ( __ct_stopped . tr miss )
+    : ( Vec String ) cst ( vec_new [String] )
+    : ( Vec i ) ccount ( vec_new [i] )
     : ~ i j 0
     ~ < j nf {
         ?? ( vec_get [FnRow] fns j ) {
             T f → {
+                : ~ String st ( string_clone fst )
+                : ~ String why ( string_clone reason )
+                : i mi ( __ct_miss_at . tr miss ( string_data . f name ) )
+                ? >= mi 0 {
+                    = why ( string_clone . ( vec_at [TlMiss] . tr miss mi ) why )
+                    = st ( string_from ? ( string_starts_with why `internal: ` ) `error` `unsupported` )
+                } {
+                    ? > ( string_len stopped ) 0 {
+                        = st ( string_from `error` )
+                        = why ( string_clone stopped )
+                    } {
+                        ? ( nc_is verdict `unsupported` ) {
+                            = st ( string_from `open` )
+                            = why ( string_from `translated; the program is not: ` )
+                            ( string_push_str why ( string_data reason ) )
+                        } {}
+                    }
+                }
+                ( __ct_count cst ccount ( string_data st ) )
                 : Json fo ( json_obj_new )
                 ( mj_str fo `name` ( string_data . f name ) )
                 ( mj_str fo `file` ( string_data . f file ) )
                 ( mj_str fo `line` ( string_data . f line ) )
-                ( mj_str fo `status` ( string_data fst ) )
-                ( mj_str fo `reason` ( string_data reason ) )
+                ( mj_str fo `status` ( string_data st ) )
+                ( mj_str fo `reason` ( string_data why ) )
                 ( json_arr_push fa fo )
             }
             F _ → {}
@@ -683,7 +758,11 @@ $ `stdlib/std/random.nu`
         = j + j 1
     }
     ( mj_set cov `functions` fa )
-    ( mj_int cov ( string_data fst ) nf )
+    : ~ i jc 0
+    ~ < jc ( vec_len [String] cst ) {
+        ( mj_int cov ( string_data ( vec_at [String] cst jc ) ) ( vec_at [i] ccount jc ) )
+        = jc + jc 1
+    }
     ( mj_set m `coverage` cov )
 
     // Hashes.

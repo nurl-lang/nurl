@@ -318,7 +318,7 @@ $ `certify.nu`
         `--rebuild: the compile read exactly the recorded source bytes` `` )
         : String plp ( nc_join bundle `Program.lean` )
         ? ( file_exists ( string_data plp ) ) {
-            : Translated tr ( cert_translate ( string_data ( nc_join bundle `Program.core` ) ) )
+            : Translated tr ( cert_translate ( string_data ( nc_join bundle `Program.core` ) ) F )
             : String lean_have ?? ( nc_read ( string_data plp ) ) { T x → x F → ( string_new ) }
             ( __vf_check t & . tr ok ( string_eq . tr lean lean_have )
             `--rebuild: the translation makes Program.lean from Program.core again` `` )

@@ -389,7 +389,7 @@ $ `coreir.nu`
 
 @ __np TlMod m i p → i { ^ . ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) np }
 
-@ __nl TlMod m i p → i { ^ ( vec_len [String] . ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) body ) }
+@ __nl TlMod m i p → i { ^ - ( vec_len [i] . ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) wstart ) 1 }
 
 @ __nw TlMod m i p i k → i { ^ ( core_nwords ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) k ) }
 
@@ -3156,9 +3156,26 @@ $ `coreir.nu`
     ^ o
 }
 
+// A function of the program's own that the translation does not cover:
+// its name, and why (the reason the program would be refused with, were it
+// the first).
+: TlMiss {
+    String name
+    String why
+}
+
+// One function's term (`__fn_init`, then `__lean`), or why not.
+@ __fn_lean TlMod m inout TlSt t i p → !String String {
+    \ ( __fn_init m t p )
+    ^ ( __lean m t )
+}
+
 // The Lean file of the program in core IR `text` (tolean.py's `emit`), or
-// why it is not translated.
-@ __emit s text → !String String {
+// why it is not translated; each of its own functions not translated goes
+// into `miss`, and `cur` holds the name of the function being translated.
+// With `all` F it stops at the first one, as tolean.py does: the verdict
+// and its reason are the same either way.
+@ __emit s text ( Vec TlMiss ) miss ( Vec String ) cur b all → !String String {
     : CoreIR ir \ ( core_read text )
     // The standard library's functions are A2's constructs (`intrinsic`),
     // not bodies to check: their code is phase B's.
@@ -3209,17 +3226,43 @@ $ `coreir.nu`
         ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 ( string_new ) F ( vec_new [i] ) ( vec_new [String] ) wsig }
     // (A3: a program that spawns is decided by A3's checker, C.Cert3)
     : ~ String out ( string_from ? threaded `import C.Cert3\nopen A2 C\n\n` `import C.A2Prog\nopen A2 C\n\n` )
+    // Every function is translated, also after one that is not (AGORA-1015):
+    // each one the translation does not cover goes into `miss` with its
+    // reason, and the program is refused with the first of them, as
+    // tolean.py refuses it. A function's translation reads the module and
+    // its own records; of the state across functions, the closure types it
+    // met and the types it was expanding are set back to where they were
+    // before it, so the functions after it translate as they would without it.
     : ~ i p 0
-    ~ < p nfn {
-        \ ( __fn_init mm t p )
-        : String l \ ( __lean mm t )
-        ( string_push_str out `def fn` )
-        ( string_push_int out p )
-        ( string_push_str out ` : Fn :=\n  ` )
-        ( string_push_str out ( string_data l ) )
-        ( string_push_char out 10 )
+    : ~ String first ( string_new )
+    : ~ b failed F
+    ~ & < p nfn | all ! failed {
+        : i nclo0 ( vec_len [String] . t clo_list )
+        : i nexp0 ( vec_len [String] . t expanding )
+        ( vec_clear [String] cur )
+        ( vec_push [String] cur ( string_from ( __name mm p ) ) )
+        ?? ( __fn_lean mm t p ) {
+            T l → {
+                ( string_push_str out `def fn` )
+                ( string_push_int out p )
+                ( string_push_str out ` : Fn :=\n  ` )
+                ( string_push_str out ( string_data l ) )
+                ( string_push_char out 10 )
+            }
+            F e → {
+                : b _a ( vec_truncate [String] . t clo_list nclo0 )
+                : b _b ( vec_truncate [String] . t expanding nexp0 )
+                ( vec_push [TlMiss] miss @ TlMiss { ( string_from ( __name mm p ) ) ( string_clone e ) } )
+                ? ! failed {
+                    = first ( string_clone e )
+                    = failed T
+                } {}
+            }
+        }
         = p + p 1
     }
+    ( vec_clear [String] cur )
+    ? failed { ^ @ !String String { F first } } {}
     // one interface per closure type: the receiver (the closure, lent),
     // then its parameters; its body is never run (a call runs the
     // package's code), so it is one that type-checks: a result of the
@@ -3309,12 +3352,26 @@ $ `coreir.nu`
 // translated: tolean.py's `unsupported` reason, or `internal: …` where
 // the core IR is not one the translation can read.
 @ tolean_translate s text → !String String {
+    : ( Vec TlMiss ) miss ( vec_new [TlMiss] )
+    ^ ( __translate text miss F )
+}
+
+// tolean_translate, and each of the program's own functions it does not
+// translate into `miss`, with its reason (AGORA-1015), in the order of the
+// core IR. The program is refused with the first one's reason, exactly as
+// tolean_translate refuses it. Where the translation stops on an internal
+// error (a panic), the function it stopped in goes into `miss` with it, then
+// an entry with an empty name: the functions after it were not reached.
+@ tolean_translate_fns s text ( Vec TlMiss ) miss → !String String { ^ ( __translate text miss T ) }
+
+@ __translate s text ( Vec TlMiss ) miss b all → !String String {
     : ~ String res ( string_new )
     : ~ String why ( string_new )
     : ~ b ok F
     : String tx ( string_from text )
+    : ( Vec String ) cur ( vec_new [String] )
     : !v PanicInfo r ( recover \ → v {
-        ?? ( __emit ( string_data tx ) ) {
+        ?? ( __emit ( string_data tx ) miss cur all ) {
             T o → {
                 = res o
                 = ok T
@@ -3326,8 +3383,22 @@ $ `coreir.nu`
         T _ → {}
         F pi → {
             = ok F
-            = why ( string_clone . pi msg )
-            ? ! ( string_starts_with why `internal: ` ) { = why ( __f1 `internal: %` ( string_data . pi msg ) ) } {}
+            : ~ String iw ( string_clone . pi msg )
+            ? ! ( string_starts_with iw `internal: ` ) { = iw ( __f1 `internal: %` ( string_data . pi msg ) ) } {}
+            ?? ( vec_get [String] cur 0 ) {
+                T fname → {
+                    // (a function stopped the translation: before it, a
+                    // function not covered refuses the program first, as the
+                    // translation one function at a time stopped there)
+                    : i nm ( vec_len [TlMiss] miss )
+                    ? == nm 0 { = why ( string_clone iw ) } {
+                        = why ( string_clone . ( vec_at [TlMiss] miss 0 ) why )
+                    }
+                    ( vec_push [TlMiss] miss @ TlMiss { ( string_clone fname ) ( string_clone iw ) } )
+                    ( vec_push [TlMiss] miss @ TlMiss { ( string_new ) ( __f1 `internal: the translation stopped in %` ( string_data fname ) ) } )
+                }
+                F _ → { = why ( string_clone iw ) }
+            }
         }
     }
     ? ok { ^ @ !String String { T res } } {}

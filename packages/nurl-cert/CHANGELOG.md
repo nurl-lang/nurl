@@ -27,6 +27,12 @@
   - The skip before Lean (`ELAB_CTORS`) takes `.getl .send`. It is still exact.
   - Certify takes 80.9 s over the 62 certify programs against 76.5 s before (+5.7 %, best of 3 alternated runs against step 9): the 4 thread programs new to the subset take +0.85 to +1.41 s each for their Elab.lean part (2 of them the checker refuses, and spend it too), the other 58 the same (+0.34 s in all, within noise). The largest peak memory is 2487 MiB against 2513 MiB; a thread program's peak is +18 to +70 MiB. This is the price of the kernel building the 4 programs' terms: every certify bundle is out of the translator's trust now.
 
+- **Coverage per function** (AGORA-1015, M2 part 1). The translation goes on past a function it does not cover, and `coverage.functions` gives each of the program's own functions its own status and reason (`unsupported`, `error`, or `open` for one that translates in a program that does not). The verdict and the claims are unchanged: the program is refused with the first unsupported function's reason. `nurl-cert coverage DIR` prints the Markdown table of the bundles `DIR/*.cert`; `tests/coverage.sh` runs it over the certify corpus, the hole sweep, `examples/`, the compiler tests and `packages/` (formal/README.md's table, and the nightly certify-coverage workflow). Of nurlc's own 3772 functions, 1268 translate.
+
+### Performance
+
+- The core IR reader splits a statement line only into its words, and keeps no second copy of the line: nurlc's core IR translates in 0.63 s against 0.94 s (peak 446 MB against 569 MB), and certifying nurlc, now through all its functions, takes as long as before with a peak of 512 MB against 629 MB.
+
 ### Fixed
 
 - **Windows** (AGORA-1031): certify and verify run there. A path like `C:/…` or `\\host\share` is absolute (it was joined to the working directory), and a `--nurlc` or `--lean` path with a backslash is a path, not a command to look up. nurlc writes its records and core IR untranslated, so the bytes it lists are the file's bytes.

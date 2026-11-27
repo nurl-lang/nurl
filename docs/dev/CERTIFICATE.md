@@ -369,9 +369,23 @@ ledger      [ { id, what, why, where, vouches, claims [..] } ]
   `lake-manifest.json`, and not `.lake/`. `verify` refuses another tree.
   `formal_commit` is informational.
 - `coverage.functions`: the program's own functions in the core IR (not
-  the standard library's). All of them share the program's verdict,
-  because the translation is all or nothing today. Per-function
-  certificates are AGORA-1015.
+  the standard library's), each with its own status (AGORA-1015):
+  - `unsupported`: the translation does not cover it, and `reason` says
+    why. The translation goes on past such a function, so every one of
+    them is listed, not only the first. The program is still refused with
+    the first one's reason: the claims of a program with an unsupported
+    function are `open`.
+  - `error`: the translation stopped on an internal error in it, or did not
+    reach it after one (`reason` names the function it stopped in).
+  - `open`: the translation covers it, but not the whole program, so no
+    claim is proved for it (`reason`: `translated; the program is not: …`).
+  - otherwise the program's: `proved` or `validated` when it is accepted,
+    `refused` when the checker refuses it.
+
+  The counts beside `functions` are per status. `nurl-cert coverage DIR`
+  sums the bundles `DIR/*.cert` into one Markdown table: the programs by
+  verdict, the functions by status by count and by the source lines they
+  span, and the reasons of the unsupported ones, most frequent first.
 
 ### The trust ledger
 

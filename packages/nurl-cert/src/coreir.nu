@@ -71,9 +71,8 @@ $ `stdlib/std/hashmap.nu`
     // `vars` (its last `v` line): a sparse index (ids need not be dense)
     ( Vec i ) vids
     ( Vec i ) vrec
-    // the statement lines, without the whitespace around them
-    ( Vec String ) body
-    // every statement's words, line after line: line k's are
+    // every statement's words (a statement is a line: its count is
+    // wstart's length less 1 once the function is sealed), line after line: line k's are
     // words[wstart[k] .. wstart[k + 1])
     ( Vec String ) words
     ( Vec i ) wstart
@@ -385,7 +384,7 @@ $ `stdlib/std/hashmap.nu`
 
 @ __cr_empty_fn → CoreFn {
     ^ @ CoreFn { ( string_new ) ( string_new ) 0 0 ( string_new ) 0 ( string_new ) ( vec_new [CoreVar] ) ( vec_new [i] )
-        ( vec_new [i] ) ( vec_new [String] ) ( vec_new [String] ) ( vec_new [i] ) }
+        ( vec_new [i] ) ( vec_new [String] ) ( vec_new [i] ) }
 }
 
 @ __cr_new_fn ( Vec String ) f i line ( Vec String ) bad → !CoreFn String {
@@ -398,7 +397,7 @@ $ `stdlib/std/hashmap.nu`
     ? > n 6 { = fl ( __cr_info f 6 0 line `an fn line's flags` bad ) } {}
     ^ @ !CoreFn String { T @ CoreFn { ( string_from ( __cr_col f 1 ) ) ( string_from ( __cr_col f 2 ) ) np ln
             ( string_from ( __cr_col f 5 ) ) fl ( string_from ( __cr_col f 7 ) ) ( vec_new [CoreVar] ) ( vec_new [i] )
-            ( vec_new [i] ) ( vec_new [String] ) ( vec_new [String] ) ( vec_new [i] ) } }
+            ( vec_new [i] ) ( vec_new [String] ) ( vec_new [i] ) } }
 }
 
 @ __cr_var ( Vec String ) f i line ( Vec String ) bad → !CoreVar String {
@@ -489,6 +488,35 @@ $ `stdlib/std/hashmap.nu`
     ( vec_push [i] . fn wstart ( vec_len [String] . fn words ) )
 }
 
+// Statement line t[sa, sz) of function `fn`: its words.
+@ __cr_stmt inout CoreFn fn ( Slice u ) t i sa i sz → v {
+    ( vec_push [i] . fn wstart ( vec_len [String] . fn words ) )
+    ( core_split_words t sa sz . fn words )
+}
+
+// The kind of line t[a, z) by its first tab-separated column, read in
+// place: 1 `endfn`, 2 `fn`, 3 `v`, 4 `sum`, 5 `ty`, 6 `virt`, 0 any other
+// (a statement).
+@ __cr_head ( Slice u ) t i a i z → i {
+    : ~ i e a
+    ~ & < e z != ( slice_byte t e ) 9 { = e + e 1 }
+    : i n - e a
+    : i c0 ? > n 0 ( slice_byte t a ) 0
+    : i c1 ? > n 1 ( slice_byte t + a 1 ) 0
+    ? == n 1 { ^ ? == c0 118 3 0 } {}
+    ? == n 2 {
+        ? & == c0 102 == c1 110 { ^ 2 } {}
+        ? & == c0 116 == c1 121 { ^ 5 } {}
+        ^ 0
+    } {}
+    ? == n 3 { ^ ? & & == c0 115 == c1 117 == ( slice_byte t + a 2 ) 109 4 0 } {}
+    ? == n 4 { ^ ? & & & == c0 118 == c1 105 == ( slice_byte t + a 2 ) 114 == ( slice_byte t + a 3 ) 116 6 0 } {}
+    ? == n 5 {
+        ^ ? & & & & == c0 101 == c1 110 == ( slice_byte t + a 2 ) 100 == ( slice_byte t + a 3 ) 102 == ( slice_byte t + a 4 ) 110 1 0
+    } {}
+    ^ 0
+}
+
 // The core IR in `text`, or (`internal: …`) the line that is not one.
 @ core_read s text → !CoreIR String {
     : ( Vec CoreFn ) fns ( vec_new [CoreFn] )
@@ -515,9 +543,12 @@ $ `stdlib/std/hashmap.nu`
         ~ & < sa z ( core_is_ws ( slice_byte t sa ) ) { = sa + sa 1 }
         : ~ i sz z
         ~ & > sz sa ( core_is_ws ( slice_byte t - sz 1 ) ) { = sz - sz 1 }
-        ? < sa sz {
-            : ( Vec String ) f ( __cr_split_tabs t a z )
-            : s f0 ( __cr_col f 0 )
+        // (the line's kind from its first column, read in place: a
+        // statement line, most of them, is split into its words only)
+        : i hd ? < sa sz ( __cr_head t a z ) 0
+        ? & < sa sz | ! in_fn != hd 0 {
+            : ( Vec String ) f ? == hd 0 ( vec_new [String] ) ( __cr_split_tabs t a z )
+            : s f0 ? == hd 0 `` ( __cr_col f 0 )
             ? != 0 ( nurl_str_eq f0 `endfn` ) {
                 ? ! in_fn { ^ @ !CoreIR String { F ( __cr_bad lno `an endfn with no function open` ) } } {}
                 ( __cr_seal cur )
@@ -555,20 +586,16 @@ $ `stdlib/std/hashmap.nu`
                                     ~ < k ( vec_len [String] f ) { ( vec_push [String] impls ( string_from ( __cr_col f k ) ) ) = k + k 1 }
                                     ( vec_push [CoreVirt] virts @ CoreVirt { ( string_from ( __cr_col f 1 ) ) impls } )
                                 } {
-                                    ? in_fn {
-                                        : String line ( string_new )
-                                        ( string_push_window line t sa - sz sa )
-                                        ( vec_push [String] . cur body line )
-                                        ( vec_push [i] . cur wstart ( vec_len [String] . cur words ) )
-                                        ( core_split_words t sa sz . cur words )
-                                    } {}
+                                    ? in_fn { ( __cr_stmt cur t sa sz ) } {}
                                 }
                             }
                         }
                     }
                 }
             }
-        } {}
+        } {
+            ? & < sa sz in_fn { ( __cr_stmt cur t sa sz ) } {}
+        }
         = a nxt
     }
     ? in_fn {

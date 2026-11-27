@@ -658,9 +658,45 @@ if grep -q "M.safe validated" "$TMP/f.out" && grep -q "native_decide" "$P/fast.c
     && "$C" verify "$P/fast.cert" --formal "$ROOT/formal" > /dev/null 2>&1; then ok "fast: validated (claims and coverage), its axiom listed, verifies"
 else bad "fast: validated, its axiom listed, verifies"; cat "$TMP/f.out"; fi
 
+echo "== 3b. coverage, function by function (AGORA-1015)"
+# Two functions the translation does not cover (a raw pointer parameter),
+# one it does, and main: each its own status; the program refused with the
+# first one's reason, exactly as before.
+mkdir -p "$TMP/cov"
+cat > "$TMP/cov/two_gaps.nu" <<'EOF3'
+@ peek_a * u p → i { ^ 0 }
+
+@ add i a i b → i { ^ + a b }
+
+@ peek_b * u p → i { ^ 1 }
+
+@ main → i { ^ ( add 1 2 ) }
+EOF3
+"$C" certify "$TMP/cov/two_gaps.nu" "${CA[@]}" --out "$TMP/cov/two_gaps.cert" > "$TMP/cov.out" 2>&1; crc=$?
+"$C" translate "$TMP/cov/two_gaps.cert/Program.core" > /dev/null 2> "$TMP/cov.tr"
+if [ "$crc" = 2 ] && python3 - "$TMP/cov/two_gaps.cert/manifest.json" "$(cat "$TMP/cov.tr")" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+st = {f["name"]: (f["status"], f["reason"]) for f in m["coverage"]["functions"]}
+first = sys.argv[2].removeprefix("unsupported: ")
+ok = (st["peek_a"] == ("unsupported", "type %u8*") and st["peek_b"] == ("unsupported", "type %u8*")
+      and st["add"][0] == "open" and st["main"][0] == "open"
+      and m["program"]["verdict"] == "unsupported" and m["program"]["reason"] == first == st["peek_a"][1]
+      and m["coverage"]["unsupported"] == 2 and m["coverage"]["open"] == 2
+      and all(c["status"] != "proved" for c in m["claims"]))
+sys.exit(0 if ok else 1)
+EOF3
+then ok "each function its own status; the program refused with the first one's reason, as translate says"
+else bad "each function its own status"; cat "$TMP/cov.out"; cat "$TMP/cov/two_gaps.cert/manifest.json" | head -80; fi
+"$C" coverage "$TMP/cov" > "$TMP/cov.md" 2>&1
+if grep -q '^| 1 | 0 | 0 | 1 | 0 |$' "$TMP/cov.md" && grep -q '^| by count (4) | 0 (0.0 %) | 0 (0.0 %) | 0 (0.0 %) | 2 (50.0 %) | 2 (50.0 %) | 0 (0.0 %) |$' "$TMP/cov.md" \
+    && grep -q '^| 2 | [0-9]* | `type %u8\*` | `two_gaps.cert peek_a` |$' "$TMP/cov.md"; then
+    ok "coverage: programs by verdict, functions by status, one row per reason family"
+else bad "coverage: the table"; cat "$TMP/cov.md"; fi
+
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then
-    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" <<'EOF2'
+    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" <<'EOF2'
 import json, sys, jsonschema
 schema = json.load(open(sys.argv[1]))
 bad = 0
