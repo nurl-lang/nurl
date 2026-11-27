@@ -105909,15 +105909,17 @@ unsafe @ __ts_walk_r s ty i syms → s {
 }
 
 // A `% Trait` object (`%dyn.T`), once every impl is registered: it boxes a
-// value of one of the types implementing the trait or one of its
-// subtraits' supertraits (__dyn_impl_tys), so it holds what any of them
-// holds, as an enum holds what its variants do. The program is compiled
-// whole, and `dyn` dispatch is built from the same list: a trait no type
+// value of one of the types implementing the trait (its `__impls`, every
+// impl the signature scan met, methods or none), so it holds what any of
+// them holds, as an enum holds what its variants do. (With them, the types
+// the dispatch list names, __dyn_impl_tys — those of its methods and its
+// supertraits': no fewer.) The program is compiled whole: a trait no type
 // implements has no object, and holds nothing.
 unsafe @ __ts_walk_dyn s ty i syms → s {
     // (a name that is no trait's: any node)
-    ? == 0 ( nurl_str_len ( __dyn_trait_of ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) ) ) { ^ ( nurl_str_cat `*` `` ) } {}
-    : ~ s lls ( nurl_str_cat ( __dyn_impl_tys ty ) `` )
+    : s tn ( __dyn_trait_of ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) )
+    ? == 0 ( nurl_str_len tn ) { ^ ( nurl_str_cat `*` `` ) } {}
+    : ~ s lls ( __bar_union ( __dyn_impl_tys ty ) ( nurl_sym_get2 g_trait_syms tn `__impls` ) )
     : ~ s out ``
     ~ != 0 ( nurl_str_len lls ) {
         : s ll ( __bar_first lls ) = lls ( __bar_rest lls )
@@ -118090,7 +118092,15 @@ unsafe @ scan_impl_decl i lex i syms → v {
         : s impl_mangle ( mangle_type impl_llvm )
         // Record that `tname` is implemented for this LLVM type, so a
         // generic bound `A: tname` can be verified at instantiation.
-        ( nurl_sym_def g_trait_syms ( nurl_str_cat3 tname `##` impl_llvm ) `1` )
+        // (…and list it, once, among the trait's impls, `__impls`: what a
+        // trait object of it may box — a trait with no methods has no
+        // `implsof##` row to find them by; __ts_walk_dyn, AGORA-248.)
+        : s __tik ( nurl_str_cat3 tname `##` impl_llvm )
+        ? == 0 ( nurl_sym_len g_trait_syms __tik ) {
+            : s __til ( nurl_sym_get2 g_trait_syms tname `__impls` )
+            ( nurl_sym_set g_trait_syms ( nurl_str_cat tname `__impls` ) ? == 0 ( nurl_str_len __til ) ( nurl_str_cat impl_llvm `` ) ( nurl_str_cat3 __til `|` impl_llvm ) )
+        } {}
+        ( nurl_sym_def g_trait_syms __tik `1` )
         ? ( seq tname `Frozen` ) { = g_frozen_impls 1 } {}
         ( __marker_impl_gate lex tname impl_nurl decl_unsafe )
         // Park a supertrait obligation: after every impl in the program is
