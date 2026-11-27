@@ -816,7 +816,7 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
     rw [hae] at hr
     split at hr
     · simp [roots] at hr
-    · rename_i hn; exact derive_roots h hEa hl (Or.inl hn) _ r hr
+    · rename_i hn; rw [roots_map_coarse] at hr; exact derive_roots h hEa hl (Or.inl hn) _ r hr
   have hheld : ∀ r ∈ roots (heldOfArgs Γ args), ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := by
     intro r hr
     simp only [heldOfArgs, roots, List.map_append, List.mem_append] at hr

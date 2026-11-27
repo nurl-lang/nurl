@@ -378,6 +378,42 @@ theorem coarseMem_root {ds : List Dep} {d : Dep} (h : d ∈ coarseMem ds) : ∃ 
   obtain ⟨h1, h2⟩ := List.mem_filter.mp h0
   exact ⟨d0, h1, rfl, by simpa using h2⟩
 
+theorem coarseMem_roots {ds : List Dep} {d : Dep} (h : d ∈ coarseMem ds) : d.root ∈ roots (memDeps ds) := by
+  obtain ⟨d0, h0, rfl⟩ := mem_coarseMem.mp h
+  show d0.root ∈ (memDeps ds).map (·.root)
+  exact List.mem_map_of_mem h0
+
+@[simp] theorem memDeps_map_coarse (L : List Dep) : memDeps (L.map Dep.coarse) = coarseMem L := by
+  induction L with
+  | nil => rfl
+  | cons d L ih =>
+    simp only [List.map_cons, memDeps, coarseMem, List.filter_cons, Dep.coarse_kind, Kind.coarse_isName] at ih ⊢
+    split <;> simp_all
+
+@[simp] theorem nameDeps_map_coarse (L : List Dep) : nameDeps (L.map Dep.coarse) = nameDeps L := by
+  induction L with
+  | nil => rfl
+  | cons d L ih =>
+    simp only [List.map_cons, nameDeps, List.filter_cons, Dep.coarse_kind, Kind.coarse_isName] at ih ⊢
+    split
+    · rename_i hn; rw [ih]; congr 1; obtain ⟨r, k⟩ := d; cases k <;> simp_all [Dep.coarse, Kind.coarse, Kind.isName]
+    · exact ih
+
+@[simp] theorem roots_map_coarse (L : List Dep) : roots (L.map Dep.coarse) = roots L := by
+  simp [roots, Function.comp_def]
+
+theorem Kind.notIdx_of_name {k : Kind} (h : k.isName = true) : k.isIdx = false := by
+  cases k <;> simp_all [Kind.isName, Kind.isIdx]
+
+@[simp] theorem Kind.coarse_bound (k : Kind) : k.coarse.bound = k.bound := by cases k <;> rfl
+
+theorem Dep.coarse_eq {d : Dep} (h : d.kind.isIdx = false) : d.coarse = d := by
+  cases d; simp [Dep.coarse, Kind.coarse_of_not_idx h]
+
+/-- A name is its own coarse image. -/
+theorem Dep.eq_of_coarse_name {d d0 : Dep} (h : d = d0.coarse) (hn : d.kind.isName = true) : d = d0 := by
+  subst h; obtain ⟨r, k⟩ := d0; cases k <;> simp_all [Dep.coarse, Kind.coarse, Kind.isName]
+
 theorem coarseMem_of_notIdx {ds : List Dep} {d : Dep} (h : d ∈ memDeps ds) (hi : d.kind.isIdx = false) :
     d ∈ coarseMem ds :=
   mem_coarseMem.mpr ⟨d, h, by cases d; simp [Dep.coarse, Kind.coarse_of_not_idx hi]⟩
@@ -650,6 +686,13 @@ def DepsNamed (Γ : Ctx) (D : List Dep) : Prop :=
       (b = .none ∨ b ≠ .replace ∧ canDo Er.mode b) ∧ t.holdsView = false
 
 def NameOK (Γ : Ctx) (E : Entry) : Prop := DepsNamed Γ E.vdeps
+
+/-- AGORA-374: forgetting indices keeps every name. -/
+theorem DepsNamed.map_coarse {Γ : Ctx} {D : List Dep} (h : DepsNamed Γ D) : DepsNamed Γ (D.map Dep.coarse) := by
+  intro d hd b t hk
+  obtain ⟨d0, h0, rfl⟩ := List.mem_map.mp hd
+  have : d0.kind = .name b t := by obtain ⟨r, k⟩ := d0; cases k <;> simp_all [Dep.coarse, Kind.coarse]
+  exact h d0 h0 b t this
 
 def NameWF (Γ : Ctx) : Prop :=
   ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → NameOK Γ E
@@ -1299,11 +1342,12 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | take => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
-    lends nothing.  (AGORA-374: a summary speaks of its parameters in the
-    four memory ways: an index it names is forgotten, `Kind.coarse`.) -/
+    lends nothing.  (AGORA-374: a call speaks of what it lends in the four
+    memory ways, as the callee sees its arguments: an index is forgotten,
+    `Dep.coarse`.) -/
 def argDeps (Γ : Ctx) (args : List Var) (jk : Nat × Kind) : List Dep :=
   if (argE Γ (args.getD jk.1 0)).ty = .int then []
-  else derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2.coarse
+  else (derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2).map Dep.coarse
 
 /-- Every dependency of every kind on the given roots. -/
 def allKinds (rs : List Var) : List Dep :=
@@ -2614,7 +2658,10 @@ theorem paramOK_inout {b : Eff} {t : Ty} {E : Entry} (h : paramOK (.inout b) t E
     a closure: its value is inline) depends on it inside, never on a handle
     (`derive` makes a `.self` dependency on such a root a view). -/
 def kindFits (fn : Fn) (j : Nat) (k : Kind) : Prop :=
-  ∀ b t, fn.params[j]? = some (.inout b, t) → rootKind t k = k
+  (∀ b t, fn.params[j]? = some (.inout b, t) → rootKind t k = k) ∧
+  -- AGORA-374: a summary names no element index (a parameter is no owned
+  -- root, which is what such a dependency is on)
+  k.isIdx = false
 
 /-- Every variable a statement names (binders included). -/
 def Expr.vars : Expr → List Var

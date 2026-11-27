@@ -36,14 +36,16 @@ theorem lendable2B_sound {fn : Fn} {j : Nat} (h : lendable2B fn j = true) : lend
 
 /-- `kindFits`, decided. -/
 def kindFitsB (fn : Fn) (j : Nat) (k : Kind) : Bool :=
-  match fn.params[j]? with
+  !k.isIdx && match fn.params[j]? with
   | some (.inout _, t) => decide (rootKind t k = k)
   | _ => true
 
 theorem kindFitsB_sound {fn : Fn} {j : Nat} {k : Kind} (h : kindFitsB fn j k = true) : kindFits fn j k := by
-  intro b t hj
-  simp only [kindFitsB, hj, decide_eq_true_eq] at h
-  exact h
+  simp only [kindFitsB, Bool.and_eq_true, Bool.not_eq_true'] at h
+  refine ⟨fun b t hj => ?_, h.1⟩
+  have h2 := h.2
+  simp only [hj, decide_eq_true_eq] at h2
+  exact h2
 
 /-- The domain a function's body is checked over: its variables and its
     parameters' regions (`isRegionIdx`). -/

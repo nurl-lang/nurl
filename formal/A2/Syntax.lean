@@ -867,6 +867,7 @@ def Kind.coarse : Kind → Kind
 
 @[simp] theorem Kind.coarse_isName (k : Kind) : k.coarse.isName = k.isName := by cases k <;> rfl
 @[simp] theorem Kind.coarse_isIdx (k : Kind) : k.coarse.isIdx = false := by cases k <;> rfl
+@[simp] theorem Kind.coarse_coarse (k : Kind) : k.coarse.coarse = k.coarse := by cases k <;> rfl
 theorem Kind.coarse_of_not_idx {k : Kind} (h : k.isIdx = false) : k.coarse = k := by cases k <;> simp_all [Kind.isIdx, Kind.coarse]
 
 /-- What a dependency by name lets the closure holding it do to its binding. -/

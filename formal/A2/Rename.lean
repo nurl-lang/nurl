@@ -4054,6 +4054,65 @@ theorem flatMap_subD_fix {L : List Dep} (hf : ∀ d ∈ L, S.subD d = [d]) : L.f
       ih (fun d' hd' => hf d' (List.mem_cons_of_mem _ hd'))]
     rfl
 
+/-- AGORA-937: a dependency on a frame root is kept. -/
+theorem subD_frameRoot {e : Dep} (hout : ∀ w, S.ρ w ≠ e.root) : S.subD e = [e] :=
+  S.subD_of_not (fun w hw => absurd (ρ_of_inv hw) (hout w))
+
+/-- AGORA-937: the substitution is idempotent: what it gives it keeps. -/
+theorem subD_idem (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : S.subD e = [e] := by
+  rcases S.mem_subD he with rfl | ⟨v, _, _, hσ⟩
+  · by_cases hi : ∃ w, S.inv e.root = some w ∧ S.isPi w = true
+    · obtain ⟨w, hw, hp⟩ := hi
+      exfalso
+      cases hk : e.kind.isName
+      · have hσ : S.σC w e.kind e := by
+          have : S.subD e = (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind.coarse⟩ : Dep) := by
+            simp only [subD, hw, hp, hk, Bool.false_eq_true, ↓reduceIte]
+          rw [this] at he
+          obtain ⟨e0, he0, he'⟩ := List.mem_map.mp he
+          exact ⟨e0, he0, he'.symm, hk⟩
+        exact absurd (ρ_of_inv hw) ((S.σ_frameC h hσ).1 w)
+      · -- a name on a region is dropped, so not kept
+        have : S.subD e = [] := by simp only [subD, hw, hp, hk, ↓reduceIte]
+        rw [this] at he; cases he
+    · exact S.subD_of_not (fun w hw => by
+        cases hp : S.isPi w
+        · rfl
+        · exact absurd ⟨w, hw, hp⟩ hi)
+  · exact S.subD_frameRoot (S.σ_frameC h hσ).1
+
+/-- ... so a kept dependency is on no region, and any dependency on its
+    root is kept. -/
+theorem subD_fix_reKind (h : S.OK) {e : Dep} (he : S.subD e = [e]) (k : Kind) :
+    S.subD ⟨e.root, k⟩ = [⟨e.root, k⟩] := by
+  refine S.subD_of_not (fun w hw => ?_)
+  cases hp : S.isPi w
+  · rfl
+  · exfalso
+    cases hen : e.kind.isName
+    · have : S.subD e = (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind.coarse⟩ : Dep) := by
+        simp only [subD, hw, hp, hen, Bool.false_eq_true, ↓reduceIte]
+      rw [this] at he
+      have hmem : e ∈ (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind.coarse⟩ : Dep) := by
+        rw [he]; exact List.mem_singleton_self e
+      obtain ⟨e0, he0, he'⟩ := List.mem_map.mp hmem
+      exact (S.σ_frameC h ⟨e0, he0, he'.symm, hen⟩).1 w (ρ_of_inv hw)
+    · have : S.subD e = [] := by simp only [subD, hw, hp, hen, ↓reduceIte]
+      rw [this] at he; cases he
+
+/-- AGORA-374: the substitution forgets indices as its input does: what
+    a region stands for names none (`Rd_idx`). -/
+theorem subD_coarse (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : e.coarse ∈ S.subD d.coarse := by
+  rcases S.mem_subD he with rfl | ⟨v, hv, hp, e0, he0, rfl, hdk⟩
+  · show e.coarse ∈ S.subD ⟨e.root, e.kind.coarse⟩
+    rw [S.subD_fix_reKind h (S.subD_idem h he)]; exact List.mem_singleton_self _
+  · have hck : d.coarse.kind.isName = false := by simpa using hdk
+    simp only [subD, Dep.coarse_root, hv, hp, hck, Bool.false_eq_true, ↓reduceIte, List.mem_map]
+    refine ⟨e0, he0, ?_⟩
+    have hi0 : e0.kind.isIdx = false := h.Rd_idx e0 (h.σ_Rd v he0)
+    show (⟨e0.root, comp e0.kind d.kind.coarse.coarse⟩ : Dep) = ⟨e0.root, (comp e0.kind d.kind.coarse).coarse⟩
+    rw [comp_coarse, Kind.coarse_of_not_idx hi0]
+
 theorem argDeps_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} {j : Nat} (hj : j < args.length)
     {Ea : Entry} (hEa : Γa (args.getD j 0) = some Ea) (hnp : S.isPi (args.getD j 0) = false)
     (k : Kind) (hk : k.isName = false) :
@@ -4065,9 +4124,22 @@ theorem argDeps_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} {j : Nat} 
   split
   · simp
   · -- AGORA-937 (3d): what a region stands for comes back by the substitution
+    -- (AGORA-374: a call lends in the four memory ways, `derive_map_coarse`)
     intro d hd
-    obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp (derive_subE h hnp _ (by simpa using hk) (Kind.coarse_isIdx k) hd)
-    exact List.mem_flatMap.mpr ⟨e, derive_lift h hab hEa k.coarse (by simpa using hk) (Kind.coarse_isIdx k) he, hde⟩
+    rw [derive_map_coarse] at hd
+    obtain ⟨d1, hd1, rfl⟩ := List.mem_map.mp hd
+    obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp (derive_subE h hnp _ (by simpa using hk) (Kind.coarse_isIdx k) hd1)
+    have hl := derive_lift h hab hEa k.coarse (by simpa using hk) (Kind.coarse_isIdx k) he
+    refine List.mem_flatMap.mpr ⟨e.coarse, ?_, S.subD_coarse h hde⟩
+    rcases List.mem_append.mp hl with h1 | h1
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+      refine List.mem_append_left _ (mem_rds.mpr ⟨d0.coarse, ?_, rfl⟩)
+      rw [derive_map_coarse]; exact List.mem_map_of_mem hd0
+    · have hAi : e.kind.isIdx = false := by
+        rcases S.mem_A_ak h h1 with h2 | h2
+        · exact allKinds_notIdx h2
+        · have := h.N_name e h2; cases hk' : e.kind <;> simp_all [Kind.isName, Kind.isIdx]
+      rw [Dep.coarse_eq hAi]; exact List.mem_append_right _ h1
 
 theorem vdeps_sub {E E' : Entry} (hw : EntryWeaker E E') (hl : E'.live = true) : E.vdeps ⊆ E'.vdeps := by
   obtain ⟨_, hm, _, hlv⟩ := hw
@@ -4888,10 +4960,6 @@ theorem liftE_callRes (Γ : Ctx) (fn : Fn) (args : List Var) (x : Var) :
   simp only [liftE, heldA, callRes, resMode_ne fn, ↓reduceIte, liftMode_resMode, resMode_ownSlot, Bool.false_and,
     Bool.or_false, Bool.false_eq_true]
 
-/-- AGORA-937: a dependency on a frame root is kept. -/
-theorem subD_frameRoot {e : Dep} (hout : ∀ w, S.ρ w ≠ e.root) : S.subD e = [e] :=
-  S.subD_of_not (fun w hw => absurd (ρ_of_inv hw) (hout w))
-
 /-- AGORA-937: the substitution keeps a dependency on a frame root, and one
     on a callee binding at no region's index. -/
 theorem subD_keep (h : S.OK) {d : Dep}
@@ -4962,48 +5030,6 @@ theorem subE_liftE_fix (h : S.OK) {v : Var} {E : Entry}
       · exact hR _ (List.subset_append_right _ _) d h1
       · exact hA d (S.heldA_sub E (ownHeld_sub _ _ _ h1))
 
-/-- AGORA-937: the substitution is idempotent: what it gives it keeps. -/
-theorem subD_idem (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : S.subD e = [e] := by
-  rcases S.mem_subD he with rfl | ⟨v, _, _, hσ⟩
-  · by_cases hi : ∃ w, S.inv e.root = some w ∧ S.isPi w = true
-    · obtain ⟨w, hw, hp⟩ := hi
-      exfalso
-      cases hk : e.kind.isName
-      · have hσ : S.σC w e.kind e := by
-          have : S.subD e = (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind.coarse⟩ : Dep) := by
-            simp only [subD, hw, hp, hk, Bool.false_eq_true, ↓reduceIte]
-          rw [this] at he
-          obtain ⟨e0, he0, he'⟩ := List.mem_map.mp he
-          exact ⟨e0, he0, he'.symm, hk⟩
-        exact absurd (ρ_of_inv hw) ((S.σ_frameC h hσ).1 w)
-      · -- a name on a region is dropped, so not kept
-        have : S.subD e = [] := by simp only [subD, hw, hp, hk, ↓reduceIte]
-        rw [this] at he; cases he
-    · exact S.subD_of_not (fun w hw => by
-        cases hp : S.isPi w
-        · rfl
-        · exact absurd ⟨w, hw, hp⟩ hi)
-  · exact S.subD_frameRoot (S.σ_frameC h hσ).1
-
-/-- ... so a kept dependency is on no region, and any dependency on its
-    root is kept. -/
-theorem subD_fix_reKind (h : S.OK) {e : Dep} (he : S.subD e = [e]) (k : Kind) :
-    S.subD ⟨e.root, k⟩ = [⟨e.root, k⟩] := by
-  refine S.subD_of_not (fun w hw => ?_)
-  cases hp : S.isPi w
-  · rfl
-  · exfalso
-    cases hen : e.kind.isName
-    · have : S.subD e = (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind.coarse⟩ : Dep) := by
-        simp only [subD, hw, hp, hen, Bool.false_eq_true, ↓reduceIte]
-      rw [this] at he
-      have hmem : e ∈ (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind.coarse⟩ : Dep) := by
-        rw [he]; exact List.mem_singleton_self e
-      obtain ⟨e0, he0, he'⟩ := List.mem_map.mp hmem
-      exact (S.σ_frameC h ⟨e0, he0, he'.symm, hen⟩).1 w (ρ_of_inv hw)
-    · have : S.subD e = [] := by simp only [subD, hw, hp, hen, ↓reduceIte]
-      rw [this] at he; cases he
-
 /-- ... and a list of kept dependencies under a bound stays under its
     substitution. -/
 theorem sub_flatMap_of_fix {L X : List Dep} (hf : ∀ d ∈ L, S.subD d = [d]) (hL : L ⊆ X) :
@@ -5033,7 +5059,11 @@ theorem argDeps_canon_fix (h : S.OK) {args : List Var} {j : Nat} (hj : j < args.
   simp only [getD_map hj, argE_canons h hEa hnp] at hd
   split at hd
   · cases hd
-  · exact derive_subE_fix h hnp _ k.coarse d hd
+  · obtain ⟨d1, hd1, rfl⟩ := List.mem_map.mp hd
+    have := derive_subE_fix h hnp _ k d1 hd1
+    show S.subD ⟨d1.root, d1.kind.coarse⟩ = [⟨d1.root, d1.kind.coarse⟩]
+    have hf : S.subD d1 = [d1] := this
+    exact S.subD_fix_reKind h hf _
 
 theorem heldOfArgs_canon_fix (h : S.OK) {args : List Var} (hall : ∀ a ∈ args, ∃ Ea, Γa a = some Ea)
     (hvs : ∀ a ∈ args, S.isPi a = false) : ∀ d ∈ heldOfArgs (S.canon Γa) (args.map S.ρ), S.subD d = [d] := by
@@ -5073,19 +5103,6 @@ theorem outHeld_canon_fix (h : S.OK) {fn : Fn} {args : List Var}
   have hoj := houts o (List.mem_filter.mp ho).1
   obtain ⟨Ea, hEa⟩ := hargs o.2.1 hoj.1
   exact argDeps_canon_fix h hoj.1 hEa (hvs _ (getD_mem' hoj.1)) o.2.2 d hdo
-
-/-- AGORA-374: the substitution forgets indices as its input does: what
-    a region stands for names none (`Rd_idx`). -/
-theorem subD_coarse (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : e.coarse ∈ S.subD d.coarse := by
-  rcases S.mem_subD he with rfl | ⟨v, hv, hp, e0, he0, rfl, hdk⟩
-  · show e.coarse ∈ S.subD ⟨e.root, e.kind.coarse⟩
-    rw [S.subD_fix_reKind h (S.subD_idem h he)]; exact List.mem_singleton_self _
-  · have hck : d.coarse.kind.isName = false := by simpa using hdk
-    simp only [subD, Dep.coarse_root, hv, hp, hck, Bool.false_eq_true, ↓reduceIte, List.mem_map]
-    refine ⟨e0, he0, ?_⟩
-    have hi0 : e0.kind.isIdx = false := h.Rd_idx e0 (h.σ_Rd v he0)
-    show (⟨e0.root, comp e0.kind d.kind.coarse.coarse⟩ : Dep) = ⟨e0.root, (comp e0.kind d.kind.coarse).coarse⟩
-    rw [comp_coarse, Kind.coarse_of_not_idx hi0]
 
 /-- AGORA-937 (3d): substituting commutes with composing a memory way: what
     a dependency is substituted by, composed, is what the dependency

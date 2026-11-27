@@ -433,6 +433,19 @@ theorem comp_coarse (a k : Kind) : (comp a k).coarse = comp a.coarse k.coarse :=
 theorem comp_coarse_of {a k : Kind} (hk : k.isIdx = false) : comp a.coarse k = (comp a k).coarse := by
   rw [comp_coarse, Kind.coarse_of_not_idx hk]
 
+/-- AGORA-374: what is derived, its indices forgotten, does not depend on
+    the index of the way it is derived at. -/
+theorem derive_map_coarse (y : Var) (E : Entry) (k : Kind) :
+    (derive y E k).map Dep.coarse = (derive y E k.coarse).map Dep.coarse := by
+  unfold derive; split
+  · simp only [List.map_cons, List.map_nil, List.cons.injEq, and_true]
+    show (⟨y, (rootKind E.ty k).coarse⟩ : Dep) = ⟨y, (rootKind E.ty k.coarse).coarse⟩
+    congr 1; cases E.ty <;> cases k <;> rfl
+  · simp only [List.map_map]
+    congr 1; funext d
+    show (⟨d.root, (comp d.kind k).coarse⟩ : Dep) = ⟨d.root, (comp d.kind k.coarse).coarse⟩
+    rw [comp_coarse, comp_coarse, Kind.coarse_coarse]
+
 /-- AGORA-374: composing two ways that name no index names none. -/
 theorem comp_notIdx {a b : Kind} (ha : a.isIdx = false) (hb : b.isIdx = false) :
     (comp a b).isIdx = false := by
