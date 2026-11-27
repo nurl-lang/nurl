@@ -11,6 +11,7 @@ $ `stdlib/std/process.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/sysinfo.nu`
+$ `stdlib/std/path.nu`
 
 @ nc_join s a s b → String {
     : String out ( string_from a )
@@ -60,6 +61,15 @@ $ `stdlib/std/sysinfo.nu`
 // later change of directory or drive does not change the file it names.
 @ nc_abs s path → String {
     ? ( nc_is_abs path ) { ^ ( string_from path ) } {}
+    // (Windows resolves a path that exists itself: a drive-relative
+    // `D:rel` against D:'s own current directory, which only the system
+    // knows; what follows is for a path not made yet, as a bundle's)
+    ? ( nc_backslash_sep ) {
+        ?? ( path_canonical @ Path { ( string_from path ) } ) {
+            T p → { ^ ( string_from ( path_str p ) ) }
+            F → {}
+        }
+    } {}
     ^ ?? ( env_cwd ) {
         T cwd → {
             // (a drive-relative `X:rel`, on the working directory's drive:
