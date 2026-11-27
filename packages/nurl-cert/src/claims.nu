@@ -77,9 +77,23 @@ $ `words.nu`
 
 // A claim's premises, the ledger rows it rests on: M.race also on the C11 /
 // LLVM memory model's DRF-SC guarantee (the model's race freedom is the
-// binary's sequential consistency), which is cited, not mechanized.
-@ cert_claim_premises s prof i k → String {
-    : String p ( string_from `lean-kernel claim-definitions translation library-summaries` )
+// binary's sequential consistency), which is cited, not mechanized. With
+// Elab.lean (`elab`), the translation is the core IR's words and the
+// encodings the term uses (`enc`, cert_enc_ids), AGORA-1029; without it,
+// the translator.
+@ cert_claim_premises s prof i k b elab ( Vec String ) enc → String {
+    : String p ( string_from `lean-kernel claim-definitions` )
+    ? elab {
+        ( string_push_str p ` core-ir-words` )
+        : i ne ( vec_len [String] enc )
+        : ~ i j 0
+        ~ < j ne {
+            ( string_push_char p 32 )
+            ( string_push_str p ( string_data ( vec_at [String] enc j ) ) )
+            = j + j 1
+        }
+    } { ( string_push_str p ` translation` ) }
+    ( string_push_str p ` library-summaries` )
     ? != 0 ( nurl_str_eq prof `fast` ) { ( string_push_str p ` lean-compiler` ) } {}
     ? == k 2 { ( string_push_str p ` drf-sc` ) } {}
     ^ p
@@ -321,6 +335,74 @@ $ `words.nu`
         = q + q 1
     }
     ^ | ! has_clo has_fn
+}
+
+// The constructors a term holds (`.name` words, as cert_elab_candidate
+// reads them), each once, in the order first met.
+@ cert_ctors s text → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : ( Vec String ) ls ( nc_lines text )
+    : i nl ( vec_len [String] ls )
+    : ~ i q 0
+    ~ < q nl {
+        : String l ( string_clone ( vec_at [String] ls q ) )
+        ? | ( string_starts_with l `import ` ) ( string_starts_with l `open ` ) {} {
+            : ( Slice u ) t ( slice_of_str ( string_data l ) )
+            : i n ( slice_len [u] t )
+            : ~ i k 0
+            ~ < k n {
+                : i c ( slice_byte t k )
+                ? ( __cl_word c ) {
+                    : ~ i e k
+                    ~ & < e n ( __cl_word ( slice_byte t e ) ) { = e + e 1 }
+                    : ~ b dotted F
+                    ? > k 0 { ? == ( slice_byte t - k 1 ) 46 { = dotted T } {} } {}
+                    ? & dotted > k 1 { ? ( __cl_word ( slice_byte t - k 2 ) ) { = dotted F } {} } {}
+                    ? dotted {
+                        : String w ( string_new )
+                        ( string_push_window w t k - e k )
+                        ? ! ( __cl_in w out ) { ( vec_push [String] out w ) } {}
+                    } {}
+                    = k e
+                } { = k + k 1 }
+            }
+        }
+        = q + q 1
+    }
+    ^ out
+}
+
+// Does the term hold any of the constructors `names`?
+@ __enc_any ( Vec String ) cs s names → b {
+    : ( Vec String ) want ( string_split ( string_from names ) ` ` )
+    : i n ( vec_len [String] want )
+    : ~ i k 0
+    ~ < k n {
+        ? ( __cl_in ( vec_at [String] want k ) cs ) { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// The encodings of C.Elab.elabIR's (docs/dev/TRANSLATION_TRUST.md, "The
+// encodings") a term of the kernel's rests on, each a ledger row: the ones
+// whose constructors it holds (generously: a row is named where it may
+// apply; one named for nothing is only more to read). Numbers always.
+@ cert_enc_ids s text → ( Vec String ) {
+    : ( Vec String ) cs ( cert_ctors text )
+    : ( Vec String ) out ( vec_new [String] )
+    ( vec_push [String] out ( string_from `enc-numbers` ) )
+    ? ( __enc_any cs `slice view new` ) { ( vec_push [String] out ( string_from `enc-raw-text` ) ) } {}
+    ? ( __enc_any cs `sum prod pair fst snd inl inr isl getr getl` ) { ( vec_push [String] out ( string_from `enc-shapes` ) ) } {}
+    ? ( __enc_any cs `dtor letd` ) { ( vec_push [String] out ( string_from `enc-destructors` ) ) } {}
+    ? ( __enc_any cs `fn pack callc` ) { ( vec_push [String] out ( string_from `enc-closures` ) ) } {}
+    ? ( __enc_any cs `send` ) { ( vec_push [String] out ( string_from `enc-threads` ) ) } {}
+    ? ( __enc_any cs `lk lockNew lockClone chanSend chanRecv chanClose` ) { ( vec_push [String] out ( string_from `enc-channels` ) ) } {}
+    // (the walk's summaries read into the term: a `sink` or `inout`
+    // parameter, a change through a borrow, a cursor; elabIR's results lend
+    // nothing, `lends := []`)
+    ? ( __enc_any cs `sink inout borrow sat edit` ) { ( vec_push [String] out ( string_from `enc-summaries` ) ) } {}
+    ^ out
 }
 
 @ __cl_word i c → b { ^ | | | & >= c 65 <= c 90 & >= c 97 <= c 122 & >= c 48 <= c 57 == c 95 }

@@ -288,9 +288,50 @@ $ `stdlib/std/random.nu`
 
 // ── The ledger ───────────────────────────────────────────────────────
 
+// An encoding's ledger row (docs/dev/TRANSLATION_TRUST.md, "The encodings,
+// and where each is argued"): how C.Elab.elabIR reads a part of the core IR
+// as the calculus, which no theorem ties to the core IR's meaning (it has
+// none of its own yet), each argued by its design note.
+@ __ct_enc_row s id s mc → Json {
+    : s note `docs/dev/TRANSLATION_TRUST.md (the encodings), formal/C/Elab.lean`
+    : s who `the NURL formal model (claude-formal)`
+    ? != 0 ( nurl_str_eq id `enc-numbers` ) {
+        ^ ( mj_row id `a number is A2's int; an untracked number (c) is any number, a computation over tracked operands any number with its operands still read`
+        `a number's value is no part of the memory model, and the model's runs must include the program's whatever its numbers (C.ite_any_both: both arms of an if are runs)` note who mc )
+    } {}
+    ? != 0 ( nurl_str_eq id `enc-raw-text` ) {
+        ^ ( mj_row id `raw text: bound from a literal or a fresh string it is owned text (.vec .int), held in a value or made by string_data a view (.slice .int)`
+        `owned text against a view (MEMORY.md §1, §2.13); the core IR has no provenance flag to prove it from` note who mc )
+    } {}
+    ? != 0 ( nurl_str_eq id `enc-shapes` ) {
+        ^ ( mj_row id `an option is sum int t (None the first variant), a struct its fields nested in pairs, a struct of one field its field`
+        `layout-free shapes: no ownership choice is made in them` note who mc )
+    } {}
+    ? != 0 ( nurl_str_eq id `enc-destructors` ) {
+        ^ ( mj_row id `a type with a % Drop of the program's own is .dtor f u (f its drop__, a struct of one field padded with a number), its values bound by .letd`
+        `the destructor runs at the end of every value of the type (A2-drop's theorems)` note who mc )
+    } {}
+    ? != 0 ( nurl_str_eq id `enc-closures` ) {
+        ^ ( mj_row id `a closure is .fn [σ] .any, σ its type's interface; a capture is by name or held in the environment (CORE_VF_ENVOWN), by name read only (inp) or changed (inout drop)`
+        `a capture by name is a dependency on the binding (MEMORY.md §2.11); by name against by value is meaning, the mode precision` note who mc )
+    } {}
+    ? != 0 ( nurl_str_eq id `enc-threads` ) {
+        ^ ( mj_row id `a spawned closure is of class send with an interface of its own; a spawn is A3's call of a wrapper that takes the closure over and calls it, a join a read; a thread's handle and error are numbers, a result sum E T`
+        `a spawn moves the closure to a new thread, its captures held by value; thread_spawn_owned's failure is outside the model, and the closure is moved where nurlc copies its environment (a use after the spawn is refused)` note who mc )
+    } {}
+    ? != 0 ( nurl_str_eq id `enc-channels` ) {
+        ^ ( mj_row id `a channel is lk (prod (vec A) int), its queue and its closed flag; Channel_share is lockClone; a channel bound from another binding is a move`
+        `A3.4's channel; one owner per handle, as nurlc moves it (Ty.ChanOf)` note who mc )
+    } {}
+    ^ ( mj_row id `the walk's summaries read into the term: a parameter the walk infers taken over is sink, one a callee changes inout (AGORA-994), a cursor a borrow, a change of a Vec's elements an edit through one`
+    `it reads nurlc's own borrow walk, which the certificate is meant not to need (the engine computing the summaries itself, AGORA-877, removes it)` note who mc )
+}
+
 // `elab`: the bundle has Elab.lean, so the term is the kernel's
-// (`Cert.elab`) and the translation row names only what is left of it.
-@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab → Json {
+// (`Cert.elab`): the translation is what is left of it, the core IR's
+// words (`core-ir-words`), and the encodings the term uses (`enc`,
+// cert_enc_ids), each a row (AGORA-1029).
+@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab ( Vec String ) enc → Json {
     // the claims a shared row backs: M.race too, for a threaded program
     : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
     : s muc ? threads `M.unsafe M.safe M.leak M.race` `M.unsafe M.safe M.leak`
@@ -309,12 +350,18 @@ $ `stdlib/std/random.nu`
     ? elab {
         // (a program that spawns: Cert.elab is about C.Elab.elabIR3, which
         // builds the spawn wrappers too)
-        : String what ( string_from `the translation from source to the Lean term, the part the kernel does not check: nurlc --emit-core, and the core IR as words (packages/nurl-cert/src/words.nu); the term itself is checked by the kernel (Elab.lean, theorem Cert.elab: ` )
+        : String what ( string_from `the core IR and its words, the part of the translation the kernel does not check: nurlc --emit-core, and the core IR as words (packages/nurl-cert/src/words.nu); the term is checked by the kernel (Elab.lean, theorem Cert.elab: ` )
         ( string_push_str what ? threads `C.Elab.elabIR3 builds P, its spawn wrappers (spawns) and entry` `C.Elab.elabIR builds P and entry` )
         ( string_push_str what ` from the words)` )
-        ( json_arr_push L ( mj_row `translation` ( string_data what )
-        `nothing proves that the core IR is the source's, nor that C.Elab's rules (formal/C/Elab.lean: elabIR, and elabIR3 for a program that spawns) give a core IR its meaning; verify makes Elab.lean, words and all, again from Program.core and compares it byte for byte`
-        `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/words.nu, formal/C/Elab.lean` `nurlc (untrusted, tested by the hole corpus) and nurl-cert's words (re-made by verify); the term: the Lean kernel` mc ) )
+        ( json_arr_push L ( mj_row `core-ir-words` ( string_data what )
+        `nothing proves that the core IR is the source's; verify makes Elab.lean, words and all, again from Program.core and compares it byte for byte`
+        `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/words.nu` `nurlc (untrusted, tested by the hole corpus) and nurl-cert's words (re-made by verify)` mc ) )
+        : i ne ( vec_len [String] enc )
+        : ~ i j 0
+        ~ < j ne {
+            ( json_arr_push L ( __ct_enc_row ( string_data ( vec_at [String] enc j ) ) mc ) )
+            = j + j 1
+        }
     } {
         ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
         `nothing yet proves that P is the program the source describes (AGORA-1020 moves it inside the kernel's sight)`
@@ -584,13 +631,16 @@ $ `stdlib/std/random.nu`
     ( mj_int pg `slots` nv )
     ( mj_set m `program` pg )
 
+    // the encodings the kernel's term rests on, each a ledger row
+    : ~ ( Vec String ) enc ( vec_new [String] )
+    ? elab { = enc ( cert_enc_ids ( string_data . tr lean ) ) } {}
     : Json cl ( json_arr_new )
     : ~ i k 0
     ~ < k nclaims {
         : String st ?? ( vec_get [String] statuses k ) { T x → ( string_clone x ) F → ( string_from `open` ) }
         : ( Vec String ) ax ?? ( vec_get [( Vec String )] axioms k ) { T x → ( vec_clone [String] x ) F → ( vec_new [String] ) }
         : String why ? ( nc_is st `open` ) ( string_clone reason ) ( string_new )
-        : String prem ( cert_claim_premises prof k )
+        : String prem ( cert_claim_premises prof k elab enc )
         ( json_arr_push cl ( __ct_claim ( cert_claim_id k ) ( cert_claim_lean k ) ( string_data st )
         ( cert_claim_sentence threads k ) ( cert_claim_sentence_fi threads k ) ( string_data why ) ax ( string_data prem ) ) )
         = k + k 1
@@ -697,7 +747,7 @@ $ `stdlib/std/random.nu`
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab enc ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )

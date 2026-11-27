@@ -28,8 +28,10 @@
 #     Elab.lean): another scalar program's Program.lean swapped in with its
 #     hash updated fails a plain verify, on Cert.elab; so do Elab.lean
 #     deleted, its words edited and its theorem edited; a bundle downgraded
-#     honestly (Elab.lean removed, its hash dropped and the translation row
-#     the translator's again) verifies, as the weaker bundle it is. And every word of a core IR is a string literal
+#     honestly (Elab.lean removed, its hash dropped, and the kernel's rows,
+#     core-ir-words and the encodings', the translator's translation row
+#     again, in the ledger and the premises) verifies, as the weaker bundle
+#     it is. And every word of a core IR is a string literal
 #     Lean reads back as the word.
 #  3. The fast profile: a bundle whose claims are `validated`, with the
 #     compiled-code axiom listed, verifies.
@@ -430,7 +432,7 @@ expect_only_fail() {
 }
 efresh
 if [ -e "$P/w/Elab.lean" ] && grep -q '"elab_lean"' "$P/w/manifest.json" \
-    && grep -q 'Cert.elab: C.Elab.elabIR builds P and entry' "$P/w/manifest.json" \
+    && grep -q '"id": "core-ir-words"' "$P/w/manifest.json" && grep -q '"id": "enc-numbers"' "$P/w/manifest.json" \
     && "$C" verify "$P/w" --formal "$ROOT/formal" > "$TMP/v.out" 2>&1 \
     && grep -q "ok    Lean proves Cert.elab" "$TMP/v.out"; then ok "a fresh scalar bundle has Elab.lean, its ledger says so, and it verifies"
 else bad "a fresh scalar bundle has Elab.lean, its ledger says so, and it verifies"; cat "$TMP/v.out"; fi
@@ -462,9 +464,11 @@ efresh; printf '\000\377\n' >> "$P/w/Program.core"; rehash core_ir "$P/w/Program
 expect_fail "a NUL and a byte that is not UTF-8 after Program.core's text, its hash updated" "Elab.lean is Program.core's words and the template"
 efresh; printf '\000\naxiom cheat : False\n' >> "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
 expect_fail "a NUL and an axiom after Program.lean's term, its hash updated: the grammar sees it, Lean never runs" "Program.lean only defines the program"
-# Downgraded: Elab.lean removed and its hash dropped. With the translation
-# row the translator's again it is the weaker bundle, and verifies as one;
-# with the kernel's row kept, it does not.
+# Downgraded: Elab.lean removed and its hash dropped. With the translator's
+# row again in place of the kernel's (`core-ir-words` and the encodings'
+# rows, AGORA-1029), in the ledger and in each claim's premises, it is the
+# weaker bundle, and verifies as one; with the kernel's rows kept, it does
+# not (its premises and its ledger are not the translator's).
 efresh; rm "$P/w/Elab.lean"
 python3 - "$P/w/manifest.json" <<'EOF2'
 import json, sys
@@ -472,11 +476,26 @@ p = sys.argv[1]; m = json.load(open(p))
 del m["hashes"]["elab_lean"]
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
-expect_only_fail "downgraded, the kernel's ledger row kept" "the trust ledger is the one certify writes"
+out="$("$C" verify "$P/w" --formal "$ROOT/formal" 2>&1)"; rc=$?
+nf=$(printf '%s\n' "$out" | grep "^  FAIL" | grep -c -v ': not run\|: not checked$')
+if [ "$rc" != 0 ] && [ "$nf" = 2 ] && printf '%s\n' "$out" | grep -q "FAIL  the trust ledger is the one certify writes" \
+    && printf '%s\n' "$out" | grep -q "FAIL  the claims are the template's"; then ok "downgraded, the kernel's ledger rows kept: its ledger and premises fail"
+else bad "downgraded, the kernel's ledger rows kept: its ledger and premises fail (verify rc $rc, $nf failed)"; printf '%s\n' "$out" | grep -v "^  ok" | sed 's/^/        /'; fi
 python3 - "$P/w/manifest.json" "$B/manifest.json" <<'EOF2'
 import json, sys
 p, q = sys.argv[1:]; m = json.load(open(p)); row = [r for r in json.load(open(q))["ledger"] if r["id"] == "translation"][0]
-m["ledger"] = [row if r["id"] == "translation" else r for r in m["ledger"]]
+kern = lambda i: i == "core-ir-words" or i.startswith("enc-")
+L = []
+for r in m["ledger"]:
+    if r["id"] == "core-ir-words": L.append(row)
+    elif not kern(r["id"]): L.append(r)
+m["ledger"] = L
+for c in m["claims"]:
+    ps = []
+    for x in c["premises"]:
+        if x == "core-ir-words": ps.append("translation")
+        elif not kern(x): ps.append(x)
+    c["premises"] = ps
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
 if "$C" verify "$P/w" --formal "$ROOT/formal" > "$TMP/v.out" 2>&1 && grep -q "ok    no Elab.lean" "$TMP/v.out"; then

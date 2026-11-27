@@ -248,8 +248,9 @@ prog.cert/
     exits 0, and `Cert.elab` rests on the standard axioms only. Otherwise
     it is deleted, and the bundle is as before, its term the translator's.
   - With it, `M.safe` and `M.leak` are about the term the kernel built
-    from Program.core's words. What is left of the `translation` row is
-    nurlc's core IR and the split into words.
+    from Program.core's words. The `translation` row is replaced by what
+    is left of it: `core-ir-words` (nurlc's core IR and the split into
+    words) and one row per encoding the term uses (`enc-…`, below).
 - **How Lean checks a bundle.** The bundle holds the three modules, which
   a person can check with lake the module way: Program.lean compiled to
   its olean, then Claims.lean and Elab.lean against it. certify and
@@ -354,8 +355,9 @@ ledger      [ { id, what, why, where, vouches, claims [..] } ]
   the program. It is absent when nurlc refuses to compile the program.
 - `hashes.binary` is present when `--binary` was given.
 - `hashes.elab_lean` is present exactly when the bundle has Elab.lean,
-  and records the case: with it, the `translation` row is the kernel's
-  (below), and verify requires the file.
+  and records the case: with it, the ledger has `core-ir-words` and the
+  encodings' rows in place of `translation` (below), and verify requires
+  the file.
 - **Schema.** The member is optional, so the schema stays
   `nurl-cert/1`. A bundle made before it (nurl-cert 0.1.x, against the
   same `formal/` tree) has none, and verifies as before with its
@@ -380,7 +382,9 @@ One row per thing the claims rest on and do not prove:
 | `lean-kernel` | the Lean 4 kernel and the pinned toolchain |
 | `lean-compiler` | (profile `fast` only) the Lean compiler, which computes the verdict |
 | `claim-definitions` | the claims' definitions, A2's semantics (`formal/CLAIM.md`) |
-| `translation` | without Elab.lean: the step from source to term, `nurlc --emit-core`, then nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`). With Elab.lean: only `nurlc --emit-core` and the split of Program.core into words (`words.nu`; verify makes Elab.lean again from Program.core), and `C.Elab.elabIR`'s rules as the meaning of a core IR; the term itself is the kernel's (`Cert.elab`) |
+| `translation` | (without Elab.lean) the step from source to term, `nurlc --emit-core`, then nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`) |
+| `core-ir-words` | (with Elab.lean, in place of `translation`) `nurlc --emit-core` and the split of Program.core into words (`words.nu`; verify makes Elab.lean again from Program.core); the term itself is the kernel's (`Cert.elab`) |
+| `enc-…` | (with Elab.lean) one row per encoding of `C.Elab.elabIR`'s the term uses, how a part of the core IR is read as the calculus, each argued by its design note (`docs/dev/TRANSLATION_TRUST.md`, "The encodings"): `enc-numbers` (always), `enc-raw-text`, `enc-shapes`, `enc-destructors`, `enc-closures`, `enc-threads`, `enc-channels`, `enc-summaries` (the walk's summaries read into the term). Certify and verify read which off Program.lean's constructors (`cert_enc_ids`), generously: a row may be named where its encoding is not used, never left out where it is |
 | `library-summaries` | the standard library as the term has it, A2 primitives and declared summaries; the models follow the library by inspection (AGORA-1014) |
 | `llvm`, `linker`, `os`, `c-runtime` | the path from the IR to a running binary |
 | `drf-sc` | (a threaded program) the C11 / LLVM memory model's DRF-SC guarantee, for `M.race` |
@@ -388,8 +392,9 @@ One row per thing the claims rest on and do not prove:
 | `unsafe-<n>` | one row per line of that report: each `unsafe` function, `unsafe % Send` / `% Sync` assertion and foreign-declaration claim of the program |
 
 A bundle with no `unsafe-<n>` row and `M.unsafe` assumed has no
-hand-vouched code of its own. Apart from the translation, it rests only on
-the toolchain and the library.
+hand-vouched code of its own. Apart from the translation (its core IR,
+words and encodings, with Elab.lean), it rests only on the toolchain and
+the library. Each claim's premises name the same rows.
 
 ## 5. verify
 
@@ -443,9 +448,10 @@ fails, naming the check, on each of these edits:
   hash updated; code put in it (Lean never runs it).
 
 A bundle downgraded honestly verifies: Elab.lean removed, its hash
-dropped, and the `translation` row the translator's again.
+dropped, and `core-ir-words` and the encodings' rows the translator's
+`translation` row again, in the ledger and in each claim's premises.
 That is expected. It is the weaker bundle, and its ledger says so. With
-the kernel's row kept, it does not verify.
+the kernel's rows kept, it does not verify.
 
 Without Elab.lean, a plain `verify` cannot tell whether Program.lean is
 the source's term or a well-formed term of some other program with every
