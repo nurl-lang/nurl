@@ -103,7 +103,11 @@ $ `certify.nu`
     // says so, and the files must be there. Otherwise there is no Elab.lean
     // and the row is the translator's.
     : b elab ( __vf_has m `hashes.elab_lean` )
-    ( __vf_structure t m ( string_data prof ) threads elab )
+    // (the encodings the kernel's term rests on, read off Program.lean as
+    // certify reads them: their ledger rows and premises)
+    : ~ ( Vec String ) enc ( vec_new [String] )
+    ? elab { = enc ( cert_enc_ids ( string_data ptext0 ) ) } {}
+    ( __vf_structure t m ( string_data prof ) threads elab enc )
 
     // The sources.
     : ~ i k 0
@@ -356,7 +360,7 @@ $ `certify.nu`
 
 @ __vf_has Json m s path → b { ^ ?? ( json_get m path ) { T _ → T F → F } }
 
-@ __vf_structure inout Tally t Json m s prof b threads b elab → v {
+@ __vf_structure inout Tally t Json m s prof b threads b elab ( Vec String ) enc → v {
     // the top-level members, exactly
     : ( Vec String ) keys ( json_obj_keys m )
     : ( Vec String ) want ( string_split ( string_from `schema tool profile program claims coverage hashes versions ledger` ) ` ` )
@@ -478,7 +482,7 @@ $ `certify.nu`
     ~ <= c nc {
         : s id ? == c nc `M.unsafe` ( cert_claim_id c )
         : s lean ? == c nc `` ( cert_claim_lean c )
-        : String prem_c ( cert_claim_premises prof c )
+        : String prem_c ( cert_claim_premises prof c elab enc )
         : s prem ? == c nc `unsafe-report` ( string_data prem_c )
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.id` ) ) ) id ) { = claims_ok F } {}
         ? ! ( nc_is ( mj_get_str m ( string_data ( __vf_path `claims.` c `.lean` ) ) ) lean ) { = claims_ok F } {}
@@ -512,7 +516,7 @@ $ `certify.nu`
             F → { = more F }
         }
     }
-    : Json lw ( cert_ledger prof urows threads elab )
+    : Json lw ( cert_ledger prof urows threads elab enc )
     : String lws ( json_stringify lw )
     : String lhs ?? ( json_get m `ledger` ) { T j → ( json_stringify j ) F → ( string_new ) }
     ( __vf_check t ( string_eq lws lhs ) `the trust ledger is the one certify writes (no row dropped or reworded)` `` )

@@ -1,0 +1,3 @@
+### Changed
+
+- **Breaking (nurl-cert): a certificate whose term the kernel built (`Elab.lean`) no longer has the `translation` ledger row** (AGORA-1029 step 11). In its place are `core-ir-words` (nurlc's core IR and its split into words, which `verify` makes again) and one row per encoding of `C.Elab.elabIR`'s the term uses (`enc-numbers`, `enc-raw-text`, `enc-shapes`, `enc-destructors`, `enc-closures`, `enc-threads`, `enc-channels`, `enc-summaries`), each argued by its design note in `docs/dev/TRANSLATION_TRUST.md`; each claim's premises name the same rows. A certificate without `Elab.lean` keeps the `translation` row. Migration: certify the program again (nurl-cert 0.4.0 is not yet released).

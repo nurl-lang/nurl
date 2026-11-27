@@ -85,10 +85,12 @@ theorem m_safe : ∀ P s, elab ir = some (P, s) → ∀ m' s', Steps P (emptyMem
 ```
 
 The claims then say "the program `elab` makes of this core IR". The
-`translation` row is replaced by two rows:
+`translation` row is replaced (step 11, done) by:
 - `core-ir-words`: the printing, checked by `verify`;
-- `elab-encodings`: the encodings below, as Lean definitions with design
-  notes, until the core IR has a semantics.
+- one row per encoding below the term uses (`enc-numbers`, `enc-raw-text`,
+  `enc-shapes`, `enc-destructors`, `enc-closures`, `enc-threads`,
+  `enc-channels`, `enc-summaries`), as Lean definitions with design notes,
+  until the core IR has a semantics.
 
 ## The encodings, and where each is argued
 
@@ -1382,10 +1384,12 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
     channel program's: `stdlib/std/thread.nu`'s ≈ 62 `ty` lines take ≈ 0.2 s
     of it (the IR with them filtered out: 0.83 s against 1.04 s); the rest
     is spread (`set_option diagnostics true`: `List.rec`, `Bool.rec`,
-    `decide` at the top, and `readVar`'s `getLast?` read again ≈ 2600
-    times, the kernel reducing a function's `v` lines again on every read
-    of its variables). Sharing those reads is a change of how `elabIR`
-    holds what it reads, for every step, not this one's.
+    `decide` at the top; no one definition dominates). Repeated reads are
+    not it: the kernel caches them (ten traversals of every function's
+    variables cost what one does, ≈ 40 ms), so the cost is the number of
+    distinct reductions `elabIR` makes. (A first reading of the
+    diagnostics, that the kernel reduced the `v` lines again on every
+    read, was wrong; step 11 corrects it.)
   - Peak RSS: the largest 2487 against 2513 MiB; a thread program +18 to
     +70 MiB.
   - AGORA-1029 as a whole (each step against the one before): certify time
@@ -1393,6 +1397,28 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
     +5.7 % (step 10), for every certify bundle's term the kernel's; the
     sum of the peaks −1.1 %, +0.2 %, +0.03 %, −12.8 % (step 9, `lake`
     out of the process tree).
+
+## Route (b), step 11: the ledger rows (AGORA-1029)
+
+- A bundle with Elab.lean no longer has the `translation` row. In its
+  place are `core-ir-words` (nurlc's core IR and its split into words,
+  `words.nu`; verify makes the words again from Program.core) and one row
+  per encoding of the table above that the term uses, each with its design
+  note: `enc-numbers` (always), `enc-raw-text`, `enc-shapes`,
+  `enc-destructors`, `enc-closures`, `enc-threads`, `enc-channels`,
+  `enc-summaries` (`__ct_enc_row`, packages/nurl-cert/src/certify.nu).
+  Each claim's premises name the same rows.
+- Which rows: certify and verify read them off Program.lean's constructors
+  (`cert_enc_ids`, claims.nu), generously: a row may be named where its
+  encoding does not apply, never left out where it does (raw text on any
+  `.slice .view .new`; the summaries on any `.sink .inout .borrow .sat
+  .edit`; elabIR's results lend nothing). Verify writes the ledger and the
+  premises again from the same reading and compares them.
+- A bundle without Elab.lean keeps the translator's `translation` row. A
+  bundle downgraded honestly (Elab.lean removed, its hash dropped, the
+  kernel's rows the translator's row again, in the ledger and in the
+  premises) verifies as the weaker bundle; with the kernel's rows kept,
+  its ledger and its premises fail.
 
 ## Next
 
@@ -1402,7 +1428,15 @@ numbers (steps 2 and 3), buffers of numbers (step 4), views, slices,
 `foreach` and changes through a borrow (step 5), closures (step 6),
 structs and options (step 7), destructor frames (step 8), channels
 (step 9) and threads (step 10, `elabIR3`): every certify program; and
-`verify` checks the words against `Program.core`. Then:
-- the per-encoding rows above replace `translation`;
-- kernel time is measured on the corpus;
-- `elab`'s parity with the NURL translator is shown over the sweep.
+`verify` checks the words against `Program.core`. A bundle with Elab.lean
+rests on `core-ir-words` and the per-encoding rows, not on `translation`
+(step 11). Kernel time is measured on the corpus (each step's "Cost"), and
+`elab`'s parity with the NURL translator is shown over the sweep
+(`tools/ncore/elab_parity.sh`, in CI). Then:
+- the encodings proved against a semantics of the core IR, row by row
+  (the full answer; phase D needs it too);
+- the rows that read nurlc's own summaries (`enc-summaries`) removed by
+  the engine computing them (AGORA-877);
+- `elabIR`'s kernel cost (0.2–0.3 s a small bundle, ≈ 1 s a thread
+  program's, step 10): fewer distinct reductions, since repeated ones are
+  cached (fewer passes over the IR, cheaper tests of a word).
