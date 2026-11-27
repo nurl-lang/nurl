@@ -848,6 +848,19 @@ element, a `??` payload of a nested lend, a local bound to one, or a
 generic function's closure parameter — ends, at its own call, the
 caller's views into that element.
 
+What such a call moves is that element's buffer, and nothing else of the
+container. A view of the container's own block — a `Slice` of the `Vec`
+— stays, and so does a view of another element named by a number literal:
+`: s d1 ( string_data ( vec_at vs 1 ) )` outlives `( string_push_str (
+vec_at vs 0 ) … )`. An index that is not a literal, or two different
+literals for one container on one line, names no element the checker can
+tell apart, and that view ends. Any change that may reorder the
+container, or what an index of it names, between the view and the call
+ends the "that element alone" knowledge: a `vec_swap`, a closure that
+runs, a call of a function that may change it, or such a change on one
+path of a join or in an earlier round of a loop. The view of the grown
+element itself always ends (AGORA-374).
+
 A function of your own that hands back a value it read out of its
 parameter lends it, however the value was reached on the way out: an
 element read through a `Slice` the function built over its `Vec`
