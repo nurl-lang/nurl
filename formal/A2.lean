@@ -68,6 +68,7 @@ import A2.ThruPre
 import A2.RegionMem
 import A2.HeldViewThruWitness
 import A2.DropInWitness
+import A2.ElemIdxWitness
 import A2.RegionChangeWitness
 import A2.SubDcKill
 import A2.SliceCopyViewWitness
