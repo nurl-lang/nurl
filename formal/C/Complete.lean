@@ -256,35 +256,46 @@ theorem Completes.fn_back {A : List Nat} {P P' : Prog} (hc : Completes A P P') {
     obtain ⟨g, hg, hs, -⟩ := hc.fn_at h1
     rw [h2] at hg; cases hg; exact ⟨f1, h1, hs⟩
 
+-- One premise of a `StmtT` rule over `P'`, from the same premise over `P`:
+-- as it is, or by its transfer lemma (`hc : Completes A P P'`).
+set_option hygiene false in
+local macro "transfer_premise" : tactic =>
+  `(tactic| (try (first
+    | assumption
+    | (exact CallT.complete hc ‹_›)
+    | (exact TakeOK.complete hc ‹_›)
+    | (exact LetdFn.complete hc ‹_›)
+    | (exact DropFnOK.complete hc ‹_›))))
+
 theorem StmtT.complete {A : List Nat} {P P' : Prog} (hc : Completes A P P') {ξ : Exits} {Γ : Ctx}
     {F : List Var} {s : Stmt} {Δ : Ctx} : StmtT P ξ Γ F s Δ → StmtT P' ξ Γ F s Δ := by
   intro h
   induction h
-  case skip => apply StmtT.skip <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case seq => apply StmtT.seq <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case letv => apply StmtT.letv <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+  case skip => apply StmtT.skip <;> transfer_premise
+  case seq => apply StmtT.seq <;> transfer_premise
+  case letv => apply StmtT.letv <;> transfer_premise
   case letcall =>
     rename_i hdk _
-    apply StmtT.letcall <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+    apply StmtT.letcall <;> transfer_premise
     exact fun fn' hf' hro hd => by
       obtain ⟨fn, hf, hs⟩ := hc.fn_back hf'
       exact hdk fn hf (hs.resOwn.trans hro) (by rw [hs.resTy]; exact hd)
-  case scope => apply StmtT.scope <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case rbind => apply StmtT.rbind <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case frozen => apply StmtT.frozen <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case assign => apply StmtT.assign <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case ite => apply StmtT.ite <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case «while» => apply StmtT.«while» <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case push => apply StmtT.push <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case free => apply StmtT.free <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case sub => apply StmtT.sub <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case panic => apply StmtT.panic <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+  case scope => apply StmtT.scope <;> transfer_premise
+  case rbind => apply StmtT.rbind <;> transfer_premise
+  case frozen => apply StmtT.frozen <;> transfer_premise
+  case assign => apply StmtT.assign <;> transfer_premise
+  case ite => apply StmtT.ite <;> transfer_premise
+  case «while» => apply StmtT.«while» <;> transfer_premise
+  case push => apply StmtT.push <;> transfer_premise
+  case free => apply StmtT.free <;> transfer_premise
+  case sub => apply StmtT.sub <;> transfer_premise
+  case panic => apply StmtT.panic <;> transfer_premise
   case letrec =>
     rename_i h1 h2 h3 h4 h5 h6 h7 h8 _ h10 ih
     obtain ⟨fn', hf', hs, -⟩ := hc.fn_at h4
     exact StmtT.letrec h1 h2 h3 hf' (hs.params ▸ h5) (hs.resTy ▸ h6) (hs.resOwn ▸ h7) (CallT.complete hc h8) ih h10
   case unpair =>
-    apply StmtT.unpair <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+    apply StmtT.unpair <;> transfer_premise
     rcases (‹_ ∨ ∃ f, _ ∧ GlueOK P f _›) with h | ⟨f, h1, h2⟩
     · exact Or.inl h
     · exact Or.inr ⟨f, h1, GlueOK.complete hc h2⟩
@@ -293,15 +304,15 @@ theorem StmtT.complete {A : List Nat} {P P' : Prog} (hc : Completes A P P') {ξ 
     obtain ⟨sig', hσ', hs, -⟩ := hc.fn_at h7
     exact StmtT.callc h1 h2 h3 h4 h5 h6 hσ' (hs.params ▸ h8) (hs.outHolds ▸ h9) (CallT.complete hc h10) h11 ih h13
       (fun hro hd => hdk (hs.resOwn.trans hro) (by rw [hs.resTy]; exact hd))
-  case catchR => apply StmtT.catchR <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+  case catchR => apply StmtT.catchR <;> transfer_premise
   case letd =>
-    apply StmtT.letd <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+    apply StmtT.letd <;> transfer_premise
     obtain ⟨h1, h2⟩ := (‹LetdFn P _ _ _ _ _ ∧ TakeOK P _ _›)
     exact ⟨LetdFn.complete hc h1, TakeOK.complete hc h2⟩
-  case withLock => apply StmtT.withLock <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case scopeL => apply StmtT.scopeL <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case insert => apply StmtT.insert <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case withElem => apply StmtT.withElem <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+  case withLock => apply StmtT.withLock <;> transfer_premise
+  case scopeL => apply StmtT.scopeL <;> transfer_premise
+  case insert => apply StmtT.insert <;> transfer_premise
+  case withElem => apply StmtT.withElem <;> transfer_premise
   case callcE =>
     rename_i h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 _ h18 h19 hdk ih
     obtain ⟨sig', hσ', hs, -⟩ := hc.fn_at h9
@@ -310,16 +321,16 @@ theorem StmtT.complete {A : List Nat} {P P' : Prog} (hc : Completes A P P') {ξ 
       (fun h => h19 (ThruFn.uncomplete hc h))
       (fun hro hd => hdk (hs.resOwn.trans hro) (by rw [hs.resTy]; exact hd))
   case scopeD =>
-    apply StmtT.scopeD <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+    apply StmtT.scopeD <;> transfer_premise
     obtain ⟨E, t, h1, h2, h3, h4, h5, h6⟩ := (‹∃ E t, _ ∧ _ ∧ _ ∧ _ ∧ DropFnOK P _ t ∧ _›)
     exact ⟨E, t, h1, h2, h3, h4, DropFnOK.complete hc h5, h6⟩
-  case editB => apply StmtT.editB <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case editBV => apply StmtT.editBV <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case takeB => apply StmtT.takeB <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case takeBV => apply StmtT.takeBV <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case exit => apply StmtT.exit <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case block => apply StmtT.block <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
-  case loop => apply StmtT.loop <;> (try (first | assumption | (exact CallT.complete hc ‹_›) | (exact TakeOK.complete hc ‹_›) | (exact LetdFn.complete hc ‹_›) | (exact DropFnOK.complete hc ‹_›)))
+  case editB => apply StmtT.editB <;> transfer_premise
+  case editBV => apply StmtT.editBV <;> transfer_premise
+  case takeB => apply StmtT.takeB <;> transfer_premise
+  case takeBV => apply StmtT.takeBV <;> transfer_premise
+  case exit => apply StmtT.exit <;> transfer_premise
+  case block => apply StmtT.block <;> transfer_premise
+  case loop => apply StmtT.loop <;> transfer_premise
 
 theorem Implements.complete {A : List Nat} {P P' : Prog} (hc : Completes A P P') {f : Nat} {te : Ty}
     {cs : List (Var × PMode × Ty)} {σ : Nat} : Implements P f te cs σ → Implements P' f te cs σ := by
@@ -412,13 +423,18 @@ theorem Stmt.isStubB_sound {s : Stmt} (h : s.isStubB = true) : ∃ s', s = .seq 
 
 /-- `progOK2B` but at the assumed indices, where `P` holds a stub. -/
 def progOK2BA (P : Prog) (A : List Nat) : Bool :=
+  -- (every assumed index names a function: one past the end could never
+  -- be completed)
+  A.all (fun i => decide (i < P.length)) &&
   (List.range P.length).all fun f => match P[f]? with
     | some fn => if f ∈ A then fn.body.isStubB else fnOK2B P f fn && stmtCodesB P fn.body
     | none => true
 
 theorem progOK2BA_sound {P : Prog} {A : List Nat} (h : progOK2BA P A = true) :
     (∀ i, i ∉ A → ∀ fn, P[i]? = some fn → FnOK P fn ∧ fn.body.codesOK P) ∧
-      (∀ i ∈ A, ∀ fn, P[i]? = some fn → ∃ s, fn.body = .seq s .panic) := by
+      (∀ i ∈ A, ∀ fn, P[i]? = some fn → ∃ s, fn.body = .seq s .panic) ∧ ∀ i ∈ A, i < P.length := by
+  simp only [progOK2BA, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
+  obtain ⟨hA, h⟩ := h
   have hat : ∀ i fn, P[i]? = some fn →
       (if i ∈ A then fn.body.isStubB else fnOK2B P i fn && stmtCodesB P fn.body) = true := by
     intro i fn hf
@@ -426,9 +442,9 @@ theorem progOK2BA_sound {P : Prog} {A : List Nat} (h : progOK2BA P A = true) :
       rcases Nat.lt_or_ge i P.length with h' | h'
       · exact h'
       · rw [List.getElem?_eq_none h'] at hf; cases hf
-    have := List.all_eq_true.mp h i (List.mem_range.mpr hlt)
+    have := h i (List.mem_range.mpr hlt)
     rw [hf] at this; exact this
-  refine ⟨fun i hA fn hf => ?_, fun i hA fn hf => ?_⟩
+  refine ⟨fun i hA fn hf => ?_, fun i hA fn hf => ?_, hA⟩
   · have := hat i fn hf
     split at this
     · exact absurd ‹i ∈ A› hA
@@ -452,7 +468,7 @@ theorem certOK2BA_typed {P P' : Prog} {A : List Nat} {s : Stmt} {nv : Nat}
   simp only [certOK2BA, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq,
     Option.isSome_iff_exists] at h
   obtain ⟨⟨⟨⟨hP, ⟨Δ, hck⟩⟩, hsc⟩, hs⟩, hv⟩ := h
-  obtain ⟨hok, -⟩ := progOK2BA_sound hP
+  obtain ⟨hok, -, -⟩ := progOK2BA_sound hP
   obtain ⟨ht, _⟩ := checkA2_sound (ξ := .none) (fun _ _ => rfl) (fun v hv => hv) hck
   have hfn : ∀ fn ∈ P', FnOK P' fn ∧ fn.body.codesOK P' := by
     intro fn hfn
@@ -518,6 +534,11 @@ def condWitnessReal : Prog := [condWitnessSeven, condWitnessMain]
 def condWitnessEntry : Stmt := .letcall 0 1 [] .skip
 
 theorem cond_witness_ok : certOK2BA condWitnessP [0] condWitnessEntry 1 = true := by decide +kernel
+
+/-- An assumed index past the program's end is refused: it could never be
+    completed. -/
+theorem cond_witness_bad_index : certOK2BA condWitnessP [0, 2] condWitnessEntry 1 = false := by
+  decide +kernel
 
 theorem cond_witness_completes : Completes [0] condWitnessP condWitnessReal where
   len := rfl

@@ -83,10 +83,20 @@ theorem m_safe :
 with `AssumedOK A P' := ∀ i ∈ A, ∃ fn, P'[i]? = some fn ∧ FnOK P' fn ∧
 fn.body.codesOK P'`. `m_leak` takes the same form. In words: *whatever the
 assumed functions' bodies are, if each one calls the functions the core
-IR says it calls, changes elements through a borrow exactly when the core
-IR says so, and is well-typed against its signature, then the whole
-program is memory-safe and frees everything it allocates.* The real program is one such `P'`. The hypotheses are exactly
-the ledger rows "f follows its summary", one per assumed function.
+IR says it calls, changes elements through a borrow when the core IR says
+so, and is well-typed against its signature, then the whole program never
+gets stuck, and a run that finishes, or ends in an uncaught panic, has
+freed everything it allocated.* (As today's `M.leak`, this speaks of runs
+that reach one of those two ends; it does not say a run ends.) The real
+program is one such `P'`.
+
+Per assumed function, that is two kinds of obligation, and its ledger row
+names all of them:
+- **completion** (`Completes`): the same signature, the same set of
+  callees, and the same local `hasThru` bit as its stub;
+- **proof** (`AssumedOK`): `FnOK P' fn`, its body typed against its
+  signature, and `fn.body.codesOK P'`, the packages it makes implement
+  their interfaces.
 
 When `A = []`, `Completes [] P P'` forces `P' = P` and `AssumedOK` is
 trivial, so the theorem is today's. This is the strongest form: no claim
@@ -99,11 +109,16 @@ the indices in `A`. It also adds these checks:
 
 - every `i ∈ A` holds a stub: its body is `.seq _ .panic`.
 
-No glue predicate can name a function in `A`. Each glue predicate pins its
-function's body to one shape (`.unpair`, `.ite (.isl 0)`, `.letd`,
-`.callcE`), and a stub is a `.seq`, so a glue predicate that holds over
-`P` names a function outside `A`, whose body `P'` keeps. The proof reads
-this off the shapes and needs no extra check.
+- every index in `A` names a function of `P` (an index past its end could
+  never be completed, and would make the claims vacuous).
+
+The function whose body a glue predicate fixes is outside `A`. Each glue
+predicate pins that function's body to one shape (`.unpair`,
+`.ite (.isl 0)`, `.letd`, `.callcE`), and a stub is a `.seq`, so a glue
+predicate that holds over `P` fixes the body of a function outside `A`,
+and `P'` keeps that body. The proof reads this off the shapes and needs no
+extra check. Functions a glue predicate names only by signature, such as a
+closure glue's interface or an impl glue's destructor, may be in `A`.
 
 ### The proof obligation: transfer
 
@@ -152,9 +167,11 @@ function's statements on trust, because it never reads them.
 ## The certificate
 
 - Each assumed function gets a ledger row `assumed-fn:<name>`. The row
-  says what is assumed (it is well-typed against its signature, and its
-  `ThruFn` bit is the summary's), why (the reason from part 1), and where
-  (`file:line`). The claims rest on it, and their premises list it.
+  says what is assumed: the completion obligations (its signature, its
+  set of callees and its local `hasThru` are the stub's) and the proof
+  obligations (`FnOK`, `codesOK`). It also says why (the reason from
+  part 1) and where (`file:line`). The claims rest on it, and their
+  premises list it.
 - `M.safe` and `M.leak` are `assumed`: kernel-proved, under the named
   hypotheses. `coverage.functions` keeps `unsupported` for the functions
   in `A`. A function outside `A` gets the claims' status, `proved` per
@@ -181,7 +198,7 @@ function's statements on trust, because it never reads them.
 ## Order of work
 
 1. `Completes`, `AssumedOK`, `certOK2BA` and its soundness, with
-   `StmtT.complete` and its corollaries (formal/C/CertA.lean). No change
+   `StmtT.complete` and its corollaries (formal/C/Complete.lean). No change
    to A2's statements or proofs. `formal/check.sh` must stay at rc 0 with
    no new axiom.
 2. The translator emits stubs for the functions in `A` (the
