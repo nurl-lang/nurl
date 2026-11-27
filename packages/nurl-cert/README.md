@@ -70,7 +70,8 @@ Fail closed:
   reason is in the manifest.
 
 Today the translation covers integers, `Vec`, strings, options, structs,
-closures and channels in part. Threads and globals are not covered yet.
+closures, channels and threads in part (every certify program; the kernel
+builds each one's term, `Elab.lean`). Globals are not covered yet.
 
 Needs:
 - `nurlc`;
