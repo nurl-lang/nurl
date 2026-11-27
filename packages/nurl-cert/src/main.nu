@@ -4,6 +4,7 @@
 //                             [--binary prog]
 //   nurl-cert verify prog.cert [--binary prog]
 //   nurl-cert translate prog.core
+//   nurl-cert coverage DIR
 //
 // `certify` turns a program into a bundle whose Claims.lean states, about
 // the program's own term, that it never gets stuck (M.safe) and that it
@@ -11,13 +12,16 @@
 // (M.leak), each proved from formal/'s theorems with the checker's verdict
 // decided by the Lean kernel. `verify` checks a bundle again without
 // nurlc. `translate` prints the Lean term of a core IR (`nurlc
-// --emit-core`), as tools/ncore/tolean.py prints it. docs/dev/CERTIFICATE.md
-// describes the bundle.
+// --emit-core`), as tools/ncore/tolean.py prints it. `coverage` prints the
+// coverage table (Markdown) of the bundles DIR/*.cert: programs by verdict,
+// own functions by status, and why the unsupported ones are (AGORA-1015).
+// docs/dev/CERTIFICATE.md describes the bundle.
 //
 // Exit codes: certify 0 every claim proved (or, under fast, validated) ·
 // 1 an error · 2 unsupported by the translation · 3 refused by the
 // checker; verify 0 verified · 1 a check failed · 2 usage or no bundle;
-// translate 0 translated · 1 a core IR it cannot read · 2 unsupported.
+// translate 0 translated · 1 a core IR it cannot read · 2 unsupported;
+// coverage 0 printed · 1 DIR cannot be listed.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -28,6 +32,7 @@ $ `util.nu`
 $ `certify.nu`
 $ `verify.nu`
 $ `words.nu`
+$ `coverage.nu`
 
 @ __usage → v {
     ( nurl_print `nurl-cert — memory-safety certificates for NURL programs\n\n` )
@@ -35,7 +40,8 @@ $ `words.nu`
     ( nurl_print `  nurl-cert certify <prog.nu> [options]   write the certificate bundle\n` )
     ( nurl_print `  nurl-cert verify <prog.cert> [options]  check a bundle again (no nurlc needed)\n` )
     ( nurl_print `  nurl-cert translate <prog.core>         print the Lean term of a core IR (nurlc --emit-core)\n` )
-    ( nurl_print `  nurl-cert words <prog.core>             print the core IR as Lean data (C.Elab.IR)\n\n` )
+    ( nurl_print `  nurl-cert words <prog.core>             print the core IR as Lean data (C.Elab.IR)\n` )
+    ( nurl_print `  nurl-cert coverage <dir>                the coverage table of the bundles dir/*.cert (Markdown)\n\n` )
     ( nurl_print `Options:\n` )
     ( nurl_print `  --out DIR        the bundle (default <prog>.cert)\n` )
     ( nurl_print `  --profile P      kernel (default: the Lean kernel decides, standard axioms only)\n` )
@@ -185,6 +191,20 @@ $ `words.nu`
     }
 }
 
+// `coverage`: the table of the bundles under `dir` on stdout.
+@ __cmd_coverage String dir → i {
+    ^ ?? ( cov_table ( string_data dir ) ( string_data dir ) ) {
+        T t → {
+            ( nurl_print ( string_data t ) )
+            0
+        }
+        F → {
+            ( nc_eprint2 `nurl-cert: cannot list ` ( string_data dir ) )
+            1
+        }
+    }
+}
+
 @ main → i {
     : ArgParser p ( __mkparser )
     : ( Vec String ) argv ( __argv )
@@ -207,9 +227,11 @@ $ `words.nu`
                     ? ( nc_is cmd `verify` ) { = rc ( __cmd_verify p arg ) } {
                         ? ( nc_is cmd `words` ) { = rc ( __cmd_words arg ) } {
                             ? ( nc_is cmd `translate` ) { = rc ( __cmd_translate arg ) } {
-                                ( nurl_eprint `nurl-cert: unknown command: ` )
-                                ( nurl_eprintln ( string_data cmd ) )
-                                = rc 2
+                                ? ( nc_is cmd `coverage` ) { = rc ( __cmd_coverage arg ) } {
+                                    ( nurl_eprint `nurl-cert: unknown command: ` )
+                                    ( nurl_eprintln ( string_data cmd ) )
+                                    = rc 2
+                                }
                             }
                         }
                     }

@@ -1,0 +1,73 @@
+name: certify-coverage
+
+# How much of real NURL code the memory-safety certificate covers
+# (AGORA-1015, spec.program-cert.2 §6 M2), nightly and on demand: every
+# program of the hole sweep, examples/, the compiler tests and packages/ is
+# certified one at a time (packages/nurl-cert/tests/coverage.sh), and the
+# table (programs by verdict, functions by status, the reasons for
+# unsupported) goes to the run's summary and an artifact. Not a per-PR gate:
+# the certify corpus's table runs in certify.yml. A PR that moves coverage
+# regenerates formal/README.md's table with `coverage.sh certify all
+# --readme`.
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    name: certificate coverage over the four corpora
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: nurllang/ci:ubuntu24-20261109
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean (the release formal/lean-toolchain names, pinned by content)
+        # As certify.yml and formal.yml: bumping lean-toolchain means bumping all three.
+        env:
+          LEAN_VERSION: "4.35.0"
+          LEAN_SHA256: "7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d"
+        run: |
+          want="leanprover/lean4:v${LEAN_VERSION}"
+          have="$(tr -d '[:space:]' < formal/lean-toolchain)"
+          if [ "$have" != "$want" ]; then
+            echo "formal/lean-toolchain says $have; this step pins $want: update LEAN_VERSION and LEAN_SHA256" >&2
+            exit 1
+          fi
+          curl -fsSL --retry 5 --retry-delay 5 -o /tmp/lean.tar.zst \
+            "https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst"
+          echo "${LEAN_SHA256}  /tmp/lean.tar.zst" | sha256sum -c -
+          mkdir -p "$HOME/lean"
+          tar --zstd -xf /tmp/lean.tar.zst -C "$HOME/lean"
+          mkdir -p "$HOME/leanbin"
+          for t in lake lean; do
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$HOME/lean/lean-${LEAN_VERSION}-linux/bin/$t" > "$HOME/leanbin/$t"
+            chmod +x "$HOME/leanbin/$t"
+          done
+          echo "$HOME/leanbin" >> "$GITHUB_PATH"
+      - name: Build the checker's modules
+        working-directory: formal
+        run: lake build C.Cert C.Cert3 C.Elab
+      - name: Build the toolchain
+        run: ./build.sh --no-tests
+      - name: Build nurl-cert
+        env:
+          NURL_STDLIB: ${{ github.workspace }}
+        run: cd packages/nurl-cert && ../../nurl.sh src/main.nu ../../build/nurl-cert
+      - name: Coverage
+        env:
+          NURL_CERT: ${{ github.workspace }}/build/nurl-cert
+          COV_OUT: ${{ github.workspace }}/build/coverage
+        run: packages/nurl-cert/tests/coverage.sh certify all | tee build/coverage.md | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the table
+        if: ${{ !cancelled() && hashFiles('build/coverage.md') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: certificate-coverage
+          path: build/coverage.md
+          retention-days: 30

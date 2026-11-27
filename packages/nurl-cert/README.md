@@ -13,6 +13,7 @@ nurl verify prog.cert --binary prog    # check it again
 nurl-cert certify prog.nu              # the same, by hand
 nurl-cert certify prog.nu --profile fast
 nurl-cert verify prog.cert
+nurl-cert coverage bundles/             # the coverage table of bundles/*.cert
 ```
 
 ```
@@ -63,6 +64,13 @@ What the statuses mean:
 | `validated` | decided by compiled code (`--profile fast`) |
 | `assumed` | rests on a ledger row (`M.unsafe`: the compiler's `--unsafe-report`) |
 | `open` | not proved: the checker refuses the program, or the translation does not cover it yet |
+
+Coverage is per function: the manifest gives each of the program's own
+functions its own status, `unsupported` with its reason where the
+translation does not cover it, and `open` where it does but the program is
+not covered whole. `nurl-cert coverage DIR` sums bundles into one table,
+and `tests/coverage.sh` runs it over the repository's corpora (the table in
+`formal/README.md`).
 
 Fail closed:
 - a program the checker refuses (exit 3) gets no proved claim;
