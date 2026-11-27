@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nc_option_read_after_its_payload_moved.nu:27:5: error: use of possibly-moved value 'got' — it was consumed on only some paths, at line 26; on that path this reads a freed buffer. Consume it on every path, or rebind it (= got …) on the path that consumed it
+    : i n ?? got { T q → ( speak . q s ) F → 0 }
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

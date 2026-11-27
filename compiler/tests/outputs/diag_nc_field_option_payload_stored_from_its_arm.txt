@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_nc_field_option_payload_stored_from_its_arm.nu:29:26: error: a borrowed 'Pet' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it
+    ?? . h o { T p → { ( vec_push [Pet] vs p ) } F → {} }
+                         ^

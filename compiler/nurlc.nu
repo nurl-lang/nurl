@@ -45560,7 +45560,12 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // takes the option's ownership along.
                     // mem_udrop_ptr_of answers `` for an empty name.
                     : s __mop ( mem_udrop_ptr_of syms match_var_name )
-                    ? & & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) != 0 ( nurl_str_len __mop ) ( __is_handle_ty pt0_reg ) {
+                    // (…and one that cannot be copied whose drop the
+                    // compiler makes, as for a call's option above: no
+                    // cursor, a payload moved out — stored, sent, handed
+                    // on — left the option's flag set, and the option
+                    // released it again: a double free.)
+                    ? & & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) != 0 ( nurl_str_len __mop ) | ( __is_handle_ty pt0_reg ) __pt0_ncauto {
                         ( __handle_drop_ensure pt0_reg )
                         ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 `0` )
@@ -45574,11 +45579,34 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // the parameter (its caller hands the option over).
                     ? & & & & pt0_is_opt_bool == 0 ( nurl_str_len scrut_own ) == 0 ( nurl_str_len __mop )
                     >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0
-                    ( __is_handle_ty pt0_reg ) {
+                    | ( __is_handle_ty pt0_reg ) __pt0_ncauto {
                         ( __handle_drop_ensure pt0_reg )
                         ( mem_own_add_user_drop syms cg vp0 pt0_reg )
                         ( mem_udrop_flag_set syms cg vp0 `0` )
                         ( nurl_sym_def syms ( nurl_str_cat vp0 `__optparam` ) match_var_name )
+                    } {}
+                    // …and one that cannot be copied, of an option nothing
+                    // above owns here (a field's, a call's that lends it, a
+                    // view's): lent to the arm, as a `% Drop` one is above —
+                    // what moves it on is refused (h231), where taken for
+                    // moved it was released by the callee and by the
+                    // option's owner again.
+                    ? & & & & pt0_is_opt_bool __pt0_ncauto == 0 ( nurl_str_len scrut_own ) == 0 ( nurl_str_len __mop )
+                    < ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0 {
+                        ( mem_own_add_user_drop syms cg vp0 pt0_reg )
+                        ( mem_udrop_flag_set syms cg vp0 `0` )
+                        ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
+                    } {}
+                    // …and of an enum held by a binding, a parameter or
+                    // another name, or a temporary given an owner: lent to
+                    // the arm, the enum keeps it in its own cell, as a `%
+                    // Drop` one is above (h231).
+                    ? & & ! pt0_is_opt_bool __pt0_ncauto | m_tmp_enum & != 0 ( nurl_str_len match_var_name )
+                    | | != 0 ( nurl_str_len ( mem_udrop_ptr_of syms match_var_name ) ) >= ( nurl_sym_word_index syms `__fn_param_names__` match_var_name ) 0
+                    ( is_ident_tok match_first_tt ) {
+                        ( mem_own_add_user_drop syms cg vp0 pt0_reg )
+                        ( mem_udrop_flag_set syms cg vp0 `0` )
+                        ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `1` )
                     } {}
                 }
                 {}
