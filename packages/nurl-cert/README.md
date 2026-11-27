@@ -81,5 +81,5 @@ Needs:
 
 `verify` needs only Lean.
 
-On Windows, both run from Git Bash or cmd, with Lean's Windows release
-on `PATH` and `formal/` built by it.
+On Windows, both run from any shell (cmd, PowerShell or Git Bash), with
+Lean's Windows release on `PATH` and `formal/` built by it.

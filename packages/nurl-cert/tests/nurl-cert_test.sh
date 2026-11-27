@@ -242,12 +242,25 @@ else bad "a refused program's term in a bundle with Elab.lean: verify fails on t
 # file with an Elab.lean part) costs the optional Cert.elab only: certify
 # checks the claims again alone and keeps them; verify of a bundle that holds
 # Elab.lean still fails on Cert.elab.
-KL="$TMP/killlean"; cat > "$KL" <<'EOF2'
+if [ "$WIN" = 1 ]; then
+    # (Windows starts no script by its #! line: the same lean as a .cmd)
+    KL="$TMP/killlean.cmd"; cat > "$KL" <<'EOF2'
+@echo off
+for %%a in (%*) do (
+  if /I "%%~xa"==".lean" (
+    findstr /B /C:"import C.Elab" "%%~fa" > nul 2>&1 && exit /b 137
+  )
+)
+lean %*
+EOF2
+else
+    KL="$TMP/killlean"; cat > "$KL" <<'EOF2'
 #!/usr/bin/env bash
 for a in "$@"; do case "$a" in *.lean) grep -q '^import C.Elab$' "$a" && exit 137;; esac; done
 exec lean "$@"
 EOF2
-chmod +x "$KL"
+    chmod +x "$KL"
+fi
 K="$TMP/kl"; rm -rf "$K"; mkdir -p "$K"; cp tools/ncore/certify/vec_push_len.nu "$K/p.nu"
 "$C" certify "$K/p.nu" "${CA[@]}" --lean "$KL" > "$K/out" 2>&1; krc=$?
 kv=$("$C" verify "$TMP/progs/vec_push_len/vec_push_len.cert" --formal "$ROOT/formal" --lean "$KL" 2>&1); kvrc=$?

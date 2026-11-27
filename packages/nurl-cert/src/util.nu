@@ -10,6 +10,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/std/sysinfo.nu`
 
 @ nc_join s a s b → String {
     : String out ( string_from a )
@@ -18,11 +19,16 @@ $ `stdlib/ext/env.nu`
     ^ out
 }
 
-// Is `path` absolute: `/…`, or on Windows a drive's `X:/…` / `X:\…` or a
-// share's `\\…`?
+// Does this host take a backslash for a path separator (Windows)?
+@ nc_backslash_sep → b { ^ == ( sys_os ) SYS_OS_WINDOWS }
+
+// Is `path` absolute: `/…`; on Windows also a drive's `X:/…` or `X:\…`
+// and a share's `\\host\…` (elsewhere a backslash is a file name's byte).
 @ nc_is_abs s path → b {
     : i c0 ( nurl_str_get path 0 )
-    ? | == c0 47 == c0 92 { ^ T } {}
+    ? == c0 47 { ^ T } {}
+    ? ! ( nc_backslash_sep ) { ^ F } {}
+    ? == c0 92 { ^ T } {}
     : b letter | & >= c0 65 <= c0 90 & >= c0 97 <= c0 122
     ? & letter == ( nurl_str_get path 1 ) 58 {
         : i c2 ( nurl_str_get path 2 )
