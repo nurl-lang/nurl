@@ -2796,7 +2796,8 @@ def stubRv (tops : List (List W)) (names : List W) (cl : CloTab) (fn : CoreFn)
       else
         let sm := sumOf tops f
         if sm.val kBodyDone == some [49] && (sm.val kMutates).isNone &&
-            (sm.val kReallocs).isNone && (sm.val kDrops).isNone && (sm.val kInout).isNone then
+            (sm.val kReallocs).isNone && (sm.val kIreallocs).isNone &&
+            (sm.val kDrops).isNone && (sm.val kInout).isNone then
           some (callees, thru)
         else none
   | _ => none
