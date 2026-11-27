@@ -979,6 +979,19 @@ theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : K
     obtain ⟨E, hE, _⟩ := hw.get' h0
     exact ⟨hs', E, hE⟩
 
+/-- …and a weaker context after the step: its run-time scopes and borrowed
+    parameters are the stronger one's (AGORA-374: `insert` reorders in the
+    push's typed outcome, a weakening of what the push step leaves). -/
+theorem Keep.weakerOut {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (h : Keep Γ Γ0 s s') (hw : Weaker Γ0 Γ') :
+    Keep Γ Γ' s s' := by
+  refine ⟨fun v E hv hs => ?_, fun v E' hv hs => ?_, h.2.2.weaker_right hw⟩
+  · obtain ⟨hs', E0, h0, hm, hty, hrb⟩ := h.1 v E hv hs
+    obtain ⟨E', h', hw0⟩ := hw.get h0
+    exact ⟨hs', E', h', hw0.mode.trans hm, hw0.1.trans hty, fun hr => by
+      rw [hw0.fixed (Or.inl (hm.trans hr)), hrb hr]⟩
+  · obtain ⟨E0, h0, _⟩ := hw.get' hv
+    exact h.2.1 v E0 h0 hs
+
 
 /-! ### Taking a struct apart -/
 
@@ -3753,7 +3766,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             memDeps_noName hp.mem hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
           (fun _ D' w _ hcw => (htk.frameCaps hcw).of_st rfl)
-  | @withElem ξ Γ Γ1 Δ1 Δ F y x i k Ey E hsrc hx hxF _ _ _ hpin _ hr hs hpush hpx _ _ _ _ =>
+  | @withElem ξ Γ Γ1 Δ1 Δ F y x i k Ey E hsrc hx hxF _ _ _ hpin _ hr hs hpush hnix hpx _ _ _ _ =>
     -- element `n` moves out to `x`, as a pop of it moved to the end (`elem_pres`)
     intro m m' s' hcd hi hst Z hz
     cases hst with
@@ -3776,7 +3789,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch1 := post.rel.anchS hanchS
       have hsp : k.spine = [] := src_spine hsrc
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF
-        (StmtT.seq rfl hs.ofNone (StmtT.insert ExprT.lit hyF hpush)) hpx, ?_, by simp, ?_, fun v hv => ?_,
+        (StmtT.seq rfl hs.ofNone (StmtT.insert ExprT.lit hyF hpush hnix)) hpx, ?_, by simp, ?_, fun v hv => ?_,
         Z, ?_, ZKeep.refl _ _⟩
       rotate_right
       · -- (AGORA-937 B4: the element and the rest of the frame's `Vec` were the `Vec`'s)
@@ -4062,7 +4075,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvy : v ≠ y := fun e => hyF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvy]; exact post.frz v hv
-  | @insert ξ Γ Δ F x y i _ hxF hpu ih =>
+  | @insert ξ Γ Δ F x y i _ hxF hpu hnix ih =>
     -- a push, and its element moved to index `n` (`MInv.perm`)
     intro m m' s' hcd hi hst Z hz
     cases hst with
@@ -4077,13 +4090,20 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (hz.restmt rfl rfl (fun v hv => by
           simp only [Stmt.killVars, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hv ⊢
           rcases hv with h | h <;> simp [h]) (fun c hc => by simp [Stmt.catchFrames] at hc))
+      -- (AGORA-374: the reordering is typed in `Δ`, the push's outcome, which the
+      -- rule asks to depend on `x` inside no element by its index; what the push
+      -- step left is `Δ` or stronger)
+      obtain ⟨hi', hk, hz'⟩ : Inv _ Δ F .skip ∧ Keep Γ Δ (.push x y) .skip ∧ HeldZ _ Δ Z' .skip := by
+        rcases skip_inv ht' with rfl | hw
+        · exact ⟨hi', hk, hz'⟩
+        · exact ⟨hi'.weaker hw, hk.weakerOut hw, hz'.of_rootb hw.rootb_eq⟩
       have hT' : (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩).st x =
           some ⟨true, some (.node t c d (es ++ [w]))⟩ := by simp
       have hp := perm_insert es n w
-      have hm := hi'.toMInv.perm (hi'.leafAnch rfl) hxF hT' hp
+      have hm := hi'.toMInv.perm (hi'.leafAnch rfl) hxF hT' hp hnix
       have hc' := hi'.cover.perm hT' hp
       rw [Mem.set_set] at hm hc'
-      refine ⟨Γ', ht'.ofNone, Inv.ofLeaf hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnchS rfl) rfl hc' trivial,
+      refine ⟨Δ, .skip, Inv.ofLeaf hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnchS rfl) rfl hc' trivial,
         by simpa using hnv, hk, fun v hv => ?_, Z', ?_, hzk⟩
       rotate_right
       · -- (AGORA-937 B4: the node keeps its handle, its elements reordered)

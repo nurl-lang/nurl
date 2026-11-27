@@ -31,8 +31,8 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 ih0 => intro ξ' hξ; exact StmtT.letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a11 a12
   | withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 ih0 => intro ξ' hξ; exact StmtT.withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11
   | scopeL a0 a1 a2 a3 a4 a5 a6 a7 ih0 => intro ξ' hξ; exact StmtT.scopeL a0 a1 a2 a3 a4 a5 a6 a7
-  | insert a0 a1 a2 ih0 => intro ξ' hξ; exact StmtT.insert a0 a1 a2
-  | withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 ih1 => intro ξ' hξ; exact StmtT.withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13
+  | insert a0 a1 a2 a3 ih0 => intro ξ' hξ; exact StmtT.insert a0 a1 a2 a3
+  | withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 ih0 ih1 => intro ξ' hξ; exact StmtT.withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14
   | callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 ih0 => intro ξ' hξ; exact StmtT.callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a17 a18 a19
   | scopeD a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.scopeD a0 a1 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a3 a4 a5 a6 a7 a8 a9
   | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a11 a12 a13 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a11 a12 a13
@@ -74,6 +74,19 @@ theorem skip_inv {P : Prog} {Γ Δ : Ctx} {F : List Var} (h : StmtT P ξ Γ F .s
   induction h with
   | skip => exact Or.inl rfl
   | sub hw _ ho ih => exact weakerEq_trans (Or.inr hw) (weakerEq_trans (ih hs) ho)
+  | _ => cases hs
+
+/-- AGORA-374: a typed push changes an owner or a parameter it may grow,
+    whose type is a `Vec` (what renaming the `insert` that wraps it needs). -/
+theorem push_canDo {P : Prog} {Γ Δ : Ctx} {F : List Var} {x y : Var} (h : StmtT P ξ Γ F (.push x y) Δ) :
+    ∃ Ex t, Γ x = some Ex ∧ Ex.ty = .vec t ∧ canDo Ex.mode .realloc := by
+  generalize hs : Stmt.push x y = s at h
+  induction h with
+  | push hx _ hty hcan => cases hs; exact ⟨_, _, hx, hty, hcan⟩
+  | sub hw _ _ ih =>
+    obtain ⟨Ex, t, hx, hty, hcan⟩ := ih hs
+    obtain ⟨E, hE, hwe⟩ := hw.get' hx
+    exact ⟨E, t, hE, hwe.ty ▸ hty, hwe.mode ▸ hcan⟩
   | _ => cases hs
 
 /-! ### Kills, scope ends and rerooting are monotone -/
@@ -899,8 +912,8 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     · have hos1 : Ex1.mode.ownSlot = true := hos
       simp only [Entry.vdeps, hos1, ↓reduceIte, List.nil_append]; exact hsub hdd
   | free hx => exact fun _ _ => DKeep.moveOut hx _ _
-  | insert _ _ _ ih => exact ih
-  | withElem hs _ _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
+  | insert _ _ _ _ ih => exact ih
+  | withElem hs _ _ _ _ _ _ _ hr _ _ _ _ _ _ ihs ihp =>
     exact fun _ _ => DKeep.bind (((DKeep.refl _ []).kill _ _ _).trans hr.dkeep fun _ h => h)
       ((DKeep.of_src hs ihs).trans (DKeep.of_src rfl ihp) fun _ h => h)
   | sub hw _ hw' ih =>
@@ -1089,8 +1102,8 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     rw [hx1] at h1; cases h1
     exact ⟨hd1, hos1⟩
   | free hx => exact DStay.moveOut hx _ _
-  | insert _ _ _ ih => exact ih
-  | withElem hs hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
+  | insert _ _ _ _ ih => exact ih
+  | withElem hs hx _ _ _ _ _ _ hr _ _ _ _ _ _ ihs ihp =>
     exact DStay.bind hx (((DStay.refl _ []).kill _ _ _).trans hr.dstay fun _ h => h)
       ((src0 hs ihs).trans (src0 rfl ihp) fun _ h => h)
   | sub hw _ hw' ih =>

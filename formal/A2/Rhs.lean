@@ -2901,10 +2901,14 @@ theorem DtorSafe.none (Γ : Ctx) (hv : Bool) (x : Var) : DtorSafe Γ .none hv x 
     as it did. Every other binding keeps what it reaches; one that reaches
     into the owner's node reaches the same elements, and a view of its buffer
     the same length. -/
-theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+theorem MInv.perm_gen {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {x : Var} (hxF : x ∉ F) {t : Ty} {c d : Nat} {es es' : List Val}
-    (hT : m.st x = some ⟨true, some (.node t c d es)⟩) (hp : es.Perm es') (hnix : NoIdx Γ x) :
-    MInv (m.set x ⟨true, some (.node t c d es')⟩) Γ := by
+    (hT : m.st x = some ⟨true, some (.node t c d es)⟩) (hp : es.Perm es') {e : Eff} {hv : Bool}
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    (hhs : HeldSpared Γ e hv x) (hds : DtorSafe Γ e hv x)
+    (hnix : ∀ k, e.kills hv k = false → KindUsed Γ x k → ∀ i, k ≠ .innerAt i) :
+    ∃ Ex, Γ x = some Ex ∧ MInv (m.set x ⟨true, some (.node t c d es')⟩) (upd (kill e hv x Γ) x (some Ex)) := by
   obtain ⟨Ex, hx⟩ : ∃ Ex, Γ x = some Ex := by
     have := hi.dom x; rw [hT] at this
     cases h : Γ x with
@@ -2947,9 +2951,9 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
   have hviews : ∀ H : List Dep, H = Ex.held → (∀ dep ∈ H, dep.root ≠ x → VKeep m m' dep) →
       ViewsOK m (.vec t) (.node t c d es) H → ViewsOK m' (.vec t) (.node t c d es') H :=
     fun H _ hk hv => hv.keep_except hT hsfT (fun s w h => h.perm hp) hk ⟨_, hm'x⟩
-  have h := hi.change (e := .none) (hv := false) (ox := some Ex) hanch hx hxF (hhs := HeldSpared.of_kills _ rfl rfl)
-    (fun _ _ _ _ _ _ _ hk => by simp [Eff.kills] at hk) hnrb hst (hi.heap.perm hT hp) rfl
-    (fun k _ hu => ⟨hev.perm_vkeep hp k (hnix k hu), hev.perm_hkeep hp k (hnix k hu) hshN⟩) ?_ (DtorSafe.none _ _ _)
+  refine ⟨Ex, hx, ?_⟩
+  refine hi.change (e := e) (hv := hv) (ox := some Ex) hanch hx hxF hmn hhs hnrb hst (hi.heap.perm hT hp) rfl
+    (fun k hk hu => ⟨hev.perm_vkeep hp k (hnix k hk hu), hev.perm_hkeep hp k (hnix k hk hu) hshN⟩) ?_ hds
     (fun h => by cases h) (fun h => by cases h)
     (fun _ Ex' hx' hl hh _ => by cases hx'; exact ⟨hl, hh⟩)
     (PkgKeep.of_pkgs hi hx hos (fun Ex' h => by cases h; exact ⟨rfl, fun _ h => h, id⟩) hT hst
@@ -2972,21 +2976,14 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
             · cases h1
             · exact Or.inl h1⟩
         · exact ⟨t1, d1, es1, h0, fun _ _ _ h => Or.inl h⟩))
-  · have heq : upd (kill .none false x Γ) x (some Ex) = Γ := by
-      rw [kill_none]; funext v
-      by_cases hvx : v = x
-      · subst hvx; simp [hx]
-      · simp [upd_ne _ _ hvx]
-    rwa [heq] at h
-  · have hupd : upd (kill .none false x Γ) x (some Ex) = Γ := by
-      rw [kill_none]; funext v
-      by_cases hvx : v = x
-      · subst hvx; simp [hx]
-      · simp [upd_ne _ _ hvx]
-    refine ⟨⟨true, some (.node t c d es')⟩, hm'x, htok,
+  · refine ⟨⟨true, some (.node t c d es')⟩, hm'x, htok,
       ⟨by simp [hos], fun _ => ⟨by rw [hty]; rfl, fun U hU => by cases hU; rw [hty]; exact hwT',
         fun hl => ⟨_, rfl, ?_⟩⟩, fun h => by rw [hos] at h; cases h⟩, rfl,
-      fun hl hn r hr => ?_, rfl, fun hl hn => by rw [hupd]; exact hi.names x Ex hx hl hn,
+      fun hl hn r hr => ?_, rfl, fun hl hn d hd b t0 hk => by
+        obtain ⟨Er, hEr, hl', hh, ht, ho, hc⟩ := hi.names x Ex hx hl hn d hd b t0 hk
+        by_cases hrx : d.root = x
+        · rw [hrx] at hEr ⊢; rw [hx] at hEr; cases hEr; exact ⟨Ex, by simp, hl', hh, ht, ho, hc⟩
+        · exact ⟨Er, by simp [upd_ne _ _ hrx, A2.kill, hEr, killE_nil (root_vdeps ho hh)], hl', hh, ht, ho, hc⟩,
       fun hl T hT' => ?_, fun T hT' => ?_, fun hd hos' hn dep hdd hnm => ?_,
       fun hd => hi.wf.arm x Ex hx hd, fun hd => hi.wf.view x Ex hx hd, ?_,
       fun _ T hT' => by cases hT'; rw [hty]; exact hshN, FreshE.of_ownSlot hos,
@@ -2998,13 +2995,13 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
     · obtain ⟨Er, hEr, hroot⟩ := hi.wf x Ex hx hl (Or.inl hn) r hr
       by_cases hrx : r = x
       · exact Or.inl ⟨hrx, by rw [hrx, hx] at hEr; cases hEr; exact hroot⟩
-      · exact Or.inr ⟨hrx, Er, by rw [kill_none]; exact hEr, hroot⟩
+      · exact Or.inr ⟨hrx, killE e hv x Er, by simp [A2.kill, hEr], by rw [killE_mode]; exact hroot⟩
     · cases hT'; exact (hi.held x Ex _ _ hx hl hT rfl).perm hp
     · cases hT'; exact (hi.pkgs x _ _ hT rfl).perm hp
     · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor x Ex hx hd hos' (Or.inl hn) dep hdd hnm
       by_cases hrx : dep.root = x
       · exact Or.inl ⟨hrx, by rw [hrx, hx] at hEr; cases hEr; exact hroot⟩
-      · exact Or.inr ⟨hrx, Er, by rw [kill_none]; exact hEr, hroot⟩
+      · exact Or.inr ⟨hrx, killE e hv x Er, by simp [A2.kill, hEr], by rw [killE_mode]; exact hroot⟩
     · intro hd hos' T hT'
       cases hT'
       obtain ⟨h1, h2⟩ := hi.armed x Ex _ hx hT hd hos' _ rfl
@@ -3014,6 +3011,24 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
       exact hi.wf.dtor x Ex hx hd hos' (Or.inl hnint) dep
         (by simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append]; exact hd') hnm
 
+
+
+/-- **The elements of an owned `Vec` in another order** (`MInv.perm_gen` with
+    no effect): the invariant holds as it did, where nothing depends on the
+    owner inside an element by its index (`NoIdx`; AGORA-374). -/
+theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {x : Var} (hxF : x ∉ F) {t : Ty} {c d : Nat} {es es' : List Val}
+    (hT : m.st x = some ⟨true, some (.node t c d es)⟩) (hp : es.Perm es') (hnix : NoIdx Γ x) :
+    MInv (m.set x ⟨true, some (.node t c d es')⟩) Γ := by
+  obtain ⟨Ex, hx, h⟩ := hi.perm_gen hanch hxF hT hp (e := .none) (hv := false)
+    (fun _ _ _ _ _ _ _ hk => by simp [Eff.kills] at hk) (HeldSpared.of_kills _ rfl rfl) (DtorSafe.none _ _ _)
+    (fun k _ hu => hnix k hu)
+  have heq : upd (kill .none false x Γ) x (some Ex) = Γ := by
+    rw [kill_none]; funext v
+    by_cases hvx : v = x
+    · subst hvx; simp [hx]
+    · simp [upd_ne _ _ hvx]
+  rwa [heq] at h
 
 theorem idsL_sub_append (es : List Val) (e : Val) : List.Sublist (idsL es) (idsL (es ++ [e])) := by
   rw [idsL_append]; exact List.sublist_append_left _ _

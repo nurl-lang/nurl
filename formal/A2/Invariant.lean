@@ -2556,7 +2556,12 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       `vec_push x y` is.  It is the give-back of an element handed over
       (`withElem`). -/
   | insert {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} :
-      ExprT Γ i → x ∉ F → StmtT P .none Γ F (.push x y) Δ → StmtT P ξ Γ F (.insert x i y) Δ
+      ExprT Γ i → x ∉ F → StmtT P .none Γ F (.push x y) Δ →
+      -- (AGORA-374: what the push leaves depends on `x` inside no element by
+      -- index, `NoIdx`: moving the pushed element to index `i` moves every
+      -- element after it up one, and the push's `.realloc` ends such a
+      -- dependency, which a weakening could not bring back)
+      NoIdx Δ x → StmtT P ξ Γ F (.insert x i y) Δ
   /-- A2-elem (Agora #391): element `i` of `v` handed over, as a call hands
       an element to a parameter it changes (`( f ( vec_at v i ) )`, read as
       `withElem v i x (call f x)`).  Element `i` moves out to `x`, which
@@ -2580,7 +2585,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       s.src = true → Γ x = none → x ∉ F → Γ v = some Ev → Ev.mode = .own → ExprT Γ i →
       NoPin Γ v → DtorSafe Γ .replace false v →
       RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P .none (setE Γ1 x E) F s Δ1 →
-      StmtT P .none Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
+      StmtT P .none Δ1 F (.push v x) Δ →
+      -- (AGORA-374: the give-back is an `insert`, which asks it, `NoIdx`)
+      NoIdx Δ v → EndOK Δ x → v ∉ s.vars →
       -- (A2-drop.3b: the element checked out owns no destructor value: its
       -- binding is no `letd`'s)
       E.ty.dtorFree = true →

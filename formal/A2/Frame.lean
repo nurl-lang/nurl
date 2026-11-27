@@ -793,45 +793,33 @@ theorem PkgKeep.noval {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv : B
       (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, by rw [← hst r hrx]; exact hT1, hs1, hvn⟩))))
   · exact hfr i (hi.pkgFree y Ey o v hEy hla hs i (Or.inr (Or.inr (Or.inr h4))))
 
-/-- AGORA-374: an entry that is live, or armed with a destructor, depends on
-    `x` with kind `k`: only for such a kind does a change of `x` owe that its
-    dependencies keep (`MInv.change`'s `hkeep`). -/
-def KindUsed (Γ : Ctx) (x : Var) (k : Kind) : Prop :=
-  ∃ v E, Γ v = some E ∧ (E.ty ≠ .int ∨ E.mode = .rootb) ∧
-    (E.live = true ∨ (E.dtor = true ∧ E.mode.ownSlot = true)) ∧ (⟨x, k⟩ : Dep) ∈ E.vdeps
-
-/-- AGORA-374: no entry that is live or armed depends on `x` inside one
-    element by its index (`Kind.innerAt`): what a reordering of `x`'s
-    elements (`MInv.perm`) needs, since it moves elements between indices. -/
-def NoIdx (Γ : Ctx) (x : Var) : Prop := ∀ k, KindUsed Γ x k → ∀ i, k ≠ .innerAt i
-
-/-- A kill that ends every dependency inside an element by index, of an
-    effect no destructor's views stand in the way of, leaves none (AGORA-374):
-    a live entry still depending on `x` that way would have been hit, and an
-    armed one is spared only for what the effect does not end. -/
-theorem NoIdx.of_kill {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var}
-    (hk : ∀ i, e.kills hv (.innerAt i) = true) (hds : DtorSafe Γ e hv x) :
+/-- A kill that ends every dependency inside an element by index leaves
+    none in a live entry; and an armed one, which an effect `e'` that ends
+    them too spares (`DtorSafe` of the killed context), has none either
+    (AGORA-374). -/
+theorem NoIdx.of_kill {Γ : Ctx} {e e' : Eff} {hv hv' : Bool} {x : Var}
+    (hk : ∀ i, e.kills hv (.innerAt i) = true) (hk' : ∀ i, e'.kills hv' (.innerAt i) = true)
+    (hds : DtorSafe (A2.kill e hv x Γ) e' hv' x) :
     NoIdx (A2.kill e hv x Γ) x := by
   rintro k ⟨v, E', hE', hn, hl, hd⟩ i rfl
-  simp only [A2.kill] at hE'
-  cases hE : Γ v with
-  | none => rw [hE] at hE'; cases hE'
-  | some E =>
-    rw [hE] at hE'; simp only [Option.map_some, Option.some.injEq] at hE'; subst hE'
-    rw [killE_ty, killE_mode] at hn
-    rw [killE_vdeps] at hd
-    rcases hl with hl | ⟨hdt, hos⟩
-    · obtain ⟨_, hnot⟩ := killE_live_dep hl hn
+  rcases hl with hl | ⟨hdt, hos⟩
+  · simp only [A2.kill] at hE'
+    cases hE : Γ v with
+    | none => rw [hE] at hE'; cases hE'
+    | some E =>
+      rw [hE] at hE'; simp only [Option.map_some, Option.some.injEq] at hE'; subst hE'
+      rw [killE_ty, killE_mode] at hn
+      rw [killE_vdeps] at hd
+      obtain ⟨_, hnot⟩ := killE_live_dep hl hn
       have := hnot _ hd rfl; rw [hk i] at this; cases this
-    · rw [killE_dtor] at hdt; rw [killE_mode] at hos
-      have hm := hds v E hE hdt hos
-      unfold hitsMem at hm
-      have : (E.ty != .int || E.mode == .rootb) = true := by
-        rcases hn with h | h <;> simp [h]
-      rw [this, Bool.true_and] at hm
-      have hany : E.vdeps.any (fun d => d.root == x && !d.kind.isName && e.kills hv d.kind) = true :=
-        List.any_eq_true.mpr ⟨_, hd, by simp [Kind.isName, hk i]⟩
-      rw [hany] at hm; cases hm
+  · have hm := hds v E' hE' hdt hos
+    unfold hitsMem at hm
+    have : (E'.ty != .int || E'.mode == .rootb) = true := by
+      rcases hn with h | h <;> simp [h]
+    rw [this, Bool.true_and] at hm
+    have hany : E'.vdeps.any (fun d => d.root == x && !d.kind.isName && e'.kills hv' d.kind) = true :=
+      List.any_eq_true.mpr ⟨_, hd, by simp [Kind.isName, hk' i]⟩
+    rw [hany] at hm; cases hm
 
 /-- One binding `x` changes (effect `e`), its slot becomes `ox`: every other
     binding stays valid, or is ended by `kill`. -/

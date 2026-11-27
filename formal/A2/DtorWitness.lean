@@ -522,7 +522,7 @@ theorem withElem_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {v x : Var} {
     ∃ (Ev : Entry) (t : Ty), Γ v = some Ev ∧ Ev.ty = .vec t ∧ t.dtorFree = true := by
   generalize hst : Stmt.withElem v i x s = st at h
   induction h with
-  | @withElem _ Γ _ _ _ _ _ _ _ _ Ev _ _ _ _ hv _ _ _ _ hr _ _ _ _ hdf _ _ =>
+  | @withElem _ Γ _ _ _ _ _ _ _ _ Ev _ _ _ _ hv _ _ _ _ hr _ _ _ _ _ hdf _ _ =>
     cases hst
     cases hr with
     | @pop _ E0 t hy _ hty _ _ _ =>

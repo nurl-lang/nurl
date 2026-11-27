@@ -36,7 +36,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro hs; simp only [Stmt.src, Bool.and_eq_true] at hs; exact (iha hs.1).trans (ihb hs.2)
   | letv hks hx _ hr _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | withLock hks hx _ _ _ _ _ _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx (DomTy.refl _) (ih hks)
-  | withElem hks hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
+  | withElem hks hx _ _ _ _ _ _ hr _ _ _ _ _ _ ihs ihp =>
     exact fun _ => DomTy.exitScope_fresh hx (((DomTy.refl _).kill _ _ _).trans hr.domTy)
       ((ihs hks).trans (ihp rfl))
   | letd hks hx _ hr _ _ _ _ _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
@@ -87,7 +87,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     exact fun _ => DomTy.exitScope_fresh hy (((DomTy.refl Γ).killHv
       (thruKills (.trunc i) Γ Ex.ty Ex.path)).setE ⟨Ex, hx, rfl, rfl⟩) (ih hks)
   | @free _ Γ F x E t hx _ _ _ _ _ => exact fun _ => ((DomTy.refl Γ).kill _ _ _).setE ⟨E, hx, rfl, rfl⟩
-  | insert _ _ _ ih => exact fun _ => ih rfl
+  | insert _ _ _ _ ih => exact fun _ => ih rfl
   | sub hw _ ho ih =>
     intro hs
     have h0 := (DomTy.weaker hw).trans (ih hs)

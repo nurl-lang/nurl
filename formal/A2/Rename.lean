@@ -1156,6 +1156,47 @@ theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
           rw [hkill d.kind hk] at hkb; cases hkb
 
 
+/-- AGORA-374: renaming keeps a context free of dependencies inside an
+    element by its index on a binding the callee may grow: the callee's own
+    entries keep their dependencies through `liftE` (a borrowed parameter's
+    are names and handles), and the frame's, live or armed, depend on the
+    argument only in ways its bound spares (`Φsat`, `Φdt`), which a growth
+    the bound allows (`Allowed … .realloc`) does not. -/
+theorem NoIdx.canon (h : S.OK) (hab : S.AbsOK Γa) {hv : Bool} {x : Var}
+    (ha : Allowed S .realloc hv x) (hn : NoIdx Γa x) : NoIdx (S.canon Γa) (S.ρ x) := by
+  rintro k ⟨y, E, hy, hnt, hl, hd⟩ i rfl
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩
+  · rw [hc] at hy
+    obtain ⟨Ea, hEa, rfl⟩ := Option.map_eq_some_iff.mp hy
+    simp only [Function.comp_apply] at hnt hl hd
+    rw [subE_vdeps] at hd
+    obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
+    rcases S.subD_frame h hdd with rfl | ⟨hout, _⟩
+    · by_cases hrb : Ea.mode = .rootb
+      · rcases liftE_rootb_ρ h hab hEa hrb hd1 rfl with ⟨b, t, he, _⟩ | ⟨he, _⟩ <;> cases he
+      · rcases liftE_vdeps_cases hrb hd1 with ⟨⟨r0, k0⟩, hd0, he⟩ | hA
+        · simp only [Dep.ren, Dep.mk.injEq] at he
+          obtain ⟨hr, rfl⟩ := he
+          have hr0 := h.inj _ _ hr; subst hr0
+          refine hn _ ⟨v, Ea, hEa, ?_, ?_, hd0⟩ i rfl
+          · rw [subE_ty, subE_mode, liftE_ty v hrb, liftE_mode v hrb] at hnt
+            exact hnt.imp id (fun h' => absurd (liftMode_rootb.mp h') hrb)
+          · rw [subE_live, liftE_live, subE_dtor, liftE_dtor' h v Ea, subE_mode, liftE_mode v hrb,
+              liftMode_ownSlot] at hl
+            simpa [hrb] using hl
+        · exact A_out h hA x rfl
+    · exact hout x rfl
+  · rw [hc] at hy; cases hy
+  · rw [hc] at hy
+    obtain ⟨b, hv', hbx, hk⟩ : ∃ b hv', S.bnd x = some (b, hv') ∧ b.kills hv' (.innerAt i) = false := by
+      rcases hl with hl | ⟨hdt, hos⟩
+      · exact h.Φsat y E hy hl hnt _ hd x rfl
+      · exact h.Φdt y E hy hdt hos hnt _ hd rfl x rfl
+    rcases ha with ha | ⟨b', hb', hbx', hkill⟩
+    · rw [ha] at hbx; cases hbx
+    · rw [hbx'] at hbx; cases hbx
+      rw [hkill (.innerAt i) (by simp [Eff.kills])] at hk; cases hk
+
 /-- AGORA-937 (3d, route U): a change that spares a borrowed parameter's
     views of its root spares them where the call places it: a lifted
     parameter's held is the callee's, renamed, and the argument's own (no
@@ -8921,7 +8962,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_subE]; exact S.subE_weaker (compE_liftE_weakerV hmx hhv)),
         hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hpe hyv hdf ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hnix hpe hyv hdf ihs ihp =>
     intro _ hab hw hn hfo hT hvs
     -- an owner of the callee is bound to no argument: what depends on it ends where it is placed
     have hal : Allowed S .replace false y := allowed_own hab hy hmy .replace false
@@ -8961,7 +9002,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (exprT_ren h hab he (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, hv])))))
       (NoPin.lift h hab (bnd_own hab hy hmy)) (DtorSafe.canon h hal hds) hr'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
-      (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)) (EndOK.lift h abp hbx hpe)
+      (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim))
+      (NoIdx.canon h abp (allowed_own hab hy hmy .realloc false) hnix) (EndOK.lift h abp hbx hpe)
       (by
         rw [Stmt.vars_rename]; intro hm
         obtain ⟨w, hw', he'⟩ := List.mem_map.mp hm
@@ -8970,11 +9012,13 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         have hl := (hE' x).1
         have hrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h' | h' <;> rw [h'] <;> simp
         rw [← hl, subE_ty, liftE_ty x hrb]; exact hdf)
-  | @insert _ Γ Δ F x y i he _ _ ih =>
+  | @insert _ Γ Δ F x y i he _ hpu hnix ih =>
     intro _ hab hw hn hfo hT hvs
     obtain ⟨tp, abp⟩ := ih rfl hab hw hn hfo hT
       (fun v hv => hvs v (by simp [Stmt.vars] at hv ⊢; rcases hv with rfl | rfl <;> simp))
-    exact ⟨StmtT.insert (exprT_ren h hab he (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, hv]))))) (h.Fcout x) (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)), abp⟩
+    obtain ⟨Ex, t, hx, hty, hcan⟩ := push_canDo hpu
+    exact ⟨StmtT.insert (exprT_ren h hab he (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, hv]))))) (h.Fcout x) (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim))
+      (NoIdx.canon h abp (allowed_canDo hab hx hty hcan) hnix), abp⟩
   | @sub _ Γ Γ0 Δ0 Δ F k hw0 tk ho ih =>
     intro hs hab hw hn hfo hT hvs
     have hab0 := hab.weaker hw0

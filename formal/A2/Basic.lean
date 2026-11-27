@@ -437,6 +437,31 @@ theorem nodup_idsL_same {es : List Val} (hn : (idsL es).Nodup) {e1 e2 : Val}
     · subst k2; exact absurd rfl (hdis i hi2 i (mem_idsL k1 hi1))
     · exact ih hxs k1 k2
 
+/-- AGORA-374: …and lies in the element at one index only. -/
+theorem nodup_idsL_index {es : List Val} (hn : (idsL es).Nodup) {i j : Nat} {e1 e2 : Val}
+    (h1 : es[i]? = some e1) (h2 : es[j]? = some e2) {a : Nat} (ha1 : a ∈ e1.ids) (ha2 : a ∈ e2.ids) :
+    i = j := by
+  induction es generalizing i j with
+  | nil => simp at h1
+  | cons x xs ih =>
+    simp only [idsL_cons, List.nodup_append] at hn
+    obtain ⟨hx, hxs, hdis⟩ := hn
+    cases i with
+    | zero =>
+      cases j with
+      | zero => rfl
+      | succ j =>
+        simp only [List.getElem?_cons_zero, Option.some.injEq, List.getElem?_cons_succ] at h1 h2
+        subst h1; exact absurd rfl (hdis a ha1 a (mem_idsL (List.mem_of_getElem? h2) ha2))
+    | succ i =>
+      cases j with
+      | zero =>
+        simp only [List.getElem?_cons_zero, Option.some.injEq, List.getElem?_cons_succ] at h1 h2
+        subst h2; exact absurd rfl (hdis a ha2 a (mem_idsL (List.mem_of_getElem? h1) ha1))
+      | succ j =>
+        simp only [List.getElem?_cons_succ] at h1 h2
+        rw [ih hxs h1 h2]
+
 theorem nodup_of_mem_idsL {es : List Val} (hn : (idsL es).Nodup) {e : Val} (he : e ∈ es) :
     e.ids.Nodup := by
   induction es with

@@ -202,6 +202,18 @@ theorem hitsMem_of_hits {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : hits e 
   · exact Or.inl h
   · exact Or.inr fun d hd hr => h d hd hr.1
 
+/-- AGORA-374: an entry that is live, or armed with a destructor, depends on
+    `x` with kind `k`: only for such a kind does a change of `x` owe that its
+    dependencies keep (`MInv.change`'s `hkeep`). -/
+def KindUsed (Γ : Ctx) (x : Var) (k : Kind) : Prop :=
+  ∃ v E, Γ v = some E ∧ (E.ty ≠ .int ∨ E.mode = .rootb) ∧
+    (E.live = true ∨ (E.dtor = true ∧ E.mode.ownSlot = true)) ∧ (⟨x, k⟩ : Dep) ∈ E.vdeps
+
+/-- AGORA-374: no entry that is live or armed depends on `x` inside one
+    element by its index (`Kind.innerAt`): what a reordering of `x`'s
+    elements (`MInv.perm`) needs, since it moves elements between indices. -/
+def NoIdx (Γ : Ctx) (x : Var) : Prop := ∀ k, KindUsed Γ x k → ∀ i, k ≠ .innerAt i
+
 /-- A2-drop.2: effect `e` on `x` ends no view a binding that may run a
     destructor holds, live or not. A rule that kills through dependencies
     takes it, so a destructor never reads a view whose source ended

@@ -59,6 +59,24 @@ theorem dtorSafeB_sound {D : List Var} {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var
   simp only [hd, ho, Bool.not_true, Bool.false_or, Bool.not_eq_true'] at this
   exact this
 
+/-- AGORA-374: `NoIdx`, decided over the supported bindings. -/
+def noIdxB (D : List Var) (Γ : Ctx) (x : Var) : Bool :=
+  D.all fun v => match Γ v with
+    | some E => !((E.ty != .int || E.mode == .rootb) && (E.live || (E.dtor && E.mode.ownSlot))) ||
+        E.vdeps.all fun d => !(d.root == x) || match d.kind with | .innerAt _ => false | _ => true
+    | none => true
+
+theorem noIdxB_sound {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D)
+    (h : noIdxB D Γ x = true) : NoIdx Γ x := by
+  rintro k ⟨v, E, hE, hn, hl, hd⟩ i rfl
+  have := List.all_eq_true.mp h v (mem_of_some2 hs hE)
+  rw [hE] at this
+  have hg : ((E.ty != .int || E.mode == .rootb) && (E.live || (E.dtor && E.mode.ownSlot))) = true := by
+    rcases hn with h1 | h1 <;> rcases hl with h2 | ⟨h2, h3⟩ <;> simp [h1, h2, h3]
+  rw [hg] at this
+  have := List.all_eq_true.mp (by simpa using this) _ hd
+  simp at this
+
 /-- `canDo`, decided. -/
 def canDoB2 (m : Mode) (e : Eff) : Bool :=
   match m with

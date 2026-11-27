@@ -873,7 +873,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ _ ihs ihp =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hr.names (hn.kill .replace false y)
     have hx1 : Γ1 x = none := by
@@ -1028,7 +1028,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       rcases hd' with hd' | hd'
       · exact hN d hd' b t' hk'
       · have := memDeps_noName d hd'; rw [hk'] at this; cases this
-  | insert _ _ _ ih => exact fun _ hn => ih rfl hn
+  | insert _ _ _ _ ih => exact fun _ hn => ih rfl hn
   | @free _ Γ F x E t hx _ _ _ _ _ =>
     intro _ hn
     exact hn.moved hx

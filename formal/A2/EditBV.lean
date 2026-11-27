@@ -689,10 +689,10 @@ theorem MInv.edit_dropV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
     | name b t => exact ⟨vkeep_name _ _ _ _ _, hkeep_name _ _ _ _ _⟩
     | _ => simp [Eff.kills] at hk
   have h := hi.change hanch ho hoF (hmn_of_ne_replace true (by decide) o) hhs (by rw [hmo]; simp) hst hheap
-    hnv hkeep (NewSlot.editV hi hanch ho hoF hmo hdb hEv hT hT' hst hnN hpkN hfree hoD hDn hDr hr hw' hnew hblk hsh')
+    hnv (fun k hk _ => hkeep k hk) (NewSlot.editV hi hanch ho hoF hmo hdb hEv hT hT' hst hnN hpkN hfree hoD hDn hDr hr hw' hnew hblk hsh')
     hds (fun h => by cases h) (fun h => by cases h)
     (fun _ _ _ _ _ hhv => absurd hEv (by rw [hhv]; decide))
-    (PkgKeep.of_repl hi hanch ho hoF hT hT' hst hr hfree hes (Or.inr ⟨rfl, rfl, rfl⟩)
+    (PkgKeep.of_repl hi hanch ho hoF hT hT' hst hr hfree hes (Or.inr ⟨rfl, rfl, rfl, fun _ => rfl⟩)
       (fun Ex' o' w hx' hl' hs i hn => by
         simp only [Option.some.injEq] at hx'; subst hx'
         rw [hT'] at hs; cases hs
@@ -1191,9 +1191,10 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
       obtain ⟨cT, dT, esT, hTe⟩ : ∃ cT dT esT, T = .node t cT dT esT := by
         cases hwT with | node _ => exact ⟨_, _, _, rfl⟩
       have hTn : T = .node t c d es := by
-        rcases hla with ⟨_, hnn⟩ | ⟨hkv, _⟩ | ⟨hki, _⟩
+        rcases hla with ⟨_, hnn⟩ | ⟨hkv, _⟩ | ⟨hki, _⟩ | ⟨_, hki, _⟩
         · rw [hnn]; rw [hTe] at htop ⊢; exact htop.node.symm
         · rw [hk] at hkv; cases hkv
+        · rw [hk] at hki; cases hki
         · rw [hk] at hki; cases hki
       subst hTn
       have hT'n : T' = .node t c d' (es ++ [v]) := hr.here_inv

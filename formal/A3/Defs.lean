@@ -1085,7 +1085,7 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
       (elemLockE t Ev)) x (lockE t)) F s Δs)
     (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hes : e ∉ s.vars) (hvs : v ∉ s.vars)
     (hvx : v ≠ x) (hve : v ≠ e)
-    (hpush : StmtT P .none (exitScope x Δs) F (.push v e) Δ) (hende : EndOK Δ e)
+    (hpush : StmtT P .none (exitScope x Δs) F (.push v e) Δ) (hnix : NoIdx Δ v) (hende : EndOK Δ e)
     (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P ξ Γ F (Stmt.withLockElem v i e x s) (exitScope e Δ) := by
   have hkv : A2.kill .replace false v Γ v = some Ev := by simp [A2.kill, hv, killE_nohit hvv]
@@ -1094,7 +1094,7 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
   rw [hpe] at hpop
   have hex : A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e (elemLockE t Ev) x = none := by
     simp [A2.setE, A2.kill, upd_ne _ _ hxe, hx]
-  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_ rfl
+  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hnix hende ?_ rfl
   · exact StmtT.withLock hs hex hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend rfl hes hlive hna
   · simp [Stmt.vars, hvs, hvx, hve]
 
