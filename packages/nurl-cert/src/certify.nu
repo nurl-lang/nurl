@@ -247,7 +247,7 @@ open A2 C
 }
 
 @ __ct_is_lib String f → b {
-    ^ | ( string_starts_with f `stdlib/` ) ( string_contains f `/stdlib/` )
+    ^ ( string_starts_with f `stdlib/` )
 }
 
 @ cert_functions s core → ( Vec FnRow ) {
