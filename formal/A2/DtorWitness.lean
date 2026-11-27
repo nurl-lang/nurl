@@ -2752,7 +2752,7 @@ theorem main2_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main2 Δ := by
   have hpost : callPost (fun _ => none) mk [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, mk, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) mk [] = Ecr := by
-    simp [callRes, mk, resMode, Ecr, heldOfArgs, ownHeld, argNames, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll]
+    simp [callRes, mk, resMode, Ecr, heldOfArgs, ownHeld, argNames, argMem, coarseMem, compAll]
   have hc : CallT P (fun _ => none) [] 1 [] Ecr (fun _ => none) := by
     refine ⟨mk, rfl, rfl, fun i hi => by simp [mk] at hi, ?_, CallDtorSafe.of_none (fun _ _ h => by cases h) _ _,
       hres.symm, hpost.symm, fun _ => by simp [callR]⟩

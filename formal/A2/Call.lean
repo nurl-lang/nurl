@@ -2885,9 +2885,9 @@ theorem canon_inp (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
         dsimp only
         generalize argE Γ (args.getD k 0) = A
         cases hf : A.ty.hasFn
-        · rw [typedDeps_noFn hf]; simp [← memDeps_map_coarse, ← nameDeps_map_coarse, nameDeps, memDeps, List.filter_filter]
+        · rw [typedDeps_noFn hf]; simp [← memDeps_map_coarse, nameDeps, memDeps, List.filter_filter]
         · rw [typedDeps_hasFn hf]
-          simp [← memDeps_map_coarse, ← nameDeps_map_coarse, nameDeps, memDeps, List.filter_append, List.filter_filter]
+          simp [← memDeps_map_coarse, nameDeps, memDeps, List.filter_append, List.filter_filter]
 
 theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).AbsOK (sigCtx fn) := by
   obtain ⟨_, hnv, _, _, _, hpar, _⟩ := h.fnok

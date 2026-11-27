@@ -419,8 +419,8 @@ theorem dup_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : Va
       intro d hd; simp [hn d hd]
   have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
   have hheld : heldOfArgs Γ [x] = [] := by
-    simp only [heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
-    split <;> simp [memDeps, coarseMem, compAll]
+    simp only [heldOfArgs, argMem, coarseMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
+    split <;> simp [memDeps, compAll]
   refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, CallDtorSafe.of_inp (by simp [hps]) hmut, ?_, ?_, ?_⟩
   · intro i hi
     simp only [hps, List.length_singleton, Nat.lt_one_iff] at hi
@@ -757,8 +757,8 @@ theorem apply_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t R : Ty} {x 
     split <;> rfl
   have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
   have hheld : heldOfArgs Γ [x] = [] := by
-    simp only [heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, lockE_held]
-    split <;> simp [memDeps, coarseMem, compAll]
+    simp only [heldOfArgs, argMem, coarseMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, lockE_held]
+    split <;> simp [memDeps, compAll]
   refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, ⟨fun i hi => ⟨fun hs => ?_, fun b' hb' => ?_⟩, ?_, ?_⟩, ?_, ?_, ?_⟩
   · intro i hi
     simp only [hps, List.length_singleton, Nat.lt_one_iff] at hi
@@ -1154,8 +1154,8 @@ theorem lock_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : V
       intro d hd; simp [hn d hd]
   have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
   have hheld : heldOfArgs Γ [x] = [] := by
-    simp only [heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
-    split <;> simp [memDeps, coarseMem, compAll]
+    simp only [heldOfArgs, argMem, coarseMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
+    split <;> simp [memDeps, compAll]
   refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, CallDtorSafe.of_inp (by simp [hps]) hmut, ?_, ?_, ?_⟩
   · intro i hi
     simp only [hps, List.length_singleton, Nat.lt_one_iff] at hi
@@ -2735,7 +2735,7 @@ theorem accMain_typed : ∃ Δ, StmtT accP ξ (fun _ => none) [] accMain Δ := b
         accCloE, accTy, Ty.holdsView, Ty.elem, Entry.vdeps, Mode.ownSlot]
     rw [h, hp4.kill]
   have hcr : callRes accMainCtx accSig [3] = intE := by
-    simp [callRes, accSig, heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll, argNames, nameDeps, memDeps, argE, accMainCtx, setE,
+    simp [callRes, accSig, heldOfArgs, argMem, coarseMem, compAll, argNames, nameDeps, memDeps, argE, accMainCtx, setE,
       accCloE, accTy, Entry.vdeps, Mode.ownSlot, ownHeld, resMode, intE]
   have hpc : PlainCtx (setE (setE accMainCtx 3 accCloE) 4 intE) := (hp4.setE hcE).setE (x := 4) intE_plain
   have hΔc : A2.kill .replace false 3 (setE (callPost (A2.kill .replace false 3 accMainCtx) accSig [3]) 4
