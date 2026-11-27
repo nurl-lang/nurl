@@ -1015,8 +1015,8 @@ theorem argDeps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = 
   rw [argE_open (hzs j), clean_ty]
   split
   · exact ⟨List.nil_subset _, by simp⟩
-  · refine ⟨derive_clean_sub _ _ _, fun d hd hde => ?_⟩
-    rcases derive_roots_cases (List.mem_map_of_mem (f := Dep.root) hd) with ⟨h, _⟩ | ⟨_, h⟩
+  · refine ⟨List.map_subset _ (derive_clean_sub _ _ _), fun d hd hde => ?_⟩
+    rcases derive_roots_cases (mem_roots_of_map_coarse hd) with ⟨h, _⟩ | ⟨_, h⟩
     · exact hzs j (h ▸ hde)
     · obtain ⟨d', hd', hr⟩ := List.mem_map.mp h
       exact argE_noE hw hrl hni he _ d' hd' (hr.trans hde)
@@ -1127,17 +1127,24 @@ theorem heldOfArgs_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode
     obtain ⟨a, ha, hni, hm⟩ := mem_argMem.mp hd0
     have hroot : d0.root ∈ (e :: zs).flatMap (fun a => if (argE (setE (cleanC Γ) e (envE c Ec te cs)) a).ty = .int
         then [] else roots (memDeps (argE (setE (cleanC Γ) e (envE c Ec te cs)) a).held)) :=
-      List.mem_flatMap.mpr ⟨a, ha, by rw [ite_eq_right hni]; exact List.mem_map_of_mem hm⟩
+      List.mem_flatMap.mpr ⟨a, ha, by rw [ite_eq_right hni]; exact coarseMem_roots hm⟩
     refine ⟨?_, by simpa using (hR _ hroot).2⟩
     rcases List.mem_cons.mp ha with rfl | ha
     · rw [hE] at hm
-      obtain ⟨d1, hd1, k1, hk1, he1⟩ := mem_compAll.mp (envE_heldComp hm hk)
-      exact mem_compAll.mpr ⟨d1, mem_argMem.mpr ⟨c, List.mem_cons_self .., by rw [hEc]; exact htc,
-        by rw [hEc]; exact hd1⟩, k1, hk1, he1⟩
+      -- (AGORA-374: in the four memory ways, the environment's coarse image)
+      obtain ⟨d2, hm2, rfl⟩ := mem_coarseMem.mp hm
+      obtain ⟨d1, hd1, k1, hk1, he1⟩ := mem_compAll.mp (envE_heldComp hm2 hk)
+      have hki : k.isIdx = false := by rcases hk with rfl | rfl | rfl | rfl <;> rfl
+      have hk1i : k1.isIdx = false := by rcases hk1 with rfl | rfl | rfl | rfl <;> rfl
+      refine mem_compAll.mpr ⟨d1.coarse, mem_argMem.mpr ⟨c, List.mem_cons_self .., by rw [hEc]; exact htc,
+        by rw [hEc]; exact mem_coarseMem.mpr ⟨d1, hd1, rfl⟩⟩, k1, hk1, ?_⟩
+      have := congrArg Dep.coarse he1
+      simp only [Dep.coarse, ← comp_coarse_of hki, ← comp_coarse_of hk1i] at this
+      simpa [Dep.coarse] using this
     · rw [argE_open (hzs' a ha)] at hm hni
       rw [clean_ty] at hni
       exact mem_compAll.mpr ⟨d0, mem_argMem.mpr ⟨a, List.mem_cons_of_mem _ ha, hni,
-        memDeps_mono (clean_held_sub _) hm⟩, k, hk, rfl⟩
+        coarseMem_mono (clean_held_sub _) hm⟩, k, hk, rfl⟩
   unfold heldOfArgs
   refine ⟨fun d hd => ?_, fun d hd => ?_⟩
   · rcases List.mem_append.mp hd with hd | hd
@@ -1177,10 +1184,13 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
           rw [hE] at hkj
           split at hkj
           · simp at hkj
-          · unfold derive at hkj
+          · obtain ⟨d1, hkj, hd1⟩ := List.mem_map.mp hkj
+            unfold derive at hkj
             rw [ite_eq_left (by simp [envE, Mode.isRoot])] at hkj
-            simp only [List.mem_singleton, Dep.mk.injEq] at hkj
-            rw [hkj.2, rootKind_isName]; exact hLn jk hjk
+            simp only [List.mem_singleton] at hkj; subst hkj
+            have := congrArg Dep.kind hd1
+            simp only [Dep.coarse_kind] at this
+            rw [← this, Kind.coarse_isName, rootKind_isName]; exact hLn jk hjk
         · exact absurd rfl ((argDeps_open hw hrl hni he hzs hj0).2 ⟨e, k⟩ hkj)
       · exact absurd ((heldOfArgs_open hw hrl hni he hzs hc hlc htc).2 _ hke) (by simp)
     replace hd' := (mem_envE_deps hd').1
@@ -1204,8 +1214,13 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
       exact ⟨hdEc, hnm⟩
     · -- AGORA-937 (3d): what the package reaches, each in its own way, composed
       have hd'n : d'.kind.isName = false := by simpa using hnm
+      have hki : k.isIdx = false := by
+        rcases List.mem_append.mp hek with hke | hke
+        · obtain ⟨jk, _, hkj⟩ := List.mem_flatMap.mp hke
+          exact argDeps_notIdx hkj
+        · exact heldOfArgs_notIdx hke
       have hk4 : k = .self ∨ k = .inner ∨ k = .view ∨ k = .share := by
-        cases k <;> simp_all [Kind.isName]
+        cases k <;> simp_all [Kind.isName, Kind.isIdx]
       have hmem : ∀ d0 ∈ memDeps (derive c Ec .self ++ Ec.held),
           d0 ∈ memDeps (derive c Ec .self) ++ memDeps Ec.held := fun d0 h => by
         rcases memDeps_app h with h | h
@@ -1353,7 +1368,7 @@ theorem heldOfArgs_append_nil {Γ : Ctx} {as caps : List Var} (h : ∀ a ∈ cap
   rw [List.flatMap_append, List.flatMap_append, flatMap_nil_of (l := caps) (fun a ha => ?_),
     flatMap_nil_of (l := caps) (fun a ha => ?_), List.append_nil, List.append_nil]
   · simp [h a ha, nameDeps]
-  · simp [hh a ha, memDeps]
+  · simp [hh a ha, memDeps, coarseMem]
 
 theorem callRes_append {Γ : Ctx} {fn : Fn} {as caps : List Var}
     (hl : ∀ jk ∈ fn.lends, jk.1 < as.length) (hr : ∀ jk ∈ fn.rholds, jk.1 < as.length)

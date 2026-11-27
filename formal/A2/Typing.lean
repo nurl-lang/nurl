@@ -422,6 +422,13 @@ theorem Dep.coarse_eq {d : Dep} (h : d.kind.isIdx = false) : d.coarse = d := by
 theorem Dep.eq_of_coarse_name {d d0 : Dep} (h : d = d0.coarse) (hn : d.kind.isName = true) : d = d0 := by
   subst h; obtain ⟨r, k⟩ := d0; cases k <;> simp_all [Dep.coarse, Kind.coarse, Kind.isName]
 
+theorem coarseMem_mono {a b : List Dep} (h : a ⊆ b) : coarseMem a ⊆ coarseMem b := fun d hd => by
+  obtain ⟨d0, h0, rfl⟩ := mem_coarseMem.mp hd
+  exact mem_coarseMem.mpr ⟨d0, List.mem_filter.mpr ⟨h (List.mem_filter.mp h0).1, (List.mem_filter.mp h0).2⟩, rfl⟩
+
+theorem mem_roots_of_map_coarse {L : List Dep} {d : Dep} (h : d ∈ L.map Dep.coarse) : d.root ∈ roots L := by
+  rw [← roots_map_coarse]; exact List.mem_map_of_mem h
+
 theorem coarseMem_of_notIdx {ds : List Dep} {d : Dep} (h : d ∈ memDeps ds) (hi : d.kind.isIdx = false) :
     d ∈ coarseMem ds :=
   mem_coarseMem.mpr ⟨d, h, by cases d; simp [Dep.coarse, Kind.coarse_of_not_idx hi]⟩

@@ -451,6 +451,27 @@ theorem comp_notIdx {a b : Kind} (ha : a.isIdx = false) (hb : b.isIdx = false) :
     (comp a b).isIdx = false := by
   cases a <;> cases b <;> simp_all [comp, Kind.isIdx]
 
+/-- AGORA-374: what a call lends names no index: the call speaks in the four
+    memory ways. -/
+theorem argDeps_notIdx {Γ : Ctx} {args : List Var} {jk : Nat × Kind} {d : Dep} (h : d ∈ argDeps Γ args jk) :
+    d.kind.isIdx = false := by
+  unfold argDeps at h; split at h
+  · cases h
+  · obtain ⟨d0, _, rfl⟩ := List.mem_map.mp h; simp
+
+theorem heldOfArgs_notIdx {Γ : Ctx} {args : List Var} {d : Dep} (h : d ∈ heldOfArgs Γ args) :
+    d.kind.isIdx = false := by
+  unfold heldOfArgs at h
+  rcases List.mem_append.mp h with h | h
+  · obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_compAll.mp h
+    obtain ⟨_, _, _, hm⟩ := mem_argMem.mp hd0
+    exact comp_notIdx (coarseMem_notIdx hm) (by rcases hk with rfl | rfl | rfl | rfl <;> rfl)
+  · simp only [argNames, List.mem_flatMap] at h
+    obtain ⟨a, _, ha⟩ := h
+    split at ha
+    · cases ha
+    · exact Kind.notIdx_of_name (List.mem_filter.mp ha).2
+
 theorem comp_share {a b : Kind} (hb : b.isName = false) (h : comp a b ≠ .share) : a ≠ .share := by
   rintro rfl; cases b <;> simp_all [comp, Kind.isName]
 
