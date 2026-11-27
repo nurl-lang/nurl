@@ -1066,6 +1066,16 @@ import D
 #print axioms C.cert3_safe
 #print axioms C.cert3_race
 #print axioms C.cert3_leak
+
+-- Phase C15: conditional certificates, a program with assumed functions (AGORA-1015)
+#print axioms C.ThruFn.complete_iff
+#print axioms C.StmtT.complete
+#print axioms C.FnOK.complete
+#print axioms C.certOK2BA_typed
+#print axioms C.cert_safe_cond
+#print axioms C.cert_leak_end_cond
+#print axioms C.cert_leak_panic_cond
+#print axioms C.cond_witness_safe
 -- AGORA-1029 step 2: the term of a scalar program, built by the kernel from the core IR's words
 #print axioms C.Elab.elabIs_sound
 #print axioms C.Elab.editBeq_sound
