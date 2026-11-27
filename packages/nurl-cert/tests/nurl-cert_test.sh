@@ -112,11 +112,12 @@ want_elab=$(printf '%s\n' cursor_over_a_vec int_recursion_early_return joins_eac
     clo_number_capture_called clo_returned_owning_a_vec_capture clo_returned_with_a_number_capture \
     clo_string_captured_and_read_after clo_two_captures_passed_to_a_function \
     struct_field_handed_to_a_reader struct_fields_read vec_moved_into_a_struct option_built_and_matched \
+    destructor_frame_left_by_an_early_return destructor_reads_a_view_of_a_live_source \
     | sort | tr '\n' ' ')
-if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 30 accepted certify programs in the subset have Elab.lean (Cert.elab)"
-else bad "exactly the 30 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
-if grep -qx "ok destructor_frame_left_by_an_early_return accepted (translator)" "$TMP/progs.txt"; then ok "destructor_frame_left_by_an_early_return (outside the subset): no Elab.lean, and it verifies"
-else bad "destructor_frame_left_by_an_early_return (outside the subset): no Elab.lean, and it verifies"; fi
+if [ "$have_elab" = "$want_elab" ]; then ok "exactly the 32 accepted certify programs in the subset have Elab.lean (Cert.elab)"
+else bad "exactly the 32 accepted certify programs in the subset have Elab.lean (Cert.elab): have $have_elab"; fi
+if grep -qx "ok chan_int_sent_and_received accepted (translator)" "$TMP/progs.txt"; then ok "chan_int_sent_and_received (outside the subset): no Elab.lean, and it verifies"
+else bad "chan_int_sent_and_received (outside the subset): no Elab.lean, and it verifies"; fi
 
 echo "== 1b. one Lean file, and the module way"
 # certify and verify check a bundle in one Lean file (Program.lean's
@@ -190,7 +191,9 @@ for n in moved_on_one_branch_then_read_refused owner_moved_in_a_loop_without_ret
     clo_called_on_a_moved_vec_refused clo_called_with_a_moved_vec_refused \
     clo_changes_a_captured_vec_under_a_slice_refused \
     clo_returned_over_a_parameter_then_called_after_its_free_refused \
-    clo_string_capture_rebound_then_called_refused; do
+    clo_string_capture_rebound_then_called_refused \
+    destructor_frame_left_by_an_early_return_after_its_source_moved_refused \
+    destructor_reads_a_view_of_a_moved_source_refused; do
     pl="$TMP/progs/$n/$n.cert/Program.lean"
     c=$(python3 - "$pl" "$ctors" <<'EOF2'
 import re, sys
@@ -201,7 +204,7 @@ EOF2
 )
     if [ "$c" = yes ] && grep -qx "ok $n refused" "$TMP/progs.txt"; then nref=$((nref + 1)); else badref="$badref $n"; fi
 done
-[ "$nref" = 19 ] && ok "the 19 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
+[ "$nref" = 21 ] && ok "the 21 refused programs in the subset (an Elab.lean part beside the claims' refusal) are refused" \
     || bad "the refused programs in the subset are refused:$badref"
 R="$TMP/rv"; rm -rf "$R"; cp -r "$TMP/progs/vec_push_len/vec_push_len.cert" "$R"
 cp "$TMP/progs/use_after_move_refused/use_after_move_refused.cert/Program.lean" "$R/Program.lean"
@@ -239,10 +242,11 @@ if [ "$krc" = 0 ] && grep -q "M.safe proved" "$K/out" && grep -q "M.leak proved"
 else bad "a Lean run that dies in the Elab.lean part (certify rc $krc, verify rc $kvrc)"; head -8 "$K/out"; fi
 
 echo "== 2. tampering"
-# (a program outside C.Elab's subset: its bundle's term is the translator's,
-# and its ledger row the one a downgraded bundle must have, part 2b)
+# (a program outside C.Elab's subset, a channel's since step 8 took the
+# destructor programs in: its bundle's term is the translator's, and its
+# ledger row the one a downgraded bundle must have, part 2b)
 P="$TMP/t"; mkdir -p "$P"
-cp tools/ncore/certify/destructor_frame_left_by_an_early_return.nu "$P/prog.nu"
+cp tools/ncore/certify/chan_int_sent_and_received.nu "$P/prog.nu"
 "$ROOT/nurl.sh" "$P/prog.nu" "$P/prog" > /dev/null 2>&1 || bad "the program builds"
 cp "$P/prog" "$P/other"; printf 'x' >> "$P/other"
 "$C" certify "$P/prog.nu" "${CA[@]}" --binary "$P/prog" > /dev/null 2>&1 || bad "certify the tamper program"

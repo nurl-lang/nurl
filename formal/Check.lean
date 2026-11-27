@@ -1079,6 +1079,8 @@ import D
 -- AGORA-1029 step 7: structs and options
 #print axioms C.Elab.elab_struct
 #print axioms C.Elab.elab_opt
+-- AGORA-1029 step 8: destructor frames (stmtBeq_sound covers `letd`)
+#print axioms C.Elab.elab_dtor
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided
