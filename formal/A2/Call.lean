@@ -3809,14 +3809,14 @@ theorem rr_sub (h : CallH P Γ F x fn args base) {L T : List Dep}
           · exact absurd hm (h.noInout _ Ea b' hEa)
         have hni : Ea.ty ≠ .int := by
           intro hi; rw [hty] at hi; rw [hi] at hown'; cases hown'
-        have hfk : rootKind Ea.ty kd = kd := by rw [hty]; exact hfit b _ hget
+        have hfk : rootKind Ea.ty kd = kd := by rw [hty]; exact hfit.1 b _ hget
         refine ⟨by show (Γ (callRen fn.params args base j)).isSome = true; rw [hρ, hEa]; rfl, hsub ?_⟩
         unfold argDeps
         rw [hae, ite_eq_right hni]
-        simp [derive, hown, Mode.isRoot, hρ, hfk]
+        simp [derive, hown, Mode.isRoot, hρ, hfk, Dep.coarse, Kind.coarse_of_not_idx hfit.2]
   · -- reached through the `in` parameter `k`
     have hkd : (⟨base + 0 + k, kd0⟩ : Dep) ∈ L := hkL
-    rcases hL _ hkd with ⟨hdom, _⟩ | ⟨j, kd, he, _, hsub, hkn, _⟩
+    rcases hL _ hkd with ⟨hdom, _⟩ | ⟨j, kd, he, _, hsub, hkn, hfit⟩
     · exfalso
       obtain ⟨E, hE⟩ := Option.isSome_iff_exists.mp hdom
       exact absurd (vlt (h.domlt _ E hE))
@@ -3837,34 +3837,37 @@ theorem rr_sub (h : CallH P Γ F x fn args base) {L T : List Dep}
       split at hd''
       · simp at hd''
       · rename_i hn
+        -- (AGORA-374: the parameter is its argument coarsened, as the call lends)
+        have hki : kd.isIdx = false := hfit.2
         rcases List.mem_append.mp hd'' with hd'' | hd''
-        · apply hsub
+        · obtain ⟨e, he, rfl⟩ := typedDeps_coarse hd''
+          apply hsub
           unfold argDeps
           rw [ite_eq_right hn]
-          exact derive_comp (typedDeps_sub _ _ hd'') kd
-        · replace hd'' := typedDeps_sub _ _ hd''
+          show (⟨e.root, comp e.kind.coarse kd⟩ : Dep) ∈ _
+          rw [comp_coarse_of hki]
+          exact List.mem_map_of_mem (f := Dep.coarse) (derive_comp he kd)
+        · obtain ⟨e, he, rfl⟩ := List.mem_map.mp (typedDeps_sub _ _ hd'')
           apply hR
           unfold heldOfArgs
           have hmem : args.getD j 0 ∈ args := by
             have := lt_of_get hk
             simp [List.getD, show j < args.length from h.len ▸ this]
-          cases hk' : d''.kind.isName with
+          cases hk' : e.kind.isName with
           | false =>
-            have hcn : (comp d''.kind kd).isName = false := by
-              revert hk' hkn; generalize d''.kind = a; generalize kd = b
-              cases a <;> cases b <;> simp [comp, Kind.isName]
-            have _ := hcn
-            exact List.mem_append_left _ (mem_compAll.mpr ⟨d'', mem_argMem.mpr ⟨args.getD j 0, hmem, hn,
-              List.mem_filter.mpr ⟨hd'', by simp [hk']⟩⟩, kd, RSetup.kind4 hkn, rfl⟩)
+            exact List.mem_append_left _ (mem_compAll.mpr ⟨e.coarse, mem_argMem.mpr ⟨args.getD j 0, hmem, hn,
+              mem_coarseMem.mpr ⟨e, List.mem_filter.mpr ⟨he, by simp [hk']⟩, rfl⟩⟩, kd,
+              RSetup.kind4 hkn hki, rfl⟩)
           | true =>
-            have hcn : comp d''.kind kd = d''.kind := by
-              revert hk'; generalize d''.kind = a; generalize kd = b
+            rw [Dep.coarse_eq (Kind.notIdx_of_name hk')]
+            have hcn : comp e.kind kd = e.kind := by
+              revert hk'; generalize e.kind = a; generalize kd = b
               cases a <;> cases b <;> simp [comp, Kind.isName]
-            have he' : (⟨d''.root, comp d''.kind kd⟩ : Dep) = d'' := by rw [hcn]
+            have he' : (⟨e.root, comp e.kind kd⟩ : Dep) = e := by rw [hcn]
             rw [he']
             refine List.mem_append_right _ (List.mem_flatMap.mpr ⟨args.getD j 0, hmem, ?_⟩)
             rw [ite_eq_right hn]
-            exact List.mem_filter.mpr ⟨by unfold Entry.vdeps; exact List.mem_append_right _ hd'', hk'⟩
+            exact List.mem_filter.mpr ⟨by unfold Entry.vdeps; exact List.mem_append_right _ he, hk'⟩
 
 /-- A lifted list of the callee's dependencies on lendable parameters, as
     the exits leave it. -/
@@ -3959,7 +3962,8 @@ theorem σC_held (h : CallH P Γ F x fn args base) {v : Var} {k : Kind} {d : Dep
     (hd : (callS Γ F fn args base x).σC v k d) : d ∈ heldOfArgs Γ args :=
   by
     obtain ⟨e0, he0, rfl, hk⟩ := hd
-    exact List.mem_append_left _ (mem_compAll.mpr ⟨e0, h.sOK.σ_Rd v he0, k, RSetup.kind4 hk, rfl⟩)
+    exact List.mem_append_left _ (mem_compAll.mpr ⟨e0, h.sOK.σ_Rd v he0, k.coarse,
+      RSetup.kind4 (by simpa using hk) (Kind.coarse_isIdx k), rfl⟩)
 
 /-- AGORA-937 (turn-on 3): `lift_sub`, substituted, for a list of the
     callee's dependencies on lendable parameters or on regions: a region's
@@ -4531,6 +4535,12 @@ theorem thruReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (hc : 
       have := Nat.add_lt_add_left hlt fn.nvars; rwa [← hu'] at this
     simp only [callS]
     rw [ite_cond_eq_true _ _ (eq_true ⟨hle, hul⟩)]
+    -- (AGORA-374: a region stands for views and handles, which name no index)
+    split
+    · rfl
+    · rename_i hint
+      rw [coarseMem_eq fun e he => by
+        rcases (hreg _ hlt hrg hint e he).1 with h' | h' <;> rw [h'] <;> rfl]
   -- a root a region stands for: in what the call passes views of
   have hroot : ∀ u, (callS Γ F fn args base x).isPi u = true → ∀ e ∈ (callS Γ F fn args base x).σ u,
       e.root ∈ callR Γ args := by
@@ -4548,7 +4558,7 @@ theorem thruReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (hc : 
       simpa [List.getElem?_eq_getElem hil, regioned] using hrg
     rcases hnr i hil hrf with h' | h'
     · exact hint h'
-    · rw [h'] at hdm; cases hdm
+    · unfold coarseMem at hdm; rw [h'] at hdm; cases hdm
   obtain ⟨p, hp, rfl, hph, hσu⟩ := hσ _ hu
   refine ⟨fun e he => ?_, fun e he => ?_⟩
   · rw [hσu] at he; split at he
@@ -4604,18 +4614,18 @@ theorem thruReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (hc : 
       · simp only [Entry.vdeps, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, List.mem_append] at hd
         rcases hd with hd | hd
         · exfalso
-          have hd' := typedDeps_sub _ _ hd
+          obtain ⟨d1, hd', rfl⟩ := typedDeps_coarse hd
           unfold derive at hd'
           split at hd'
           · simp only [List.mem_singleton] at hd'; subst hd'
             exact hna (hr ▸ hmemA w' hwl)
           · obtain ⟨e0, he0, rfl⟩ := List.mem_map.mp hd'
             exact hpath _ (hmemA w' hwl) e0 he0 hr
-        · have hd' := typedDeps_sub _ _ hd
-          rcases hkind _ (hmemA w' hwl) d (by unfold Entry.vdeps; exact List.mem_append_right _ hd') hr with
+        · obtain ⟨d1, hd', rfl⟩ := typedDeps_coarse hd
+          rcases hkind _ (hmemA w' hwl) d1 (by unfold Entry.vdeps; exact List.mem_append_right _ hd') hr with
             h' | h'
-          · exact Or.inl h'
-          · exact Or.inr (Or.inl h')
+          · exact Or.inl (by simp [Dep.coarse, h', Kind.coarse])
+          · exact Or.inr (Or.inl (by simp [Dep.coarse, h', Kind.coarse]))
     · simp [Entry.vdeps, Mode.ownSlot] at hd
   · -- nothing live after the call is ended by the change inside
     intro y E hy hlE

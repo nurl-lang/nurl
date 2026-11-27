@@ -402,6 +402,14 @@ theorem coarseMem_roots {ds : List Dep} {d : Dep} (h : d ∈ coarseMem ds) : d.r
 @[simp] theorem roots_map_coarse (L : List Dep) : roots (L.map Dep.coarse) = roots L := by
   simp [roots, Function.comp_def]
 
+/-- AGORA-374: where nothing names an index, forgetting indices changes nothing. -/
+theorem coarseMem_eq {L : List Dep} (h : ∀ e ∈ memDeps L, e.kind.isIdx = false) : coarseMem L = memDeps L := by
+  unfold coarseMem
+  conv => rhs; rw [← List.map_id (memDeps L)]
+  apply List.map_congr_left
+  intro e he; obtain ⟨r, k⟩ := e
+  simp [Dep.coarse, Kind.coarse_of_not_idx (h _ he)]
+
 theorem Kind.notIdx_of_name {k : Kind} (h : k.isName = true) : k.isIdx = false := by
   cases k <;> simp_all [Kind.isName, Kind.isIdx]
 
