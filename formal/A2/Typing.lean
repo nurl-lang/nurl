@@ -1264,10 +1264,11 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | take => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
-    lends nothing. -/
+    lends nothing.  (AGORA-374: a summary speaks of its parameters in the
+    four memory ways: an index it names is forgotten, `Kind.coarse`.) -/
 def argDeps (Γ : Ctx) (args : List Var) (jk : Nat × Kind) : List Dep :=
   if (argE Γ (args.getD jk.1 0)).ty = .int then []
-  else derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2
+  else derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2.coarse
 
 /-- Every dependency of every kind on the given roots. -/
 def allKinds (rs : List Var) : List Dep :=

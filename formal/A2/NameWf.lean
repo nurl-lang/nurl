@@ -477,7 +477,7 @@ theorem argDeps_name {Γ : Ctx} {args : List Var} {jk : Nat × Kind} (hk : jk.2.
   unfold derive at hd
   split at hd
   · simp only [List.mem_singleton] at hd; subst hd
-    simp only [rootKind_isName] at hn; rw [hk] at hn; cases hn
+    simp only [rootKind_isName, Kind.coarse_isName] at hn; rw [hk] at hn; cases hn
   · rename_i hr
     obtain ⟨d', hd', rfl⟩ := List.mem_map.mp hd
     have ho : (argE Γ (args.getD jk.1 0)).mode.ownSlot = false := by
@@ -624,7 +624,7 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
     unfold argDeps
     split
     · exact DepsNamed.nil _
-    · rename_i hni; exact derive_named (hargN jk.1 hj hni) hk
+    · rename_i hni; exact derive_named (hargN jk.1 hj hni) (by simpa using hk)
   have hheld : DepsNamed Γ (heldOfArgs Γ args) := by
     unfold heldOfArgs
     have hc : DepsNamed Γ (compAll (argMem Γ args)) := fun d hd b t hk => by

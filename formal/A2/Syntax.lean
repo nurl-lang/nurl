@@ -853,6 +853,22 @@ def Kind.isName : Kind → Bool
   | .name _ _ => true
   | _ => false
 
+/-- AGORA-374: a dependency inside one element by its index. -/
+def Kind.isIdx : Kind → Bool
+  | .innerAt _ => true
+  | _ => false
+
+/-- AGORA-374: a kind with its index forgotten: inside an element, at
+    whatever index (what a renaming puts in the caller's frame, which speaks
+    of its roots in four memory ways: `allKinds`). -/
+def Kind.coarse : Kind → Kind
+  | .innerAt _ => .inner
+  | k => k
+
+@[simp] theorem Kind.coarse_isName (k : Kind) : k.coarse.isName = k.isName := by cases k <;> rfl
+@[simp] theorem Kind.coarse_isIdx (k : Kind) : k.coarse.isIdx = false := by cases k <;> rfl
+theorem Kind.coarse_of_not_idx {k : Kind} (h : k.isIdx = false) : k.coarse = k := by cases k <;> simp_all [Kind.isIdx, Kind.coarse]
+
 /-- What a dependency by name lets the closure holding it do to its binding. -/
 def Kind.bound : Kind → Eff
   | .name b _ => b
@@ -874,7 +890,7 @@ def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
   | .none, _ => false
   | .realloc, .view => true
   | .realloc, .inner => false
-  | .realloc, .innerAt _ => true   -- AGORA-374: a push may be an insert's first step (`StmtT.insert`), which moves elements up one index
+  | .realloc, .innerAt _ => true   -- AGORA-374: a push may be an insert's first step (`StmtT.insert`), which moves elements up one index; so may a callee's push through an `inout` bound
   | .realloc, .share => false
   | .realloc, .self => hv
   | .dropIn, .self => hv

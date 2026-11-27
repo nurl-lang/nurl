@@ -426,6 +426,18 @@ theorem comp_isName {a b : Kind} (ha : a.isName = false) (hb : b.isName = false)
     (comp a b).isName = false := by
   cases a <;> cases b <;> simp_all [comp, Kind.isName]
 
+/-- AGORA-374: forgetting indices commutes with composing. -/
+theorem comp_coarse (a k : Kind) : (comp a k).coarse = comp a.coarse k.coarse := by
+  cases a <;> cases k <;> rfl
+
+theorem comp_coarse_of {a k : Kind} (hk : k.isIdx = false) : comp a.coarse k = (comp a k).coarse := by
+  rw [comp_coarse, Kind.coarse_of_not_idx hk]
+
+/-- AGORA-374: composing two ways that name no index names none. -/
+theorem comp_notIdx {a b : Kind} (ha : a.isIdx = false) (hb : b.isIdx = false) :
+    (comp a b).isIdx = false := by
+  cases a <;> cases b <;> simp_all [comp, Kind.isIdx]
+
 theorem comp_share {a b : Kind} (hb : b.isName = false) (h : comp a b ≠ .share) : a ≠ .share := by
   rintro rfl; cases b <;> simp_all [comp, Kind.isName]
 
