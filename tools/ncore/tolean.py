@@ -22,6 +22,7 @@ INT_TYS = {"i64", "i1", "i32", "i16", "i8", "void",
 
 # Struct types from the IR's `ty` lines: name → [(field, type), …].
 STRUCTS = {}
+SCALAR_ENUMS = set()
 # The fused walk's summaries from the IR's `sum` lines: name → {key: value}.
 SUMS = {}
 
@@ -228,6 +229,27 @@ def dtor_field_ty(ft):
     return "(.slice .int)" if ft == "i8*" else lean_ty(ft)
 
 
+def result_split(inner):
+    """A result's members (`T, E` of `{ i1, T, E }`): the index of the
+    comma between them at the top level, or -1 (an option's one member)."""
+    d = 0
+    for k, c in enumerate(inner):
+        if c in "{(":
+            d += 1
+        if c in "})":
+            d -= 1
+        if d == 0 and c == "," and k + 1 < len(inner) and inner[k + 1] == " ":
+            return k
+    return -1
+
+
+def is_result(t):
+    """Is `t` a result type (`{ i1, T, E }`)?"""
+    if not (t.startswith("{ i1, ") and t.endswith(" }")):
+        return False
+    return result_split(t[len("{ i1, "):-2]) >= 0
+
+
 def lean_ty(t):
     """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
     if t.lstrip("%") in INT_TYS or t in ("i", "u", "b"):
@@ -246,11 +268,27 @@ def lean_ty(t):
         for x in [sig[0]] + sig[1]:
             lean_ty(x)
         return f"(.fn [{clo_index(t)}] .any)"
+    if is_result(t):
+        # a result `{ i1, T, E }` is `sum E T`: the error (F) the first
+        # variant, as an option's None, the value (T) the second
+        inner = t[len("{ i1, "):-2]
+        cm = result_split(inner)
+        a, e = inner[:cm], inner[cm + 2:]
+        no_clo(a)
+        no_clo(e)
+        le = lean_ty(e)
+        la = lean_ty(a)
+        return f"(.sum {le} {la})"
     if t.startswith("{ i1, ") and t.endswith(" }"):
         # an option: `sum int t`, None the first variant (formal/A2/Syntax.lean)
         return f"(.sum .int {lean_ty(no_clo(t[len('{ i1, '):-2]))})"
     if not t.startswith("%"):
         t = "%" + t   # a type argument's name, inside another (`%Vec__String`)
+    if t in SCALAR_ENUMS and t not in DTOR_TYS:
+        # an enum whose variants carry only numbers (%IoErr, %NetErr): an
+        # integer, its tag; not one with a destructor, which is A2's
+        # `Ty.dtor` (below)
+        return ".int"
     if t.startswith("%Vec__"):
         return f"(.vec {lean_ty(no_clo(t[len('%Vec__'):]))})"
     if t.startswith("%Channel__"):
@@ -351,6 +389,16 @@ def parse(text):
             i = f.index("F")
             n = int(f[i + 1])
             STRUCTS[f[1]] = [(f[i + 2 + 2 * k], f[i + 3 + 2 * k]) for k in range(n)]
+            # an enum whose variants carry only numbers (no fields)
+            j = i + 2 + 2 * n
+            if n == 0 and j < len(f) and f[j] == "V":
+                vt, q = [], j + 2
+                for _ in range(int(f[j + 1])):
+                    c = int(f[q + 1])
+                    vt += f[q + 2:q + 2 + c]
+                    q += 2 + c
+                if all(x in INT_TYS or x in ("i", "u", "b") for x in vt):
+                    SCALAR_ENUMS.add(f[1])
             if len(f) > 3 and "d" in f[3]:
                 DTOR_TYS.add(f[1])
         elif f[0] == "endfn":
@@ -645,6 +693,10 @@ class Fn:
     def rhs(self, words, dest=None, pre=None, assign=False):
         k = words[0]
         if k == "agg" and words[1] in ("T", "F") and dest is not None:
+            # (a result's literal: not translated; its type `sum E T` with an
+            # integer E reads like an option's, whose None has no payload)
+            if is_result(self.fn["vars"][dest]):
+                raise Unsupported(f"{self.fn['name']}: a result literal")
             ty = lean_ty(self.fn["vars"][dest])
             if not ty.startswith("(.sum .int "):
                 raise Unsupported(f"{self.fn['name']}: aggregate of type {ty}")
@@ -657,6 +709,11 @@ class Fn:
             return f".inr .int {self.pvar(op)}"
         if k == "payload" and words[2] == "T" and words[3] == "0":
             return f".getr {self.pvar(words[1])}"
+        if k == "payload" and words[2] == "F" and words[3] == "0":
+            # a result's error, its first variant's payload, lent
+            w1 = words[1]
+            if w1.startswith("v") and w1[1:].isdigit() and is_result(self.fn["vars"].get(int(w1[1:]), "")):
+                return f".getl {self.pvar(w1)}"
         if k == "none":
             # a slot not yet given a value: A2 binds only with one, so only a
             # scalar's (whose placeholder no read can tell apart) is translated
