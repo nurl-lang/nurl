@@ -89,6 +89,14 @@ $ `stdlib/ext/json.nu`
 
 // ── One check ────────────────────────────────────────────────────────
 
+// Lean's worker threads. A check is one file whose parallel parts are few
+// (the claims' theorems, Elab.lean's, Caps.lean's) and mostly the kernel's
+// sequential work; a worker more than two finds nothing to do and only
+// keeps an allocator heap of its own. Over the certify corpus two workers
+// against Lean's default (one per core, four here) took 3.0 % less time and
+// 0.34 % less peak memory (AGORA-1013).
+: s LEAN_THREADS `--threads=2`
+
 : LeanRun {
     b ran
     String log
@@ -430,6 +438,7 @@ $ `stdlib/ext/json.nu`
         ( string_push_str log `cannot set LEAN_PATH for Lean` )
         ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
     } {}
+    ( vec_push [String] a1 ( string_from LEAN_THREADS ) )
     ( vec_push [String] a1 ( string_from `--json` ) )
     ( vec_push [String] a1 ( string_clone all ) )
     : Run r ( nc_run lean a1 )
@@ -599,6 +608,7 @@ theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
     ? ! ( nc_write ( string_data file ) ( string_data o ) ) { ^ F } {}
     : b set ( cert_lean_env formal )
     : ( Vec String ) a ( vec_new [String] )
+    ( vec_push [String] a ( string_from LEAN_THREADS ) )
     ( vec_push [String] a ( string_from `--json` ) )
     ( vec_push [String] a ( string_clone file ) )
     : Run r ? set ( nc_run lean a ) @ Run { F -1 ( string_new ) ( string_new ) }
