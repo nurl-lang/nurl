@@ -38,7 +38,12 @@ class TypeInfo:
 
 
 def nurlc_binary():
-    return os.environ.get("NURLC") or os.path.join(ROOT, "build", "nurlc")
+    """The compiler every probe is run through, as an absolute path: NURLC
+    (a relative one from the directory the run was started in), else the
+    repository's build/nurlc. The check that it exists and the launch (with
+    cwd=ROOT) then name the same file."""
+    env = os.environ.get("NURLC")
+    return os.path.abspath(env) if env else os.path.join(ROOT, "build", "nurlc")
 
 
 def emit_core(path):
