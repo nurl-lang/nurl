@@ -302,6 +302,44 @@ $ `stdlib/ext/json.nu`
 
 @ nc_is_s s a s b → b { ^ != 0 ( nurl_str_eq a b ) }
 
+// Lean's environment, for a run on formal/'s build: `LEAN_PATH` its library
+// (`lake env lean` set the same and cost ≈ 45 ms a run before Lean
+// started, AGORA-1029 step 9; `lean` adds its own library itself), set in
+// nurl-cert's own environment, which Lean inherits, so no `env` program
+// stands between (there is none on a Windows PATH, AGORA-1031); and
+// `ELAN_TOOLCHAIN` formal/'s toolchain (formal/lean-toolchain), which elan's
+// `lean` runs, as it did when Lean ran inside formal/. No step changes the
+// working directory, so a compile certify runs meanwhile on another thread
+// starts where it was started (AGORA-1013). An `ELAN_TOOLCHAIN` the caller
+// set stands, as it did inside formal/ (so does one this function set
+// earlier). F when `LEAN_PATH` cannot be set.
+@ __lt_env s formal → b {
+    : String lp ( string_from formal )
+    ( string_push_str lp `/.lake/build/lib/lean` )
+    : b set ( __lt_setenv `LEAN_PATH` ( string_data lp ) )
+    // (set once: certify sets it before its compile thread starts, and a
+    // value already in place is not set again, so no thread starts a
+    // process while the environment changes)
+    : b had ?? ( env_get `ELAN_TOOLCHAIN` ) { T _ → T F → F }
+    ? ! had {
+        ?? ( nc_read ( string_data ( nc_join formal `lean-toolchain` ) ) ) {
+            T tc → {
+                : String tcs ( string_trim tc )
+                ? > ( string_len tcs ) 0 { : b _t ( __lt_setenv `ELAN_TOOLCHAIN` ( string_data tcs ) ) } {}
+            }
+            F → {}
+        }
+    } {}
+    ^ set
+}
+
+// Set `name` to `v` unless it holds `v` already.
+@ __lt_setenv s name s v → b {
+    : b same ?? ( env_get name ) { T x → ( nc_is_s ( string_data x ) v ) F → F }
+    ? same { ^ T } {}
+    ^ ?? ( env_set name v ) { T _ → T F _ → F }
+}
+
 // The lines of `text`'s import header: its first lines, as long as they
 // start `import `.
 @ __lt_header_lines s text → i {
@@ -332,7 +370,7 @@ $ `stdlib/ext/json.nu`
 
 // Check `bundle/Program.lean` and `bundle/Claims.lean` (and with `elab`,
 // `bundle/Elab.lean`) in one Lean process: the file `__lt_combined` makes,
-// in `work`, run by `lean --json` inside formal/ with formal/'s build on
+// in `work`, run by `lean --json` with formal/'s toolchain and its build on
 // `LEAN_PATH` (`<formal>/.lake/build/lib/lean`, set in the environment, so
 // that `import C.Cert` is formal/'s). Each message is the claims' (`log`) or Elab.lean's
 // (`elab_log`) by its own position, not by where it comes in the output: a
@@ -386,36 +424,15 @@ $ `stdlib/ext/json.nu`
         ( string_push_str log ( string_data all ) )
         ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
     } {}
-    : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
-    ?? ( env_chdir formal ) {
-        T _ → {}
-        F _ → {
-            ( string_push_str log `cannot enter the formal tree ` )
-            ( string_push_str log formal )
-            ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
-        }
-    }
     : ( Vec String ) a1 ( vec_new [String] )
-    // (`lake env lean` set the same `LEAN_PATH` and cost ≈ 45 ms a run
-    // before Lean started, AGORA-1029 step 9; `lean` adds its own library
-    // itself. Run inside formal/, elan's `lean` picks formal/'s toolchain,
-    // as its `lake` did; `LEAN_PATH` is set, not inherited: nurl-cert sets
-    // it in its own environment, which Lean inherits, so no `env` program
-    // stands between (there is none on a Windows PATH, AGORA-1031).)
-    : String lp ( string_from formal )
-    ( string_push_str lp `/.lake/build/lib/lean` )
-    ?? ( env_set `LEAN_PATH` ( string_data lp ) ) {
-        T _ → {}
-        F _ → {
-            ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
-            ( string_push_str log `cannot set LEAN_PATH for Lean` )
-            ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
-        }
-    }
+    // (Lean's environment: `__lt_env`)
+    ? ! ( __lt_env formal ) {
+        ( string_push_str log `cannot set LEAN_PATH for Lean` )
+        ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
+    } {}
     ( vec_push [String] a1 ( string_from `--json` ) )
     ( vec_push [String] a1 ( string_clone all ) )
     : Run r ( nc_run lean a1 )
-    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     : b has_elab ?? etext { T _ → T F → F }
     : b has_caps ?? ktext { T _ → T F → F }
     : ~ String elog ( string_new )
@@ -549,38 +566,42 @@ $ `stdlib/ext/json.nu`
 @ cert_lean_refutes s lean s formal s bundle s work b threads b cond → b {
     : String ptext ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → { ^ F } }
     : String o ( string_new )
-    ? threads { ( string_push_str o `import C.Cert3
-` ) } {}
-    ? cond { ( string_push_str o `import C.Complete
-` ) } {}
-    ( string_push_str o ( string_data ptext ) )
-    ? threads {
-        ( string_push_str o `
-theorem refuted : C.certOK3B P spawns entry 1 = false := by decide +kernel
+    ? cond {
+        ( string_push_str o `import C.Complete
 ` )
     } {
-        ? cond {
+        ? threads { ( string_push_str o `import C.Cert3
+` ) } {}
+    }
+    ( string_push_str o ( string_data ptext ) )
+    ? & threads cond {
+        ( string_push_str o `
+theorem refuted : C.certOK3BA P spawns assumed entry 1 = false := by decide +kernel
+` )
+    } {
+        ? threads {
             ( string_push_str o `
-theorem refuted : C.certOK2BA P assumed entry 1 = false := by decide +kernel
+theorem refuted : C.certOK3B P spawns entry 1 = false := by decide +kernel
 ` )
         } {
-            ( string_push_str o `
+            ? cond {
+                ( string_push_str o `
+theorem refuted : C.certOK2BA P assumed entry 1 = false := by decide +kernel
+` )
+            } {
+                ( string_push_str o `
 theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
 ` )
+            }
         }
     }
     : String file ( nc_join work `Refute.lean` )
     ? ! ( nc_write ( string_data file ) ( string_data o ) ) { ^ F } {}
-    : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
-    ?? ( env_chdir formal ) { T _ → {} F _ → { ^ F } }
-    : String lp ( string_from formal )
-    ( string_push_str lp `/.lake/build/lib/lean` )
-    : b set ?? ( env_set `LEAN_PATH` ( string_data lp ) ) { T _ → T F _ → F }
+    : b set ( __lt_env formal )
     : ( Vec String ) a ( vec_new [String] )
     ( vec_push [String] a ( string_from `--json` ) )
     ( vec_push [String] a ( string_clone file ) )
     : Run r ? set ( nc_run lean a ) @ Run { F -1 ( string_new ) ( string_new ) }
-    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     // proved: Lean exited 0, wrote no error and nothing on stderr
     ^ & & & . r started == . r code 0 ! ( string_contains . r out `\"severity\":\"error\"` ) == 0 ( string_len . r err )
 }

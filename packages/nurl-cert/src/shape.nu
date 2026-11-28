@@ -304,8 +304,9 @@ $ `stdlib/core/slice.nu`
                                 } {}
                                 ? ( __sh_starts t a z `def assumed : List Nat := [` ) {
                                     // A conditional certificate: the assumed functions' indices
-                                    // (formal/C/Complete.lean), non-empty list of numbers right after entry.
-                                    ? | | have_assumed have_spawns ! have_entry { ^ ( __sh_bad `assumed not right after entry` line ) } {}
+                                    // (formal/C/Complete.lean), non-empty list of numbers right after
+                                    // entry (or after spawns for a threaded program, AGORA-1035).
+                                    ? | have_assumed ! have_entry { ^ ( __sh_bad `assumed not after entry` line ) } {}
                                     ? ! ( __sh_nat_list_parse t + a 27 z assumed ) { ^ ( __sh_bad `assumed is not a non-empty list of distinct function numbers` line ) } {}
                                     = have_assumed T
                                     = in_def F

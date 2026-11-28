@@ -1076,6 +1076,12 @@ import D
 #print axioms C.cert_leak_end_cond
 #print axioms C.cert_leak_panic_cond
 #print axioms C.cond_witness_safe
+-- AGORA-1035: conditional certificates for threaded programs (A3)
+#print axioms C.certOK3BA_claim
+#print axioms C.cert3_safe_cond
+#print axioms C.cert3_race_cond
+#print axioms C.cert3_leak_cond
+#print axioms C.cond3_witness_race
 -- AGORA-1029 step 2: the term of a scalar program, built by the kernel from the core IR's words
 #print axioms C.Elab.elabIs_sound
 #print axioms C.Elab.editBeq_sound

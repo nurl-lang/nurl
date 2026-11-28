@@ -3222,7 +3222,8 @@ $ `coreir.nu`
     ( __sw f `vec_free__` ) ( __sw f `vec_at__` ) { ^ T } {}
     ? | | | | ( __sw f `slice_from_vec__` ) ( __sw f `slice_len__` ) ( __sw f `chan_new__` )
     ( __sw f `Channel_share__` ) ( __sw f `chan_send__` ) { ^ T } {}
-    ^ | | ( __sw f `chan_recv__` ) ( __sw f `chan_try_recv__` ) ( __sw f `chan_close__` )
+    ? | | ( __sw f `chan_recv__` ) ( __sw f `chan_try_recv__` ) ( __sw f `chan_close__` ) { ^ T } {}
+    ^ ( __eq f `thread_join` )
 }
 
 // Classify rvalue at word offset `off` of line `l` in function `p` for a stub:
@@ -3437,7 +3438,7 @@ $ `coreir.nu`
     : ~ i p 0
     : ~ String first ( string_new )
     : ~ b failed F
-    : ~ b stub_ok & all ! threaded
+    : ~ b stub_ok all
     : ( Vec i ) assumed ( vec_new [i] )
     ~ & < p nfn | all ! failed {
         : i nclo0 ( vec_len [String] . t clo_list )
@@ -3568,7 +3569,18 @@ $ `coreir.nu`
             ( string_push_int out + + nfn nclo wj )
             = wj + wj 1
         }
-        ( string_push_str out `]\n\n#eval certOK3B P spawns entry 1\n` )
+        ? cond {
+            ( string_push_str out `]\ndef assumed : List Nat := [` )
+            : ~ i ai 0
+            ~ < ai na {
+                ? > ai 0 { ( string_push_str out `, ` ) } {}
+                ( string_push_int out ( vec_at [i] assumed ai ) )
+                = ai + ai 1
+            }
+            ( string_push_str out `]\n\n#eval certOK3BA P spawns assumed entry 1\n` )
+        } {
+            ( string_push_str out `]\n\n#eval certOK3B P spawns entry 1\n` )
+        }
         // the spawn sites name their wrapper `@W<j>@` until the wrappers'
         // indices are known
         ^ @ !String String { T ( __subst_wrappers ( string_data out ) + nfn nclo ) }

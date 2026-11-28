@@ -25,6 +25,8 @@ $ `tolean.nu`
 $ `words.nu`
 $ `caps.nu`
 $ `stdlib/std/random.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/channel.nu`
 
 : s NURLCERT_VERSION ( pkg_version )
 
@@ -432,7 +434,9 @@ open A2 C
     ^ id
 }
 
-@ cert_assumed_row AssumedRow a → Json {
+// (`caps`: N.cap is proved, about the program with its stubs: the row backs
+// it too)
+@ cert_assumed_row AssumedRow a b threads b caps → Json {
     : String id ( cert_assumed_id ( string_data . a name ) )
     : String what ( string_from `function ` )
     ( string_push_str what ( string_data . a name ) )
@@ -444,9 +448,10 @@ open A2 C
     ( string_push_str what ( string_data . a callees ) )
     ( string_push_str what `]; hasThru ` )
     ( string_push_str what ? . a has_thru `true` `false` )
-    ( string_push_str what `) and proof obligations (FnOK, codesOK)` )
+    ( string_push_str what ? threads `) and proof obligations (FnOK, codesOK, globsAt)` `) and proof obligations (FnOK, codesOK)` )
+    : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
     ^ ( mj_row ( string_data id ) ( string_data what ) ( string_data . a why ) ( string_data . a loc )
-    `assumed (not translated; checked only by signature and call summary)` `M.safe M.leak` )
+    `assumed (not translated; checked only by signature and call summary)` ? caps ( string_data ( __ct_with_ncap mc ) ) mc )
 }
 
 // `elab`: the bundle has Elab.lean, so the term is the kernel's
@@ -525,7 +530,7 @@ open A2 C
     : i na ( vec_len [AssumedRow] assumed_rows )
     : ~ i ak 0
     ~ < ak na {
-        ( json_arr_push L ( cert_assumed_row ( vec_at [AssumedRow] assumed_rows ak ) ) )
+        ( json_arr_push L ( cert_assumed_row ( vec_at [AssumedRow] assumed_rows ak ) threads caps ) )
         = ak + ak 1
     }
     ^ L
@@ -666,6 +671,41 @@ open A2 C
     ^ c
 }
 
+// The second compile (the LLVM IR and the unsafe report) and nurlc's
+// version, on a thread: a channel the two runs come back on, in that
+// order. Where no thread starts, both run here first.
+: Compile2 {
+    ( Channel Run ) ch
+    Thread th
+}
+
+@ __ct_compile2_run String nurlc ( Vec String ) a2 ( Channel Run ) tx → v {
+    ( chan_send [Run] tx ( nc_run ( string_data nurlc ) a2 ) )
+    : ( Vec String ) a3 ( vec_new [String] )
+    ( vec_push [String] a3 ( string_from `--version` ) )
+    ( chan_send [Run] tx ( nc_run ( string_data nurlc ) a3 ) )
+}
+
+@ __ct_compile2 String nurlc ( Vec String ) a2 → Compile2 {
+    : ( Channel Run ) ch ( chan_new [Run] )
+    : ( Channel Run ) tx ( Channel_share [Run] ch )
+    : String n2 ( string_clone nurlc )
+    : ( Vec String ) b2 ( vec_clone [String] a2 )
+    : ( @ v ) job \ → v { ( __ct_compile2_run nurlc a2 tx ) }
+    ^ ?? ( thread_spawn_owned job ) {
+        T t → @ Compile2 { ch t }
+        F _ → {
+            ( __ct_compile2_run n2 b2 ch )
+            @ Compile2 { ch ( thread_null ) }
+        }
+    }
+}
+
+// The next run back from the thread (none started: not started).
+@ __ct_compile2_next Compile2 c → Run {
+    ^ ?? ( chan_recv [Run] . c ch ) { T r → r F → @ Run { F -1 ( string_new ) ( string_new ) } }
+}
+
 @ __ct_fail s msg → i {
     ( nurl_eprint `nurl-cert: ` )
     ( nurl_eprintln msg )
@@ -726,7 +766,12 @@ open A2 C
         ^ ( __ct_fail `a source file on disk is not the bytes nurlc compiled (changed during the run?); nothing is certified` )
     } {}
 
-    // 2. nurlc: the LLVM IR and the unsafe report.
+    // 2. nurlc: the LLVM IR and the unsafe report, and nurlc's version. They
+    // go only into the manifest, so they run on a thread while the
+    // translation and Lean run (`__ct_compile2`), and are read after Lean.
+    // The thread starts them here, with the standard library's root the
+    // working directory, which no step changes until they are read
+    // (Lean's run sets its toolchain in the environment, `__lt_env`).
     : ( Vec String ) a2 ( vec_new [String] )
     ( vec_push [String] a2 ( string_from `--unsafe-report` ) )
     : String tag2 ( rand_hex_str 16 )
@@ -734,28 +779,9 @@ open A2 C
     ( string_push_str tag2_arg ( string_data tag2 ) )
     ( vec_push [String] a2 tag2_arg )
     ( vec_push [String] a2 ( string_from src ) )
-    : Run r2 ( nc_run ( string_data . o nurlc ) a2 )
-    ? ! . r2 started { ^ ( __ct_fail `nurlc did not start` ) } {}
-    // This compile read the sources again: its LLVM IR and its unsafe
-    // report count only when it read the very bytes the first run did.
-    : ( Vec String ) sources2 ( vec_new [String] )
-    : ( Vec String ) shas2 ( vec_new [String] )
-    : ( Vec String ) rest2 ( vec_new [String] )
-    : b rec2 ( cert_records . r2 err ( string_data tag2 ) sources2 shas2 rest2 )
-    ? | | ! rec2 ! ( cert_same sources sources2 ) ! ( cert_same shas shas2 ) {
-        ^ ( __ct_fail `the compile for the LLVM IR and the unsafe report read other source bytes than the first; nothing is certified` )
-    } {}
-    // nurlc's own borrow walk may refuse a program the core IR still
-    // describes: it has no LLVM IR then, and its unsafe report is cut short.
-    : b compiled == . r2 code 0
-    : String llvm_sha ? compiled ( nc_sha256_text ( string_data . r2 out ) ) ( string_new )
-    : ( Vec String ) unsafe_rows ( __ct_unsafe_rows rest2 )
-
-    : ( Vec String ) a3 ( vec_new [String] )
-    ( vec_push [String] a3 ( string_from `--version` ) )
-    : Run r3 ( nc_run ( string_data . o nurlc ) a3 )
-    : String nurlc_ver ( __ct_first_line . r3 out )
-    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
+    // (Lean's environment is set before the thread starts: `__lt_env`)
+    ? ! ( __lt_env ( string_data . o formal ) ) { ^ ( __ct_fail `cannot set LEAN_PATH for Lean` ) } {}
+    : Compile2 c2 ( __ct_compile2 ( string_clone . o nurlc ) a2 )
 
     // 3. The translation, held to the program grammar.
     : ~ String verdict ( string_from `accepted` )
@@ -850,7 +876,8 @@ open A2 C
         : LeanRun lr ( cert_lean_check2 ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab try_caps )
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
-            = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false)`
+            = reason ( string_from ? & threads cond `the verified checker refuses the program (C.certOK3BA is false)`
+            ? threads `the verified checker refuses the program (C.certOK3B is false)`
             ? cond `the verified checker refuses the program (C.certOK2BA is false)`
             `the verified checker refuses the program (C.certOK2B is false)` )
         } {
@@ -859,7 +886,8 @@ open A2 C
             : b failed | ! . lr ran ( cert_lean_has_error . lr log )
             ? & failed ( cert_lean_refutes ( string_data . o lean ) ( string_data formal ) out ( string_data work ) threads cond ) {
                 = verdict ( string_from `refused` )
-                = reason ( string_from ? threads `the verified checker refuses the program (C.certOK3B is false, proved by the kernel)`
+                = reason ( string_from ? & threads cond `the verified checker refuses the program (C.certOK3BA is false, proved by the kernel)`
+                ? threads `the verified checker refuses the program (C.certOK3B is false, proved by the kernel)`
                 ? cond `the verified checker refuses the program (C.certOK2BA is false, proved by the kernel)`
                 `the verified checker refuses the program (C.certOK2B is false, proved by the kernel)` )
             } {
@@ -996,6 +1024,28 @@ open A2 C
         = k + k 1
     }
     // M.unsafe: what nurlc's report says.
+    // 2, read: the compile on the thread, and nurlc's version.
+    : Run r2 ( __ct_compile2_next c2 )
+    : Run r3 ( __ct_compile2_next c2 )
+    ( thread_join . c2 th )
+    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
+    ? ! . r2 started { ^ ( __ct_fail `nurlc did not start` ) } {}
+    // This compile read the sources again: its LLVM IR and its unsafe
+    // report count only when it read the very bytes the first run did.
+    : ( Vec String ) sources2 ( vec_new [String] )
+    : ( Vec String ) shas2 ( vec_new [String] )
+    : ( Vec String ) rest2 ( vec_new [String] )
+    : b rec2 ( cert_records . r2 err ( string_data tag2 ) sources2 shas2 rest2 )
+    ? | | ! rec2 ! ( cert_same sources sources2 ) ! ( cert_same shas shas2 ) {
+        ^ ( __ct_fail `the compile for the LLVM IR and the unsafe report read other source bytes than the first; nothing is certified` )
+    } {}
+    // nurlc's own borrow walk may refuse a program the core IR still
+    // describes: it has no LLVM IR then, and its unsafe report is cut short.
+    : b compiled == . r2 code 0
+    : String llvm_sha ? compiled ( nc_sha256_text ( string_data . r2 out ) ) ( string_new )
+    : ( Vec String ) unsafe_rows ( __ct_unsafe_rows rest2 )
+    : String nurlc_ver ( __ct_first_line . r3 out )
+
     : i nu ( vec_len [String] unsafe_rows )
     : String uen ? == nu 0 ( string_from `It contains no hand-vouched (unsafe) code outside the standard library.` )
     ( string_from `It contains hand-vouched (unsafe) code outside the standard library: see the ledger rows unsafe-*.` )
