@@ -2162,7 +2162,7 @@ def Stmt.hasThru : Stmt → Bool
   | .loop s => s.hasThru
   -- (AGORA-889: a move-out through a borrow is a change through it)
   | .takeB _ _ _ _ => true
-  | _ => false
+  | .skip | .assign _ _ | .push _ _ | .free _ | .panic | .insert _ _ _ | .exit _ => false
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
     destructor (Agora #295). A call through a package is not listed: the
@@ -2192,7 +2192,7 @@ def Stmt.calls : Stmt → List Nat
   | .block s => s.calls
   | .loop s => s.calls
   | .takeB _ _ _ s => s.calls
-  | _ => []
+  | .skip | .assign _ _ | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => []
 
 /-- A function that changes elements through a borrow, or calls one that
     does (Agora #295). A call into one passes views only of regions, or (route U,
@@ -2435,7 +2435,7 @@ def Stmt.assigns : Stmt → List Var
   | .callcE _ _ _ _ s => s.assigns
   | .block s => s.assigns
   | .loop s => s.assigns
-  | _ => []
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => []
 
 /-- A2-drop.3a: how many times a statement may give `x` a new value on one
     path: a sequence adds, a branch takes the larger, a loop may repeat.  A
@@ -2464,7 +2464,7 @@ def Stmt.asgMax (x : Var) : Stmt → Nat
   | .callcE _ _ _ _ s => s.asgMax x
   | .block s => s.asgMax x
   | .loop s => 2 * s.asgMax x
-  | _ => 0
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => 0
 
 /-! ### Functions -/
 

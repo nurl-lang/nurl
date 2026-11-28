@@ -93,7 +93,7 @@ def stmtGlobsB (GT : GTy) : Stmt → Bool
   | .block s => stmtGlobsB GT s
   | .loop s => stmtGlobsB GT s
   | .takeB _ _ _ s => stmtGlobsB GT s
-  | _ => true
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => true
 
 theorem stmtGlobsB_sound {GT : GTy} : ∀ {s : Stmt}, stmtGlobsB GT s = true → s.globsAt GT := by
   intro s
