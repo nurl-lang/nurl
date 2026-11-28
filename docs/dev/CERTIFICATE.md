@@ -578,7 +578,12 @@ the library. Each claim's premises name the same rows.
 - that the bundle has Elab.lean when the manifest records
   `hashes.elab_lean` (and the program is accepted), and none otherwise;
 - that the `formal/` tree is the pinned one;
-- the binary, when given;
+- the binary, when given; and when that binary is a WebAssembly module
+  (`\0asm`) and the bundle has N.cap, its import section (section id 2) is
+  parsed and every function import is checked against the classes N.cap
+  names (using the bundle's `caps.tsv` for `env` imports and the WASI /
+  `nurl_net` / `canvas` / `audio` / `wasi` mappings, failing closed on
+  unknown imports or malformed wasm; AGORA-1038);
 - Program.lean's grammar and the slot count;
 - Claims.lean against the template, byte for byte;
 - with Elab.lean: Elab.lean against the one made from Program.core

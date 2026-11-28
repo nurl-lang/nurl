@@ -1379,6 +1379,88 @@ EOF3
 then ok "C.Caps not loadable: the M claims stand, N.cap is open"
 else bad "C.Caps not loadable: the M claims stand, N.cap is open"; tail -8 "$NC/noimp.out"; fi
 rm -rf "$F2"
+# (l) wasm import-section cross-check against N.cap (AGORA-1038):
+# `verify --binary prog.wasm` parses the wasm import section (section 2) and
+# checks every function import against the classes N.cap names, trusting
+# neither nurlc nor the runtime source.
+python3 - "$NC" <<'EOF3'
+import os, sys
+
+def uleb(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7f
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+def sec(sid, payload):
+    return bytes([sid]) + uleb(len(payload)) + payload
+
+def mk_wasm(imports):
+    # Minimal valid wasm v1 module: type 0 = () -> (), import section with
+    # function imports of type 0 (and optional memory import).
+    tsec = sec(1, uleb(1) + b"\x60\x00\x00")
+    if imports:
+        body = bytearray(uleb(len(imports)))
+        for mod, name, kind in imports:
+            mb, nb = mod.encode(), name.encode()
+            body += uleb(len(mb)) + mb + uleb(len(nb)) + nb
+            if kind == 0:
+                body += b"\x00" + uleb(0)
+            elif kind == 2:
+                body += b"\x02\x00" + uleb(1)
+        isec = sec(2, bytes(body))
+    else:
+        isec = b""
+    return b"\x00asm\x01\x00\x00\x00" + tsec + isec
+
+d = sys.argv[1]
+open(os.path.join(d, "pure.wasm"), "wb").write(mk_wasm([("env", "memory", 2)]))
+open(os.path.join(d, "pure_seeded.wasm"), "wb").write(mk_wasm([("wasi_snapshot_preview1", "path_open", 0)]))
+open(os.path.join(d, "pure_unknown.wasm"), "wb").write(mk_wasm([("host", "secret", 0)]))
+open(os.path.join(d, "prints_ok.wasm"), "wb").write(mk_wasm([("wasi_snapshot_preview1", "fd_write", 0)]))
+open(os.path.join(d, "prints_net.wasm"), "wb").write(mk_wasm([("wasi_snapshot_preview1", "fd_write", 0), ("nurl_net", "tcp_connect", 0)]))
+open(os.path.join(d, "bad.wasm"), "wb").write(b"\x00asm\x01\x00\x00\x00\x02\x7f")
+EOF3
+# Pure program + pure.wasm (only memory import): verifies with wasm check ok.
+"$C" certify "$ROOT/tools/ncore/certify/vec_push_len.nu" "${CA[@]}" --binary "$NC/pure.wasm" --out "$NC/wpure.cert" > "$NC/wpure.cout" 2>&1
+if "$C" verify "$NC/wpure.cert" --formal "$ROOT/formal" --binary "$NC/pure.wasm" > "$NC/wpure.vout" 2>&1 \
+    && grep -q "ok    wasm imports match N.cap" "$NC/wpure.vout"; then
+    ok "wasm import check: pure bundle + import-free wasm verifies"
+else bad "wasm import check: pure bundle + import-free wasm verifies"; cat "$NC/wpure.vout" | head -15; fi
+# Pure program + seeded path_open import (even with matching binary hash!): caught.
+"$C" certify "$ROOT/tools/ncore/certify/vec_push_len.nu" "${CA[@]}" --binary "$NC/pure_seeded.wasm" --out "$NC/wseed.cert" > "$NC/wseed.cout" 2>&1
+if ! "$C" verify "$NC/wseed.cert" --formal "$ROOT/formal" --binary "$NC/pure_seeded.wasm" > "$NC/wseed.vout" 2>&1 \
+    && grep -q "FAIL  wasm imports match N.cap: unlisted import(s): wasi_snapshot_preview1.path_open" "$NC/wseed.vout"; then
+    ok "wasm import check: catches a seeded extra WASI import (path_open)"
+else bad "wasm import check: catches a seeded extra WASI import (path_open)"; cat "$NC/wseed.vout" | head -15; fi
+# Pure program + unknown host import: fails closed.
+"$C" certify "$ROOT/tools/ncore/certify/vec_push_len.nu" "${CA[@]}" --binary "$NC/pure_unknown.wasm" --out "$NC/wunk.cert" > "$NC/wunk.cout" 2>&1
+if ! "$C" verify "$NC/wunk.cert" --formal "$ROOT/formal" --binary "$NC/pure_unknown.wasm" > "$NC/wunk.vout" 2>&1 \
+    && grep -q "FAIL  wasm imports match N.cap: unlisted import(s): host.secret (ffi.unknown)" "$NC/wunk.vout"; then
+    ok "wasm import check: unknown host import fails closed"
+else bad "wasm import check: unknown host import fails closed"; cat "$NC/wunk.vout" | head -15; fi
+# Printing program (stdio.out) + fd_write wasm verifies; + seeded nurl_net.tcp_connect fails.
+"$C" certify "$NC/prints.nu" "${CA[@]}" --binary "$NC/prints_ok.wasm" --out "$NC/wprt.cert" > "$NC/wprt.cout" 2>&1
+if "$C" verify "$NC/wprt.cert" --formal "$ROOT/formal" --binary "$NC/prints_ok.wasm" > "$NC/wprt.vout" 2>&1 \
+    && grep -q "ok    wasm imports match N.cap" "$NC/wprt.vout"; then
+    ok "wasm import check: stdio.out bundle + WASI fd_write wasm verifies"
+else bad "wasm import check: stdio.out bundle + WASI fd_write wasm verifies"; cat "$NC/wprt.vout" | head -15; fi
+"$C" certify "$NC/prints.nu" "${CA[@]}" --binary "$NC/prints_net.wasm" --out "$NC/wprtn.cert" > "$NC/wprtn.cout" 2>&1
+if ! "$C" verify "$NC/wprtn.cert" --formal "$ROOT/formal" --binary "$NC/prints_net.wasm" > "$NC/wprtn.vout" 2>&1 \
+    && grep -q "FAIL  wasm imports match N.cap: unlisted import(s): nurl_net.tcp_connect (net.connect)" "$NC/wprtn.vout"; then
+    ok "wasm import check: stdio.out bundle catches seeded nurl_net.tcp_connect"
+else bad "wasm import check: stdio.out bundle catches seeded nurl_net.tcp_connect"; cat "$NC/wprtn.vout" | head -15; fi
+# Malformed wasm binary: fails closed.
+"$C" certify "$ROOT/tools/ncore/certify/vec_push_len.nu" "${CA[@]}" --binary "$NC/bad.wasm" --out "$NC/wbad.cert" > "$NC/wbad.cout" 2>&1
+if ! "$C" verify "$NC/wbad.cert" --formal "$ROOT/formal" --binary "$NC/bad.wasm" > "$NC/wbad.vout" 2>&1 \
+    && grep -q "FAIL  wasm imports match N.cap:" "$NC/wbad.vout"; then
+    ok "wasm import check: malformed wasm fails closed"
+else bad "wasm import check: malformed wasm fails closed"; cat "$NC/wbad.vout" | head -15; fi
 
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then
