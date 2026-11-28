@@ -9153,7 +9153,14 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // (A call handed back as it is hands on what it hands back: a literal
     // around a lend out of a parameter too - retaggl, agora #907.)
     ? == ret_first_tt TT_LPAREN { ( __rec_retaggl_fwd syms ) } {}
-    ? != 0 g_core_live { ( core_ret T ) } {}
+    // (The IR's `ret` is written once what is handed back is settled, just
+    // before gen_ret_term: where the return copies it (D4b, `^ ( g a )` of
+    // a raw string this frame owns), the IR hands back that copy —
+    // `nurl_strdup`, the call the copy is — so the engine and tools/ncore
+    // read the answer nurlc gives (AGORA-946). Nothing writes IR between
+    // here and there.)
+    : ~ b __core_ret_due != 0 g_core_live
+    : ~ b __ir_dup F
     // (A value holding nothing — an option's `None` — hands no storage over,
     // whatever is answered of it: asked before a rule below rewrites `val`.)
     : b __rnone ( __ost_none val )
@@ -9212,6 +9219,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // judge (__tail_noreturn_close, ret_ty_agree's fall-off wording).
     ? & __ret_imp ( seq ( nurl_get_last_type ) `void` ) {
         = g_fn_ret_count - g_fn_ret_count 1
+        ? __core_ret_due { ( core_ret T ) } {}
         ^ val
     } {}
     ( __nc_ret_check lex syms ( nurl_get_last_type ) ret_eff_tt ret_first_val bck_line )
@@ -9492,6 +9500,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             ( nurl_sym_def syms `__last_call_guard__` __gs2 )
             = __ret_sx ( __sx_drop_raw_locals syms __ret_sx )
             = ret_call_copied T
+            = __ir_dup T
         } {}
         // One that cannot be copied has nothing to stand in for the lend:
         // refused at module end when the callee may lend such an argument
@@ -9539,6 +9548,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         = __ret_sx ``
         = hbit ( nurl_str_cat `true` `` )
         = ret_call_copied T
+        = __ir_dup T
     } {}
     // `^ ( string_data x )`, `^ ( view_of x )`: a raw view of a value this
     // frame drops on the way out. The caller gets its own copy of the
@@ -11040,6 +11050,13 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     = g_ret_clo_lit ? | == ret_first_tt TT_BACKSLASH ret_is_direct_call ( __is_closure_llty ( nurl_llty lt ) ) F
     // (The body's last statement: its `}` is what follows.)
     = g_ret_final & __ret_top == ( nurl_lex_type lex ) TT_RBRACE
+    ? __core_ret_due {
+        ? & __ir_dup > g_core_os_n 0 {
+            = g_core_callee ( __core_in `nurl_strdup` )
+            ( core_call - g_core_os_n 1 lt F )
+        } {}
+        ( core_ret T )
+    } {}
     ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident __rg_hbit )
     = g_ret_final F
     = g_ret_sl_ids ``
@@ -24570,6 +24587,9 @@ unsafe @ eng_byte s w i k → i {
     ( eng_prim `nurl_println` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `nurl_println_int` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `nurl_str_cat` `in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    // (A raw string's own copy of its text — what a return hands back where
+    // it copies, D4b, `^ ( g a )`: fresh, holding nothing; AGORA-946.)
+    ( eng_prim `nurl_strdup` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `nurl_str_cat3` `in in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `nurl_str_cat4` `in in in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `nurl_str_eq` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
