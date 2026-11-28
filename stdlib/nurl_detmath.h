@@ -25,14 +25,37 @@
 // C99 that also compiles as C++ (no unions, no designated initializers) and
 // contains no backslash, so it can live in a NURL string.
 //
-// Notices. exp, log, pow and their tables: Copyright (c) 2018, Arm Limited,
-// SPDX-License-Identifier: MIT (as distributed in musl). The others:
+// Notices.
+//
+// exp, log, pow and their tables: Copyright (c) 2018, Arm Limited.
+// The whole port, as distributed in musl: Copyright (c) 2005-2020 Rich
+// Felker, et al. Both under the MIT license:
+//
+//   Permission is hereby granted, free of charge, to any person obtaining
+//   a copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to
+//   permit persons to whom the Software is furnished to do so, subject to
+//   the following conditions:
+//
+//   The above copyright notice and this permission notice shall be
+//   included in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+//   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+//   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+//   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+//   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+//   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// sin, cos, expm1, log1p, tanh, erf, erfc and the pi/2 reduction (fdlibm):
 //   Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
 //   Developed at SunPro, a Sun Microsystems, Inc. business.
 //   Permission to use, copy, modify, and distribute this
 //   software is freely granted, provided that this notice
 //   is preserved.
-// musl: Copyright (c) 2005-2020 Rich Felker, et al., MIT.
 #ifndef NURL_DETMATH_H
 #define NURL_DETMATH_H
 #include <stdint.h>
@@ -67,6 +90,15 @@ static inline double __nd_f64(uint64_t u) { double d; memcpy(&d, &u, 8); return 
 static inline uint32_t __nd_hi(double d) { return (uint32_t)(__nd_u64(d) >> 32); }
 static inline double __nd_with_lo(double d, uint32_t lo) { return __nd_f64((__nd_u64(d) & 0xffffffff00000000ULL) | lo); }
 static inline double __nd_fabs(double d) { return __nd_f64(__nd_u64(d) & 0x7fffffffffffffffULL); }
+// The NaN answer for an infinite or NaN x: a NaN x itself, quieted (an
+// operation with one NaN operand gives that NaN on every IEEE host), and
+// for +-inf the positive quiet NaN. inf - inf would give the host's default
+// NaN, whose sign differs (x86 sets it, arm64 does not).
+static inline double __nd_nan_of(double x) {
+    uint64_t u = __nd_u64(x);
+    if ((u << 12) != 0) return __nd_f64(u | 0x0008000000000000ULL);
+    return __nd_f64(0x7ff8000000000000ULL);
+}
 // x * 2^n, as musl's scalbn: exact unless the result is subnormal.
 static inline double __nd_scalbn(double x, int n) {
     double y = x;
@@ -651,7 +683,8 @@ static inline double __nd_pow(double x, double y) {
         if (__nd_zeroinfnan(iy)) {
             if (2 * iy == 0) return 1.0;
             if (ix == __nd_u64(1.0)) return 1.0;
-            if (2 * ix > 2 * 0x7ff0000000000000ULL || 2 * iy > 2 * 0x7ff0000000000000ULL) return x + y;
+            if (2 * ix > 2 * 0x7ff0000000000000ULL) return __nd_nan_of(x);   // x NaN: x (not x + y,
+            if (2 * iy > 2 * 0x7ff0000000000000ULL) return __nd_nan_of(y);   // whose pick of two NaNs varies)
             if (2 * ix == 2 * __nd_u64(1.0)) return 1.0;
             if ((2 * ix < 2 * __nd_u64(1.0)) == !(iy >> 63)) return 0.0;
             return y * y;
@@ -860,7 +893,7 @@ static inline int __nd_rem_pio2(double x, double *y) {
         y[1] = (r - y[0]) - w;
         return n;
     }
-    if (ix >= 0x7ff00000) { y[0] = y[1] = x - x; return 0; }   // inf, nan
+    if (ix >= 0x7ff00000) { y[0] = y[1] = __nd_nan_of(x); return 0; }   // inf, nan (callers check first)
     // z = |x| scaled to [2^23, 2^24), cut into 24-bit chunks.
     z = __nd_f64((u & (~0ULL >> 12)) | ((uint64_t)(0x3ff + 23) << 52));
     for (i = 0; i < 2; i++) {
@@ -894,7 +927,7 @@ static inline double __nd_sin(double x) {
         if (ix < 0x3e500000) return x;   // |x| < 2^-26
         return __nd_ksin(x, 0.0, 0);
     }
-    if (ix >= 0x7ff00000) return x - x;
+    if (ix >= 0x7ff00000) return __nd_nan_of(x);
     return __nd_sin_q(y, (unsigned)__nd_rem_pio2(x, y));
 }
 static inline double __nd_cos(double x) {
@@ -904,7 +937,7 @@ static inline double __nd_cos(double x) {
         if (ix < 0x3e46a09e) return 1.0;   // |x| < 2^-27 sqrt(2)
         return __nd_kcos(x, 0.0);
     }
-    if (ix >= 0x7ff00000) return x - x;
+    if (ix >= 0x7ff00000) return __nd_nan_of(x);
     return __nd_sin_q(y, (unsigned)__nd_rem_pio2(x, y) + 1);   // cos x = sin(x + pi/2)
 }
 
