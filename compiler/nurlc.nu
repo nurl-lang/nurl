@@ -62724,10 +62724,17 @@ unsafe @ bck_join_state s a s b → s {
 // in an array (g_bck_rows, bck_explode): a loop body's rows are visited on
 // every pass of its fixpoint, and a keyed lookup built and hashed the key
 // each time.
-unsafe @ bck_rec i idx → s {
-    ? | < idx 0 >= idx g_bck_nrows { ^ ( nurl_str_cat `` `` ) } {}
-    : s r # s ( nurl_peek # s g_bck_rows idx )
-    ^ # s ( nurl_strdup_n r ( nurl_peek # s g_bck_rlen idx ) )
+// Row `idx` as it is stored, a view (read through the table, as __sym_view
+// reads an interned value): a row is written once (bck_record2) and
+// released only with the whole table at the end of the function's analysis
+// (bck_rows_release), so the view is good for the walk that reads it. The
+// walk reads rows through this: a copy per visit (bck_rec) was a strdup
+// and a free for every row, every round (AGORA-1047). (A name of its own:
+// the compilers that build this one held bck_rec's, a copy's, as owned.)
+unsafe @ bck_row i idx → s {
+    ? | < idx 0 >= idx g_bck_nrows { ^ `` } {}
+    : *s rows # *s # s g_bck_rows
+    ^ . rows idx
 }
 
 // Does row `idx` read anything (its field 2)? Asked without copying the
@@ -63109,7 +63116,7 @@ unsafe @ bck_xl_base s sp → s {
     : i ln ( bck_field_int rec 3 )
     : ~ i q + rp 1
     ~ < q hi {
-        : s qrec ( bck_rec q )
+        : s qrec ( bck_row q )
         ? != ( bck_field_int qrec 3 ) ln { = q hi } {
             ? == ( bck_kc q ) 4 {
                 : i mid ( bck_field_int qrec 1 )
@@ -63534,8 +63541,8 @@ unsafe @ bck_index_closes i n → v {
         // and `=` rows (2, 3) are marked `v` `w` `o` — whose value with no
         // source may own nothing, a literal: bck_may_own_some.)
         ? || == kc 2 == kc 3 {
-            : i m5 ( __bck_row_mark ( bck_rec j ) )
-            ? || || == m5 118 == m5 119 == m5 111 { ( bck_put ( bck_bkey `vnm_` ( bck_field ( bck_rec j ) 1 ) ) `1` ) } {}
+            : i m5 ( __bck_row_mark ( bck_row j ) )
+            ? || || == m5 118 == m5 119 == m5 111 { ( bck_put ( bck_bkey `vnm_` ( bck_field ( bck_row j ) 1 ) ) `1` ) } {}
         } {}
         = j + j 1
     }
@@ -63586,7 +63593,7 @@ unsafe @ bck_match_close i idx s openk s closek → i {
     : ~ i d 1
     : ~ i j + idx 1
     ~ & < j n > d 0 {
-        : s k ( bck_field ( bck_rec j ) 0 )
+        : s k ( bck_field ( bck_row j ) 0 )
         ? ( seq k openk ) { = d + d 1 } {}
         ? ( seq k closek ) { = d - d 1 } {}
         ? == d 0 { ^ j } {}
@@ -63890,8 +63897,8 @@ unsafe @ bck_emit_error s file i line s msg → v {
         ? != 0 g_bck_fmv_any {
             : ~ s ufs ``
             : ~ i uq + p 1
-            ~ & ( seq ( bck_field ( bck_rec uq ) 0 ) `fieldset` ) == ( bck_field_int ( bck_rec uq ) 3 ) ( bck_field_int rec 3 ) {
-                = ufs ( nurl_str_cat3 ufs ` ` ( bck_field ( bck_rec uq ) 1 ) )
+            ~ & ( seq ( bck_field ( bck_row uq ) 0 ) `fieldset` ) == ( bck_field_int ( bck_row uq ) 3 ) ( bck_field_int rec 3 ) {
+                = ufs ( nurl_str_cat3 ufs ` ` ( bck_field ( bck_row uq ) 1 ) )
                 = uq + uq 1 }
             ( bck_put `unwskip` ufs )
             = g_bck_unw_exit T
@@ -65742,7 +65749,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     : ~ s st ( nurl_str_cat state `` )
     : ~ i p lo
     ~ & < p hi ! ( seq st `!` ) {
-        : s rec ( bck_rec p )
+        : s rec ( bck_row p )
         = g_bck_row_ln ( bck_field_int rec 3 )
         = g_bck_row_at p
         : i kc ( bck_kc p )
@@ -65801,9 +65808,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (One `clox` row per capture effect: past the closure's other
                 // ones to the row after them; github#2097's review.)
                 : ~ i cq + p 1
-                ~ ( seq ( bck_field ( bck_rec cq ) 0 ) `clox` ) { = cq + cq 1 }
-                ? & & != 0 ( nurl_str_len cxs ) & >= ( nurl_str_get cxs 0 ) 48 <= ( nurl_str_get cxs 0 ) 57 ( seq ( bck_field ( bck_rec cq ) 0 ) `ret` ) {
-                    ? ( seq ( bck_field ( bck_rec cq ) 3 ) ( bck_field rec 3 ) ) {
+                ~ ( seq ( bck_field ( bck_row cq ) 0 ) `clox` ) { = cq + cq 1 }
+                ? & & != 0 ( nurl_str_len cxs ) & >= ( nurl_str_get cxs 0 ) 48 <= ( nurl_str_get cxs 0 ) 57 ( seq ( bck_field ( bck_row cq ) 0 ) `ret` ) {
+                    ? ( seq ( bck_field ( bck_row cq ) 3 ) ( bck_field rec 3 ) ) {
                         ( __bck_fmv_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
                         ( __bck_fmv_rel_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
                     } {}
@@ -65829,7 +65836,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : ~ i rq + p 1
                 : ~ b rmore T
                 ~ rmore {
-                    : s rr ( bck_rec rq )
+                    : s rr ( bck_row rq )
                     ? | == 0 ( nurl_str_len rr ) ! ( bck_field_is rr 0 `store` ) { = rmore F } {
                         ( __bck_partly_moved_check ( bck_field_int rr 1 ) ( bck_field_int rr 3 ) st )
                         = rq + rq 1
@@ -65912,7 +65919,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // walks them as before: agora #406.)
                 : i tln ( bck_field_int rec 3 )
                 : ~ i rq + p 1
-                ~ ? & < rq hi == ( bck_field_int ( bck_rec rq ) 3 ) tln != ( bck_kc rq ) 2 F { = rq + rq 1 }
+                ~ ? & < rq hi == ( bck_field_int ( bck_row rq ) 3 ) tln != ( bck_kc rq ) 2 F { = rq + rq 1 }
                 ( __bck_try_exit_after_call st p rq tln )
                 = p + p 1
                 = done T
@@ -65942,7 +65949,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 ~ < rp hi {
                     : i rkc ( bck_kc rp )
                     ? | | == rkc 9 == rkc 13 == rkc 40 {
-                        : s rrec ( bck_rec rp )
+                        : s rrec ( bck_row rp )
                         ? == ( bck_field_int rrec 3 ) ( bck_field_int rec 3 ) {
                             ? != rkc 40 { = st ( bck_inout_borrow_check st rrec ) } {}
                             // (…and a field the returned expression reads
@@ -65963,7 +65970,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 ? != 0 g_bck_has_defers {
                     : i rln ( bck_field_int rec 3 )
                     : ~ i rq + p 1
-                    ~ ? < rq hi == ( bck_field_int ( bck_rec rq ) 3 ) rln F { = rq + rq 1 }
+                    ~ ? < rq hi == ( bck_field_int ( bck_row rq ) 3 ) rln F { = rq + rq 1 }
                     ? > rq + p 1 { = st ( bck_walk_seq + p 1 rq st ) } {}
                     // (…and the owner it hands back by name, gen_ret: lent to
                     // the defers, which may read it but not release it or a
@@ -66083,7 +66090,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // `: c ?? cr { T x → x … }`, the next row on its line moving
                 // the payload - takes it out of the binding: a move, its alias
                 // rows say, as `p`; agora #557.)
-                : s bnext ( bck_rec + p 1 )
+                : s bnext ( bck_row + p 1 )
                 : b bmoved & & ( seq bmode0 `m` ) != 0 ( nurl_str_starts bnext `move	` ) ( seq ( bck_field bnext 3 ) ( bck_field rec 3 ) )
                 : s bmode ? bmoved `p` bmode0
                 : s bsrcs ? == 0 ( nurl_str_len bsx ) ( bck_field rec 2 ) ( __word_union ( bck_field rec 2 ) ( bck_brw_leaves st bmode bsx bwid ) )
@@ -67280,7 +67287,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // (While a `~` loop's body is walked, what ends a part
                         // of what it iterates may end its element: bck_borrow_end
                         // asks `feb_` only then, g_bck_fe_live — agora #482.)
-                        : s frec ( bck_rec + p 1 )
+                        : s frec ( bck_row + p 1 )
                         : b fel != 0 ( nurl_str_starts frec `fevar\t` )
                         // (…and whose elements those are, `felv`: an inner
                         // loop keeps what its body did to them, __bck_fe_carry.
@@ -67336,13 +67343,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // read here, from the block's own state, before its scope
                         // closes and a body's defers run — gen_block_expr, #274.)
                         ? & ( bck_row_reads_any eb ) ! ( seq bwalk `!` ) {
-                            : s ebrec ( bck_rec eb )
+                            : s ebrec ( bck_row eb )
                             ( bck_check_moved_reads ( bck_field ebrec 2 ) ( bck_field_int ebrec 3 ) bwalk )
                         } {}
                         // (A value block's bindings are the enclosing
                         // scope's: they live on past its `}`, as codegen keeps
                         // them, and end where that scope does — agora #846.)
-                        = st ? isvb bwalk ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers bwalk eb ( bck_field_int ( bck_rec eb ) 3 ) ) bwalk ( bck_field_int ( bck_rec eb ) 3 ) )
+                        = st ? isvb bwalk ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers bwalk eb ( bck_field_int ( bck_row eb ) 3 ) ) bwalk ( bck_field_int ( bck_row eb ) 3 ) )
                     }
                     ? ! isvb { = g_bck_sc_n - g_bck_sc_n 1 } {}
                 }
@@ -67939,7 +67946,7 @@ unsafe @ __bck_younger i src i holder i p → b {
 unsafe @ __bck_decl_row i id i p → i {
     : ~ i j - p 1
     ~ >= j 0 {
-        : s r ( bck_rec j )
+        : s r ( bck_row j )
         ? & != 0 ( nurl_str_starts r `let\t` ) == ( bck_field_int r 1 ) id { ^ j } {}
         = j - j 1
     }
@@ -68016,7 +68023,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
         : ~ s rest ( __bck_scope_lets ( nurl_peek # s g_bck_sc b ) ( nurl_peek # s g_bck_sc + b 1 ) )
         ~ != 0 ( nurl_str_len rest ) {
             : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-            : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+            : i id ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 )
             : i v ( bck_st_get st id )
             // (One whose drop reads views is dropped borrowing too: it owns
             // the value its destructor runs on, `vdu_`.)
@@ -70177,7 +70184,7 @@ unsafe @ __bck_id_spelling i id → s {
 // call, under a join's depth)?
 @ __bck_row_definite → b {
     ? | != 0 g_cj_depth < g_bck_row_at 0 { ^ F } {}
-    ^ == 1 ( bck_field_int ( bck_rec g_bck_row_at ) 4 )
+    ^ == 1 ( bck_field_int ( bck_row g_bck_row_at ) 4 )
 }
 
 // The sources `srcs` (marked) but a binding's views of its own fields —
@@ -71050,7 +71057,7 @@ unsafe @ __bck_row_sl s rec → s {
             : ~ i q + d0 1
             ~ < q de {
                 ? ( bck_row_reads_any q ) {
-                    ? ( str_contains_word ( bck_field ( bck_rec q ) 2 ) fids ) { ^ T } {}
+                    ? ( str_contains_word ( bck_field ( bck_row q ) 2 ) fids ) { ^ T } {}
                 } {}
                 = q + q 1
             }
@@ -73400,10 +73407,10 @@ unsafe @ __bck_rcp_row s st s rec i p → v {
         : s ln ( bck_field rec 3 )
         : ~ s args ``
         : ~ i q - p 1
-        ~ & >= q 0 ( seq ( bck_field ( bck_rec q ) 3 ) ln ) {
+        ~ & >= q 0 ( seq ( bck_field ( bck_row q ) 3 ) ln ) {
             : i qk ( bck_kc q )
             ? | | | | == qk 9 == qk 12 == qk 13 == qk 32 == qk 42 {
-                : s qw ( bck_field ( bck_rec q ) 1 )
+                : s qw ( bck_field ( bck_row q ) 1 )
                 : s qa ? & != 0 ( nurl_str_len qw ) == ( nurl_str_get qw 0 ) 64 ( nurl_str_slice qw 1 - ( nurl_str_len qw ) 1 ) qw
                 ? != 0 ( nurl_str_len qa ) { = args ? == 0 ( nurl_str_len args ) ( nurl_str_cat qa `` ) ( nurl_str_cat3 args `|` qa ) } {}
             } {}
@@ -74426,7 +74433,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 : ~ i j - p 1
                 : ~ b more T
                 ~ & more >= j 0 {
-                    : s jr ( bck_rec j )
+                    : s jr ( bck_row j )
                     ? | ! ( seq ( bck_field jr 3 ) line ) > - p j 64 { = more F } {
                         ? & & != 0 ( nurl_str_starts jr `pendcall\t` ) == ( bck_path_root ( bck_field_id jr 1 ) ) k ( str_contains_word outer ( bck_field jr 5 ) ) {
                             ( bck_diag_invalid k ( nurl_str_to_int line ) )
@@ -75248,7 +75255,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         // (The statement's own rows: up to the next statement's.)
         ? | | | | == qk 1 == qk 2 == qk 3 == qk 23 == qk 24 { ^ out } {}
         ? == qk 50 {
-            : s r ( bck_rec q )
+            : s r ( bck_row q )
             : s f5 ( bck_field r 5 )
             ? & & ( seq ( bck_field r 1 ) os ) > ( nurl_str_len f5 ) 1 == ( nurl_str_get f5 0 ) 61 {
                 : s ds ( nurl_str_slice f5 1 - ( nurl_str_len f5 ) 1 )
@@ -76001,7 +76008,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         ? & < d0 at > ( bck_match_close d0 `block` `endblock` ) at { = d d0 } {}
     }
     ? < d 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : i dl ( bck_field_int ( bck_rec d ) 3 )
+    : i dl ( bck_field_int ( bck_row d ) 3 )
     ? >= dl el { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_str_cat4 ` (This read is the ';' defer at line ` ( nurl_str_int dl ) `: it runs when the function returns, after line ` ( nurl_str_cat ln `, so what it reads has to last until then.)` ) )
 }
@@ -76028,7 +76035,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : i hi ? < a b b a
     : ~ i j 0
     ~ < j lo {
-        : s r ( bck_rec j )
+        : s r ( bck_row j )
         ? != 0 ( nurl_str_starts r `block\t` ) {
             : s k ( bck_field r 1 )
             ? | | ( seq k `loop` ) ( seq k `loopt` ) ( seq k `foreach` ) { ? > ( bck_match_close j `block` `endblock` ) hi { ^ T } {} } {}
@@ -76048,7 +76055,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 @ __bck_kept_bound i d i p → i {
     : ~ i j 0
     ~ < j p {
-        : s rec ( bck_rec j )
+        : s rec ( bck_row j )
         : ~ i nx + j 1
         : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
         ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
@@ -76069,7 +76076,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : s ids ( nurl_str_int id )
     : ~ i j 0
     ~ < j p {
-        : s rec ( bck_rec j )
+        : s rec ( bck_row j )
         : ~ i nx + j 1
         ? != 0 ( nurl_str_starts rec `let\t` ) {
             ? ( seq ( bck_field rec 1 ) ids ) { = at j } {}
@@ -76102,11 +76109,11 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     }
     ? < d 0 { ^ out } {}
     : s name ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) )
-    : s m1 ( nurl_str_cat4 ` (This read is the ';' defer at line ` ( nurl_str_int ( bck_field_int ( bck_rec d ) 3 ) ) `, which stands further down the loop than the way out at line ` ( nurl_str_int g_bck_dlx_line ) )
+    : s m1 ( nurl_str_cat4 ` (This read is the ';' defer at line ` ( nurl_str_int ( bck_field_int ( bck_row d ) 3 ) ) `, which stands further down the loop than the way out at line ` ( nurl_str_int g_bck_dlx_line ) )
     : s m2 `: from the loop's second round on it runs at that way out too, as an earlier round armed it. `
     : i lr ( __bck_let_seen id d )
     ? & > lr p < lr d {
-        : s m3 ( nurl_str_cat4 `There '` name `' still holds the value an earlier round bound at line ` ( nurl_str_int ( bck_field_int ( bck_rec lr ) 3 ) ) )
+        : s m3 ( nurl_str_cat4 `There '` name `' still holds the value an earlier round bound at line ` ( nurl_str_int ( bck_field_int ( bck_row lr ) 3 ) ) )
         = out ( nurl_str_cat4 m1 m2 m3 `: this round has not reached that line yet. Leave the loop there only below the ';', or bind what the defer reads above that way out.)` )
     } {
         = out ( nurl_str_cat4 m1 m2 ( nurl_str_cat3 `There it reads '` name `' as this round left it.)` ) `` )
@@ -76133,7 +76140,7 @@ unsafe @ bck_defers_release_ret s st i p i id → b {
                 ? ( __bck_defer_body_releases start id ) {
                     // (One further down the loop: say why it runs here.)
                     ? > start p {
-                        : s m1 ( nurl_str_cat3 ` (The ';' at line ` ( nurl_str_int ( bck_field_int ( bck_rec start ) 3 ) ) ` stands further down the loop than this return: from the loop's second round on it runs here too, as an earlier round armed it — and releases '` )
+                        : s m1 ( nurl_str_cat3 ` (The ';' at line ` ( nurl_str_int ( bck_field_int ( bck_row start ) 3 ) ) ` stands further down the loop than this return: from the loop's second round on it runs here too, as an earlier round armed it — and releases '` )
                         = g_bck_err_note ( nurl_str_cat3 m1 ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) `' as the caller gets it.)` )
                     } {}
                     ^ T
@@ -76158,7 +76165,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
 @ __bck_row_in_loop i d → b {
     : ~ i j 0
     ~ < j d {
-        : s r ( bck_rec j )
+        : s r ( bck_row j )
         ? != 0 ( nurl_str_starts r `block\t` ) {
             : s k ( bck_field r 1 )
             ? | | ( seq k `loop` ) ( seq k `loopt` ) ( seq k `foreach` ) { ? > ( bck_match_close j `block` `endblock` ) d { ^ T } {} } {}
@@ -76177,7 +76184,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
     ~ < q end {
         : i k ( bck_kc q )
         ? | | | | | | | | == k 3 == k 4 == k 5 == k 8 == k 9 == k 11 == k 12 == k 13 == k 14 {
-            : s r ( bck_rec q )
+            : s r ( bck_row q )
             : s f1 ( bck_field r 1 )
             ? & != 0 ( nurl_str_len f1 ) ! ( seq f1 `-` ) {
                 ? == ( bck_path_root ( nurl_str_to_int f1 ) ) id {
@@ -76429,7 +76436,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
     : ~ i middle ec
     : ~ i j + ci 1
     ~ < j ec {
-        : s kind ( bck_field ( bck_rec j ) 0 )
+        : s kind ( bck_field ( bck_row j ) 0 )
         ? ( seq kind `cond-else-edge` ) { = middle j = j ec } {
             ? ( seq kind `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
                 ? ( seq kind `match` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
@@ -76468,11 +76475,11 @@ unsafe @ __bck_body_defers s st i p i line → s {
     // each where its arm ends. Unread, `( consume a )` then `: String u ?
     // c a b` handed the freed `a` on (agora #242, formal's review).
     ? & & < middle ec ( bck_row_reads_any middle ) ! ( seq s_then `!` ) {
-        : s mrec ( bck_rec middle )
+        : s mrec ( bck_row middle )
         ( bck_check_moved_reads ( bck_field mrec 2 ) ( bck_field_int mrec 3 ) s_then )
     } {}
     ? & ( bck_row_reads_any ec ) ! ( seq s_else `!` ) {
-        : s erec ( bck_rec ec )
+        : s erec ( bck_row ec )
         ( bck_check_moved_reads ( bck_field erec 2 ) ( bck_field_int erec 3 ) s_else )
     } {}
     ^ ( bck_join_state s_then s_else )
@@ -76550,7 +76557,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
     // between the `match` row and the first arm — gen_match) happens before
     // any arm: every arm enters the state after it.
     : ~ i fe j
-    ~ & < fe em ! | ( seq ( bck_field ( bck_rec fe ) 0 ) `match-arm-edge` ) ( seq ( bck_field ( bck_rec fe ) 0 ) `match-fallthrough` ) { = fe + fe 1 }
+    ~ & < fe em ! | ( seq ( bck_field ( bck_row fe ) 0 ) `match-arm-edge` ) ( seq ( bck_field ( bck_row fe ) 0 ) `match-fallthrough` ) { = fe + fe 1 }
     // (What those calls lend through an Arc parameter — `plarc`, the words
     // their rows note, set apart from what earlier rows left pending: a
     // payload lent out of one of them is a view of that Arc's payload, as
@@ -76573,7 +76580,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
     : ~ s cj_j ``
     : ~ b cj_have F
     ~ < j em {
-        : s rec ( bck_rec j )
+        : s rec ( bck_row j )
         : s kind ( bck_field rec 0 )
         ? ( seq kind `match-fallthrough` ) { = fallthrough T } {}
         ? ( seq kind `match-arm-edge` ) {
@@ -76612,7 +76619,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 // never a copy — `mcl_`, the return's check below.)
                 : ~ b mcall F
                 // (The call the scrutinee is, off the `match` row: gen_match.)
-                : s mr1 ( bck_field ( bck_rec mi ) 1 )
+                : s mr1 ( bck_field ( bck_row mi ) 1 )
                 : s mcal ? & > ( nurl_str_len mr1 ) 1 == 38 ( nurl_str_get mr1 0 ) ( nurl_str_slice mr1 1 - ( nurl_str_len mr1 ) 1 ) ( nurl_str_cat `` `` )
                 // (A payload read in place out of a binding that owns it: a
                 // part of that binding's value, which what is stored into
@@ -76638,7 +76645,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                     // of nothing, so no view of the Arc's payload, where R
                     // cannot be copied; agora #763.)
                     ? != 0 ( nurl_str_len mcal ) {
-                        : s msx ( bck_field ( bck_rec mi ) 8 )
+                        : s msx ( bck_field ( bck_row mi ) 8 )
                         ? != 0 ( nurl_str_len msx ) {
                             : s msr ( bck_sx_sources state msx -1 )
                             ? ! ( seq msr `*` ) { = lsrc ( __word_union lsrc ( __src_plain msr ) ) } {}
@@ -76671,7 +76678,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                         }
                         // …and a call nested in its lent arguments, what that
                         // one lends (the match row's source expression, h214).
-                        : s msx ( bck_field ( bck_rec mi ) 8 )
+                        : s msx ( bck_field ( bck_row mi ) 8 )
                         ? != 0 ( nurl_str_len msx ) {
                             : s msr ( bck_sx_sources state msx -1 )
                             ? ! ( seq msr `*` ) { = lsrc ( __word_union lsrc ( __src_plain msr ) ) } {}
@@ -76716,7 +76723,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                         } {}
                     } {
                         // (The match row's reads are walk ids already.)
-                        : s sr ( bck_field ( bck_rec mi ) 2 )
+                        : s sr ( bck_field ( bck_row mi ) 2 )
                         ? & != 0 ( nurl_str_len sr ) == ( nurl_str_len ( str_first_word sr ) ) ( nurl_str_len sr ) {
                             : i sid ( nurl_str_to_int sr )
                             ? ! isview { = part_of ( nurl_str_cat sr `` ) } {}
@@ -76828,9 +76835,9 @@ unsafe @ __bck_body_defers s st i p i line → s {
                     // (No source expression of its own: the call over the
                     // match row's reads, or those alone.)
                     ? != 0 g_rcp_on {
-                        : s rsr0 ( bck_field ( bck_rec mi ) 2 )
+                        : s rsr0 ( bck_field ( bck_row mi ) 2 )
                         : s rsr ( bck_swap_char rsr0 32 124 )
-                        : s rsx0 ( bck_field ( bck_rec mi ) 8 )
+                        : s rsx0 ( bck_field ( bck_row mi ) 8 )
                         : s rsx ? != 0 ( nurl_str_len rsx0 ) rsx0 ? != 0 ( nurl_str_len mcal ) ( nurl_str_cat4 mcal `(` rsr `)` ) rsr
                         ( __bck_rcp_bind ( nurl_str_int id ) rsx )
                         ( __bck_pf_put ( nurl_str_int id ) ( __bck_pf_scan entry rsx ) )
@@ -76864,10 +76871,10 @@ unsafe @ __bck_body_defers s st i p i line → s {
             // `endmatch-arm-edge` row, which the arm's walk does not visit:
             // read here, from the arm's own state — gen_match.)
             ? & ( bck_row_reads_any end ) ! ( seq armwalk `!` ) {
-                : s aerec ( bck_rec end )
+                : s aerec ( bck_row end )
                 ( bck_check_moved_reads ( bck_field aerec 2 ) ( bck_field_int aerec 3 ) armwalk )
             } {}
-            : s armfinal ( bck_ids_end ids armwalk ( bck_field_int ( bck_rec - end 1 ) 3 ) )
+            : s armfinal ( bck_ids_end ids armwalk ( bck_field_int ( bck_row - end 1 ) 3 ) )
             // (A cursor payload is gone with its arm: the option it matched
             // ending later ends nothing of it.)
             ~ != 0 ( nurl_str_len cursors ) {
@@ -77106,7 +77113,7 @@ unsafe @ bck_scope_leave s st i line → s {
     : ~ s rest ( nurl_str_cat lets `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        ( bck_put ( bck_bkey `oos_` ( nurl_str_int ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 ) ) ) `1` )
+        ( bck_put ( bck_bkey `oos_` ( nurl_str_int ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 ) ) ) `1` )
     }
     ^ out
 }
@@ -77124,7 +77131,7 @@ unsafe @ bck_scope_leave s st i line → s {
     : ~ s rest ( nurl_str_cat lets `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : i id ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 )
         : s took ( nurl_sym_get g_bck ( bck_bkey `jt_` ( nurl_str_int id ) ) )
         ? & != 0 ( nurl_str_len took ) == BCK_OWNED ( bck_st_get out id ) {
             : ~ s orest ( nurl_str_cat took `` )
@@ -77177,7 +77184,7 @@ unsafe @ bck_scope_drop s st s lets i line → s {
     = g_bck_ending ``
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : i id ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 )
         // (…and one that may own its value on some path, BCK_MAYBE_OWNED:
         // there its value is released.)
         : i vr ( bck_st_raw out id )
@@ -77288,7 +77295,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
     : ~ i j ? >= last 0 + ( bck_match_close last `block` `endblock` ) 1 0
     ? < j kb { = j kb } {}
     ~ < j p {
-        : s rec ( bck_rec j )
+        : s rec ( bck_row j )
         : ~ i nx + j 1
         ? != 0 ( nurl_str_starts rec `let\t` ) {
             = lets ? == 0 ( nurl_str_len lets ) ( nurl_str_int j ) ( nurl_str_cat3 ( nurl_str_int j ) ` ` lets )
@@ -77307,7 +77314,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
     = g_bck_end_predefer 1
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : i id ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 )
         : i vr ( bck_st_raw out id )
         : i v ? == vr BCK_MAYBE_OWNED BCK_OWNED vr
         : b gone != 0 ( nurl_sym_len g_bck ( bck_bkey `oos_` ( nurl_str_int id ) ) )
@@ -77341,7 +77348,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
                 ? == kc 27 { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
                     // (A value block binds in this scope: its rows are read
                     // through, agora #846.)
-                    ? ? == kc 23 ( __bck_scoped_block ( bck_rec j ) ) F { = j + ( bck_match_close j `block` `endblock` ) 1 } {
+                    ? ? == kc 23 ( __bck_scoped_block ( bck_row j ) ) F { = j + ( bck_match_close j `block` `endblock` ) 1 } {
                         = j + j 1
                     }
                 }
@@ -77371,7 +77378,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
     : ~ s rest ( nurl_str_cat lets `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : i id ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 )
         ? ends { ( bck_put ( bck_bkey `oos_` ( nurl_str_int id ) ) `1` ) } {}
         // (…and whether it owned its value when its frame closed: one a
         // return then hands on is this function's to release still,
@@ -77397,7 +77404,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
             : i de ( bck_match_close d0 `block` `endblock` )
             : ~ i q + d0 1
             ~ < q de {
-                ? ( bck_row_reads_any q ) { = dreads ( nurl_str_cat3 dreads ` ` ( bck_field ( bck_rec q ) 2 ) ) } {}
+                ? ( bck_row_reads_any q ) { = dreads ( nurl_str_cat3 dreads ` ` ( bck_field ( bck_row q ) 2 ) ) } {}
                 = q + q 1
             }
         } {}
@@ -77407,7 +77414,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
     = rest ( nurl_str_cat lets `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : i id ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 )
         : b keep & ( str_contains_word dreads ( nurl_str_int id ) ) == BCK_UNINIT ( bck_st_raw pre id )
         ? ! keep { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat js `` ) ( nurl_str_cat3 out ` ` js ) } {}
     }
@@ -77427,7 +77434,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
         // `let`'s id or a block's kind.)
         : i kc ( bck_kc j )
         ? == kc 2 {
-            : i id ( bck_field_int ( bck_rec j ) 1 )
+            : i id ( bck_field_int ( bck_row j ) 1 )
             = out ( bck_st_set out id ( bck_st_raw pre id ) )
             ( bck_partner_unlink id )
             = j + j 1
@@ -77436,7 +77443,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
                 ? == kc 27 { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
                     // (A value block binds in this scope: its rows are read
                     // through, agora #846.)
-                    ? ? == kc 23 ( __bck_scoped_block ( bck_rec j ) ) F { = j + ( bck_match_close j `block` `endblock` ) 1 } {
+                    ? ? == kc 23 ( __bck_scoped_block ( bck_row j ) ) F { = j + ( bck_match_close j `block` `endblock` ) 1 } {
                         = j + j 1
                     }
                 }
@@ -77582,7 +77589,7 @@ unsafe @ bck_loop_mask s pre s post → s {
             // into.)
             : ~ i j lo
             ~ < j d0 {
-                : s rec ( bck_rec j )
+                : s rec ( bck_row j )
                 : ~ i nx + j 1
                 // (…and the element of a `~` loop around the site, inside
                 // this one, that the defer reads: a borrow of its
@@ -77662,7 +77669,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     : ~ s rest ( __bck_scope_lets lo hi )
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ! ( str_contains_word kept ( bck_field ( bck_rec ( nurl_str_to_int js ) ) 1 ) ) {
+        ? ! ( str_contains_word kept ( bck_field ( bck_row ( nurl_str_to_int js ) ) 1 ) ) {
             = lets ? == 0 ( nurl_str_len lets ) ( nurl_str_cat js `` ) ( nurl_str_cat3 lets ` ` js )
         } {}
     }
@@ -77671,7 +77678,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     = rest lets
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        ( bck_put ( bck_bkey `oos_` ( nurl_str_int ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 ) ) ) `1` )
+        ( bck_put ( bck_bkey `oos_` ( nurl_str_int ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 ) ) ) `1` )
     }
     ^ out
 }
@@ -77685,7 +77692,7 @@ unsafe @ bck_loop_mask s pre s post → s {
     : ~ s rest ( __bck_scope_lets lo hi )
     ~ != 0 ( nurl_str_len rest ) {
         : s js ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i id ( bck_field_int ( bck_rec ( nurl_str_to_int js ) ) 1 )
+        : i id ( bck_field_int ( bck_row ( nurl_str_to_int js ) ) 1 )
         ? ! ( str_contains_word kept ( nurl_str_int id ) ) {
             = out ( bck_st_set out id ( bck_st_raw pre id ) )
             ( bck_partner_unlink id )
@@ -78376,9 +78383,9 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // outer loop's element keeps what this body did to it,
     // __bck_fe_carry — agora #482.)
     : b fe_lp == ( bck_kc lo ) 35
-    : i fe_own ? fe_lp ( bck_field_int ( bck_rec lo ) 1 ) -1
+    : i fe_own ? fe_lp ( bck_field_int ( bck_row lo ) 1 ) -1
     : i fe_self ? fe_lp 1 0
-    : s fe_curs ? fe_lp ( bck_field ( bck_rec lo ) 7 ) ``
+    : s fe_curs ? fe_lp ( bck_field ( bck_row lo ) 7 ) ``
     : i fe_cur ? == 0 ( nurl_str_len fe_curs ) -1 ( nurl_str_to_int fe_curs )
     // (What a defer of the body keeps lives across rounds: agora #670.)
     : s dkept ( __bck_loop_kept lo hi pre )
@@ -78398,7 +78405,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s bsnap ( __bs_snapshot )
         : s fvsnap ( __fv_snapshot )
         : s vdsnap ? != 0 g_bck_has_deps ( __vd_snapshot ) ``
-        : s post0 ? dk ( __bck_loop_body_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) dkept ) ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) )
+        : s post0 ? dk ( __bck_loop_body_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_row hi ) 3 ) dkept ) ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_row hi ) 3 ) )
         : s cnt ( nurl_sym_get g_bck `lcnt` )
         = brk ( nurl_sym_get g_bck `lbrk` )
         = brkvd ( nurl_sym_get g_bck `lbrkvd` )
@@ -78479,7 +78486,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     // the innermost body, 32 s for 15 nested `~` (agora #210). A cycle,
     // or a fixpoint the iteration cap cut short, still walks `head` for
     // its exit.
-    ? | ! done cyc { = back ? dk ( __bck_loop_body_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) dkept ) ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_rec hi ) 3 ) ) } {}
+    ? | ! done cyc { = back ? dk ( __bck_loop_body_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_row hi ) 3 ) dkept ) ( bck_scope_end lo hi ( bck_walk_seq lo hi head ) ( bck_field_int ( bck_row hi ) 3 ) ) } {}
     : ~ s verif ( bck_loop_carry_seed pre back )
     ? dk { = verif ( __bck_kept_carry verif back dkept pre ) } {}
     ( bck_check_moved_reads cond_reads cond_line verif )
@@ -78639,7 +78646,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ( bck_put `dkall` `` )
     : ~ i row 0
     ~ < row n {
-        : s rec ( bck_rec row )
+        : s rec ( bck_row row )
         ? & ( bck_field_is rec 0 `block` ) ( bck_field_is rec 1 `defer` ) {
             = g_bck_has_defers 1
             : s index ( nurl_str_int row )
@@ -78713,12 +78720,12 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ? ! ( seq final `!` ) {
         // (The body's end hands every `inout` parameter back, as a `^`
         // does: agora #280.)
-        ? & > n 0 != 0 g_bck_fmv_any { ( __bck_inout_exit_check final ( bck_field_int ( bck_rec - n 1 ) 3 ) T ) } {}
-        : s cleanup ( bck_apply_defers ( bck_end_post_defer final n -1 ? > n 0 ( bck_field_int ( bck_rec - n 1 ) 3 ) 0 ) )
+        ? & > n 0 != 0 g_bck_fmv_any { ( __bck_inout_exit_check final ( bck_field_int ( bck_row - n 1 ) 3 ) T ) } {}
+        : s cleanup ( bck_apply_defers ( bck_end_post_defer final n -1 ? > n 0 ( bck_field_int ( bck_row - n 1 ) 3 ) 0 ) )
         // (…what the caller's storage views, after the defers ran, as at a
         // `^`: agora #336.)
         ? ! ( seq cleanup `!` ) {
-            ? > n 0 { ( bck_param_view_check cleanup ( bck_field_int ( bck_rec - n 1 ) 3 ) ) } {}
+            ? > n 0 { ( bck_param_view_check cleanup ( bck_field_int ( bck_row - n 1 ) 3 ) ) } {}
             ( bck_note_vkeeps cleanup )
         } {}
     } {}
@@ -117376,6 +117383,8 @@ unsafe @ __canon_import_key s path → s {
         // bck_st_set / bck_join_state / bck_loop_carry_seed return a
         // `# s ( nurl_alloc … )`-cast local, which the ident-return
         // inference cannot prove either.
+        // (bck_rec: the copying row read of the compiler's earlier sources,
+        // compiler/nurlc_lastgood.nu; this one reads rows in place, bck_row)
         ( nurl_sym_def syms `bck_rec__ret_owned` `str` )
         ( nurl_sym_def syms `str_first_word__ret_owned` `str` )
         ( nurl_sym_def syms `str_skip_word__ret_owned` `str` )
