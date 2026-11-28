@@ -16,6 +16,7 @@ $ `lean.nu`
 $ `manifest.nu`
 $ `certify.nu`
 $ `caps.nu`
+$ `wasm.nu`
 
 : VerOpts {
     String bundle
@@ -223,12 +224,39 @@ $ `caps.nu`
     : String fhave ( cert_formal_hash ( string_data . o formal ) )
     ( __vf_check t ( string_eq fwant fhave ) `formal/ is the tree the certificate was made against` ( string_data . o formal ) )
 
-    // The binary.
+    // The binary (and, for a WebAssembly module with N.cap, a binary-level
+    // cross-check of its import section against the classes N.cap names).
     ? > ( string_len . o binary ) 0 {
         : String bwant ( mj_get_str m `hashes.binary.sha256` )
-        ?? ( nc_sha256_file ( string_data . o binary ) ) {
-            T h → ( __vf_check t & > ( string_len bwant ) 0 ( string_eq h bwant ) `the binary is the one certified` ( string_data . o binary ) )
-            F → ( __vf_bad t `the binary is the one certified` `cannot read it` )
+        ?? ( read_file_bytes ( string_data . o binary ) ) {
+            T bytes → {
+                : String h ( bytes_to_hex ( sha256_pure bytes ) )
+                ( __vf_check t & > ( string_len bwant ) 0 ( string_eq h bwant ) `the binary is the one certified` ( string_data . o binary ) )
+                ? & caps ( cert_is_wasm bytes ) {
+                    : ( Vec String ) doors ( vec_new [String] )
+                    : ~ i di 0
+                    : ~ b dmore T
+                    ~ dmore {
+                        : String dp ( __vf_path `capabilities.classes.` di `.class` )
+                        ?? ( json_get m ( string_data dp ) ) {
+                            T dj → {
+                                ( vec_push [String] doors ( string_from ( json_as_str dj ) ) )
+                                = di + di 1
+                            }
+                            F → { = dmore F }
+                        }
+                    }
+                    : String tab_text ?? ( nc_read ( string_data ( nc_join bundle `caps.tsv` ) ) ) { T x → x F → ( string_new ) }
+                    ?? ( cert_caps_table tab_text ) {
+                        T tab → {
+                            : String werr ( cert_wasm_check_caps bytes doors tab )
+                            ( __vf_check t == 0 ( string_len werr ) `wasm imports match N.cap` ( string_data werr ) )
+                        }
+                        F e → ( __vf_bad t `wasm imports match N.cap` ( string_data e ) )
+                    }
+                } {}
+            }
+            F _ → ( __vf_bad t `the binary is the one certified` `cannot read it` )
         }
     } {}
 
