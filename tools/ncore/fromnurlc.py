@@ -21,8 +21,10 @@ import subprocess
 from ir import Unsupported, FnIR, Program, Var
 
 # (NCORE_ROOT=<repository>: for a copy of this directory run from elsewhere)
-ROOT = os.environ.get("NCORE_ROOT") or os.path.abspath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+# (absolute, a relative NCORE_ROOT too: it is both where the default
+# compiler is looked for and the directory that compiler runs in)
+ROOT = os.path.abspath(os.environ.get("NCORE_ROOT") or
+                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 SCALAR_NAMES = {"i64": "i", "i1": "b", "double": "f", "float": "f32", "void": "v", "": "v",
                 "i8": "u", "u8": "u", "i16": "i16", "i32": "i32", "u16": "u16", "u32": "u32",
