@@ -523,9 +523,10 @@ the same way: an owner moves, a borrow is copied.
 - A call whose callee takes one of its arguments over to return it takes
   that argument as `sink` (§1), so the caller's binding is consumed rather
   than aliased. A callee that only hands an `in` argument back — `^ p`, or
-  a literal or option payload that names it whole (§7.6) — lends it: the
-  caller keeps its binding, and the result borrows from it, so the result
-  cannot outlive it.
+  a literal or option payload that names it whole (§7.6), or such a
+  literal bound by `:` only to be handed back (`: K k @ K { p }  ^ k`) —
+  lends it: the caller keeps its binding, and the result borrows from it,
+  so the result cannot outlive it.
 
 So two live names can never both own one buffer.
 
