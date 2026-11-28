@@ -1267,7 +1267,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   the standard axioms. That includes a *double panic*: a destructor that
   panics while a panic unwinds.
 - The destructor is on the type (`Ty.dtor f t`, of a struct or an enum,
-  since A2-drop.3a). What is a **theorem** (`A2/DtorWitness.lean`, axioms
+  since A2-drop.3a). What is a **theorem** (`A2/Dtor.lean`, its witness `A2/DtorWitness.lean`, axioms
   printed by `check.sh`), for a type that holds a destructor value
   (`Ty.holdsDtor`: a destructor type, or a struct or an enum one field or
   payload of which holds one, at any depth since A2-drop.3b):

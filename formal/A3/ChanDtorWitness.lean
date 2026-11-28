@@ -1,4 +1,5 @@
 import A3.Reap
+import A3.ReapWitness
 import A3.Keys
 
 /-! A3 — Agora #755, a channel of destructor values, and a witness.

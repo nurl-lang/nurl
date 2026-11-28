@@ -20,11 +20,14 @@ import A3.SpawnOld
 import A3.Lift
 import A3.SpawnNew
 import A3.Claim
+import A3.ClaimWitness
 import A3.Make
+import A3.LockGive
 import A3.LockDtorWitness
 import A3.LockArcDtorWitness
 import A3.RwDtorWitness
 import A3.Reap
+import A3.ReapWitness
 import A3.Keys
 import A3.ChanDtorWitness
 import A3.LockExcl

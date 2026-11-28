@@ -1,0 +1,74 @@
+import A3.Claim
+import A2.ArcDtorWitness
+import A2.ArcPanicWitness
+
+/-! A3.0's claim at its witnesses: an `Arc` of a destructor value, of a `Vec`
+of them, and one whose destructor panics (Agora #610, #755, #790).  Apart
+from `A3/Claim.lean` so that a certificate, which imports the claim, loads
+no witness program (AGORA-1013). -/
+
+namespace A3
+open A2
+
+/-- Agora #610, the witness (`A2.ArcDtorWitness`): an `Arc` of a destructor
+    value, cloned, both shares dropped, on one thread.  The claim covers it:
+    safe, race-free and leak-free on every interleaving.  (Agora #755 item 1:
+    on A3's threads as on A2's, the last share's drop leaves the block an
+    orphan that the configuration's marking sweep marks and the same thread
+    reaps, running the destructor: `A3.arcDtor_reaps`, on any thread of any
+    configuration, as `A2.ArcDtorWitness.last_drop_reaps` on A2's `Steps`.) -/
+theorem arcDtor_claim :
+    MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) ∧
+      RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) ∧
+      NoLeak A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.main 5) := by
+  obtain ⟨Δ, ht⟩ := A2.ArcDtorWitness.main_typed
+  exact claim _ _ Globs.empty _ Δ 5 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
+    (fun _ h => by cases h) GlobsOK.empty ht rfl A2.ArcDtorWitness.main_codes (by decide)
+
+/-- Agora #755, the witness (`A2.ArcDtorWitness.mainV`): an `Arc` of a `Vec`
+    of destructor values, cloned, both shares dropped, on one thread.  The
+    claim covers it: safe, race-free and leak-free on every interleaving.
+    (As for `arcDtor_claim`, the thread that drops the last share reaps the
+    `Vec`, `A3.arcVecDtor_reaps`, and its frame drains it,
+    `A2.ArcDtorWitness.reapV_drains`; on A2's `Steps`,
+    `A2.ArcDtorWitness.last_dropV_reaps`.) -/
+theorem arcVecDtor_claim :
+    MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) ∧
+      RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) ∧
+      NoLeak A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcDtorWitness.mainV 6) := by
+  obtain ⟨Δ, ht⟩ := A2.ArcDtorWitness.mainV_typed
+  exact claim _ _ Globs.empty _ Δ 6 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
+    (fun _ h => by cases h) GlobsOK.empty ht rfl A2.ArcDtorWitness.mainV_codes (by decide)
+
+/-- Agora #790, the witnesses (`A2.ArcPanicWitness`): an `Arc` of a destructor
+    value whose destructor panics, its last share dropped by a panic's
+    unwinding, caught by a destructor frame with no `recover` (`main1`), by
+    a `recover` (`main2`), or by a destructor frame inside a `recover`
+    (`main3`), on one thread.  The claim covers all three: safe, race-free
+    and leak-free on every interleaving.  (As for `arcDtor_claim`, the thread
+    whose unwinding step dropped the last share reaps the orphan in that
+    configuration step, `A3.TStep.last_drop_reaps`; the reap is A2's
+    `Step.reap`, whose only redex inside the catching frame is the frame's
+    end, as `A2.ArcPanicWitness.main1_unwind`, `main2_unwind` and
+    `main3_unwind` show of A2's `Steps`; no A3 theorem traces these runs.) -/
+theorem arcPanic_claim :
+    (MemorySafe A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧
+      RaceFree A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7) ∧
+      NoLeak A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main1 7)) ∧
+    (MemorySafe A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main2 1) ∧
+      RaceFree A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main2 1) ∧
+      NoLeak A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main2 1)) ∧
+    (MemorySafe A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main3 1) ∧
+      RaceFree A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main3 1) ∧
+      NoLeak A2.ArcPanicWitness.P (fun _ => false) (Cfg.start Globs.empty A2.ArcPanicWitness.main3 1)) := by
+  obtain ⟨Δ1, ht1⟩ := A2.ArcPanicWitness.main1_typed
+  obtain ⟨Δ2, ht2⟩ := A2.ArcPanicWitness.main2_typed
+  obtain ⟨Δ3, ht3⟩ := A2.ArcPanicWitness.main3_typed
+  exact ⟨claim _ _ Globs.empty _ Δ1 7 A2.ArcPanicWitness.prog_ok A2.ArcPanicWitness.prog_codes
+      (fun _ h => by cases h) GlobsOK.empty ht1 rfl A2.ArcPanicWitness.main1_codes (by decide),
+    claim _ _ Globs.empty _ Δ2 1 A2.ArcPanicWitness.prog_ok A2.ArcPanicWitness.prog_codes
+      (fun _ h => by cases h) GlobsOK.empty ht2 rfl A2.ArcPanicWitness.main2_codes (by decide),
+    claim _ _ Globs.empty _ Δ3 1 A2.ArcPanicWitness.prog_ok A2.ArcPanicWitness.prog_codes
+      (fun _ h => by cases h) GlobsOK.empty ht3 rfl A2.ArcPanicWitness.main3_codes (by decide)⟩
+
+end A3

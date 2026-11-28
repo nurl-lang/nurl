@@ -46,6 +46,7 @@ import A2.TakeBDWitness
 import A2.HandOver
 import A2.ExitWitness
 import A2.Layout
+import A2.Dtor
 import A2.DtorWitness
 import A2.DropCode
 import A2.ClosureDropWitness
