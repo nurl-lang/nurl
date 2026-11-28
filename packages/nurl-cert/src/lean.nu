@@ -143,6 +143,16 @@ $ `stdlib/ext/json.nu`
     ^ @ ?String { T o }
 }
 
+// `--root=<work>`: the work directory is the root of Lean's module names,
+// so the combined file is the module `All` wherever the bundle is (Lean
+// otherwise names it by its path from the current directory, and a
+// private declaration's name carries that: `_private.<module>.0.…`).
+@ __lt_root s work → String {
+    : String o ( string_from `--root=` )
+    ( string_push_str o work )
+    ^ o
+}
+
 // `import <name>`, and with `meta`, `meta import <name>` too.
 @ __lt_imp String o s name b meta_too → v {
     ( string_push_str o `import ` )
@@ -470,6 +480,7 @@ $ `stdlib/ext/json.nu`
     } {}
     ( vec_push [String] a1 ( string_from LEAN_THREADS ) )
     ( vec_push [String] a1 ( string_from `--json` ) )
+    ( vec_push [String] a1 ( __lt_root work ) )
     ( vec_push [String] a1 ( string_clone all ) )
     : Run r ( nc_run lean a1 )
     : b has_elab ?? etext { T _ → T F → F }
@@ -641,6 +652,7 @@ theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
     : ( Vec String ) a ( vec_new [String] )
     ( vec_push [String] a ( string_from LEAN_THREADS ) )
     ( vec_push [String] a ( string_from `--json` ) )
+    ( vec_push [String] a ( __lt_root work ) )
     ( vec_push [String] a ( string_clone file ) )
     : Run r ? set ( nc_run lean a ) @ Run { F -1 ( string_new ) ( string_new ) }
     // proved: Lean exited 0, wrote no error and nothing on stderr
@@ -654,41 +666,23 @@ theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
 
 // The axioms `#print axioms` lists for `name`, comma-separated as Lean
 // prints them ("" for none), or none when the name is not reported.
-// Does `l` start `'_private.<module>.0.<name>' ` (`tail` = `.0.<name>' `),
-// with a module name of letters, digits, `_` and `.` between?
-@ __lt_private_of String l s tail → b {
-    : s p `'_private.`
-    ? ! ( string_starts_with l p ) { ^ F } {}
-    : ( Slice u ) t ( slice_of_str ( string_data l ) )
-    : i n ( slice_len [u] t )
-    : i a ( nurl_str_len p )
-    // (the module's name: letters, digits, `_` and `.`, then the tail)
-    : ~ i k a
-    ~ < k n {
-        ? ( __lt_at t k tail ) { ^ > k a } {}
-        : i c ( slice_byte t k )
-        ? ! | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 | == c 95 == c 46 { ^ F } {}
-        = k + k 1
-    }
-    ^ F
-}
-
 @ cert_lean_axioms String log s name → ?String {
     : ( Vec String ) ls ( nc_lines ( string_data log ) )
     : String head ( string_from `'` )
     ( string_push_str head name )
     ( string_push_str head `' ` )
-    // (in the combined file, a module, the claims are its private
-    // declarations: Lean names `Cert.m_safe` `_private.<module>.0.Cert.m_safe`)
-    : String ptail ( string_from `.0.` )
-    ( string_push_str ptail name )
-    ( string_push_str ptail `' ` )
+    // (in the combined file, the module `All` (`__lt_root`), the claims are
+    // its private declarations: Lean names `Cert.m_safe`
+    // `_private.All.0.Cert.m_safe`)
+    : String phead ( string_from `'_private.All.0.` )
+    ( string_push_str phead name )
+    ( string_push_str phead `' ` )
     : i n ( vec_len [String] ls )
     : ~ i k 0
     ~ < k n {
         ?? ( vec_get [String] ls k ) {
             T l → {
-                ? | ( string_starts_with l ( string_data head ) ) ( __lt_private_of l ( string_data ptail ) ) {
+                ? | ( string_starts_with l ( string_data head ) ) ( string_starts_with l ( string_data phead ) ) {
                     ? ( string_contains l `does not depend on any axioms` ) { ^ @ ?String { T ( string_new ) } } {}
                     ?? ( string_index_of l `[` ) {
                         T a → {
