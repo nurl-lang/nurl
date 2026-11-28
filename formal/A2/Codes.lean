@@ -799,7 +799,7 @@ def Stmt.globsAt (GT : GTy) : Stmt → Prop
   | .block s => s.globsAt GT
   | .loop s => s.globsAt GT
   | .takeB _ _ _ s => s.globsAt GT
-  | _ => True
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => True
 
 /-- **A3.6: the program reads its globals at their declared types**: every
     function's body does. -/

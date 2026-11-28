@@ -380,7 +380,7 @@ def stmtCodesB (P : Prog) : Stmt → Bool
   | .block s => stmtCodesB P s
   | .loop s => stmtCodesB P s
   | .takeB _ _ _ s => stmtCodesB P s
-  | _ => true
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => true
 
 theorem stmtCodesB_sound {P : Prog} : ∀ {s : Stmt}, stmtCodesB P s = true → s.codesOK P := by
   intro s

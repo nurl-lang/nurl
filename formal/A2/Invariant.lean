@@ -3138,7 +3138,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .block s => s.codesOK P
   | .loop s => s.codesOK P
   | .takeB _ _ _ s => s.codesOK P
-  | _ => True
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P
 

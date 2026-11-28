@@ -231,7 +231,7 @@ def hasExit : Stmt → Bool
   | .letrec _ _ s | .catchR _ _ s | .unpair _ _ _ s | .callc _ _ _ _ _ s | .letd _ _ _ s
   | .scopeD _ _ s | .withLock _ _ s | .scopeL _ _ _ s | .withElem _ _ _ s | .callcE _ _ _ _ s
   | .block s | .loop s | .takeB _ _ _ s => hasExit s
-  | _ => false
+  | .skip | .assign _ _ | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ => false
 
 /-- `checkStmt2`, asked only of a statement with no `exit`. -/
 def pre2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) :
