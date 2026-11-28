@@ -37535,7 +37535,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // AGORA-374.)
     : ~ s __vat_nm ``
     : ~ s __vat_k ``
-    : b __vat_on & & != 0 g_borrowck != 0 ( nurl_str_starts call_name `vec_at` ) ( seq ( bck_generic_base call_name ) `vec_at` )
+    // (Only a `vec_at` of a Vec of Strings or Vecs can lend at its index,
+    // __vat_idx_ok — told first by the call's name, which carries the
+    // element type: most `vec_at`s copy nothing here.)
+    : b __vat_on & & & != 0 g_borrowck != 0 ( nurl_str_starts call_name `vec_at__` ) | != 0 ( nurl_str_starts call_name `vec_at__String` ) != 0 ( nurl_str_starts call_name `vec_at__Vec__` ) ( seq ( bck_generic_base call_name ) `vec_at` )
     // (The owner an inout argument names, at any position — where a
     // keeping callee may store the views it was handed beside it — and
     // where this call's pending `vpass` rows begin.)
@@ -57727,6 +57730,8 @@ unsafe @ bck_add_cap_name s name → v {
 // Strings or Vecs. Elsewhere a grown element ends every view of the Vec's
 // elements, as before.
 @ __vat_idx_ok i syms s name → b {
+    : s ty0 ( nurl_sym_get syms name )
+    ? == 0 ( nurl_str_starts ty0 `%Vec__` ) { ^ F } {}
     ? | | | != 0 ( nurl_sym_len2 syms name `__param` ) != 0 ( nurl_sym_len2 syms name `__inout` ) != 0 ( nurl_sym_len2 syms name `__sinkp` ) ( nurl_sym_has_word syms `__fn_param_names__` name ) { ^ F } {}
     ? | | != 0 ( nurl_sym_len2 syms name `__captured_byref` ) != 0 ( nurl_sym_len2 syms name `__global` ) != 0 ( nurl_sym_len2 syms name `__borrow` ) { ^ F } {}
     : s ty ( nurl_sym_get syms name )
