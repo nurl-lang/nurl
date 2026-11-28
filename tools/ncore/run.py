@@ -241,6 +241,11 @@ def main(argv):
             continue
         files.append(a if os.path.exists(a) else os.path.join(HOLES, a))
         i += 1
+    # (every probe runs nurlc: say where it was looked for, not a traceback)
+    nc = fromnurlc.nurlc_binary()
+    if not (os.path.isfile(nc) and os.access(nc, os.X_OK)):
+        print(f"run.py: no nurlc at {nc}: build it (./build.sh) or set NURLC=<binary>", file=sys.stderr)
+        return 2
     work = files
     if jobs > 1 and len(files) > 3:
         import multiprocessing
@@ -280,7 +285,9 @@ def main(argv):
     for n, e in mism["false_reject"][:show]:
         print("   ", n, "--", e)
     if len(files) > 3:
-        out = "results_clean.tsv" if CLEAN else "results_nurlc.tsv"
+        # (results_nurlc.tsv is the full sweep's: engcmp.py --verdicts reads
+        # it as the reference, so a run over some probes writes its own)
+        out = "results_clean.tsv" if CLEAN else "results_nurlc.tsv" if whole else "results_subset.tsv"
         with open(os.path.join(HERE, out), "w", encoding="utf-8") as f:
             f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
     if whole and not CLEAN:
