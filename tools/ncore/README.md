@@ -9,9 +9,8 @@ decides the hole probes without any code per surface spelling.
 |---|---|
 | `ir.py` | the core IR's forms (`FnIR`, `Var`, `Program`) and the type facts the checker asks (`Types`); `Unsupported` for a construct it does not model |
 | `check.py` | the checker: places, loans, effects, formal/A2's `Eff.kills` lifted to places, summaries by a whole-program fixpoint |
-| `prims.py` | declared summaries of the stdlib functions the probes call (the `unsafe` trust boundary) |
 | `fromnurlc.py` | nurlc's core IR (`--emit-core`) read into the form `check.py` checks |
-| `derive.py` | the summary of a library function whose body crosses the raw boundary, from what the walk believes of it (`sum` lines), where `prims.py` declares none |
+| `derive.py` | the summary of a library function whose body crosses the raw boundary, from what the walk believes of it (`sum` lines), where nurlc declares none |
 | `RULES.md` | the rules `check.py` checks, each with where docs/MEMORY.md states it |
 | `disagree.tsv` | the probes whose `// map:` verdict the rules do not give yet, and how (the work left) |
 | `show.py` | one program: its verdict, errors and summaries; `--trace FN` the state after each statement |
@@ -70,5 +69,6 @@ diagnostic that is no ownership rule (typing, the raw boundary).
 
 On nurlc's IR the program's own functions are checked. A library function
 is trusted: one whose body stays inside the raw boundary is walked for its
-summary; one that crosses it is answered by `prims.py`, or by `derive.py`
+summary; one that crosses it is answered by nurlc's declared summary (its `eng_prims`
+table, which `--emit-core` prints as `prim` lines: no copy here), or by `derive.py`
 from the walk's own summaries.

@@ -17,12 +17,14 @@ A loan is (place, kind): 'handle' (a copy of the place's handle) or 'view'
 (a pointer into the place's own buffer).  An effect on a place kills loans by
 formal/A2's Eff.kills, extended from bindings to places.
 
-Function summaries are those of prims.py, inferred for program functions by a
+Function summaries are nurlc's declared ones (`prim` lines), inferred for program functions by a
 fixpoint over the whole program: definition order plays no part."""
 import os
 import sys
 
-from prims import PRIMS
+# The declared summaries: nurlc's own table, as `--emit-core` prints it
+# (fromnurlc.py's `prim` lines), set by check_program. AGORA-1046: no copy.
+PRIMS = {}
 
 
 # The runtime entries that may start a panic on this thread, as nurlc's
@@ -5816,6 +5818,8 @@ def initial_summary(prog, fn):
 
 
 def check_program(prog, max_rounds=40):
+    PRIMS.clear()
+    PRIMS.update(getattr(prog, "prims", {}))
     summ = {name: initial_summary(prog, fn) for name, fn in prog.fns.items()}
     for _ in range(max_rounds):
         changed = False

@@ -60,10 +60,9 @@ def verdict_nurlc(path):
     """The verdict on the IR nurlc itself lowers the program to.
 
     The program's own functions are checked.  A function of the standard
-    library is trusted: a declared summary (prims.py) answers for it; one
+    library is trusted: a declared summary (nurlc's `prim` lines) answers for it; one
     with none whose body uses no raw memory is walked for its summary, and
     one that does needs a declared summary."""
-    from prims import PRIMS
     rd, gaps, rc, err = fromnurlc.read_program(path)
     if rc != 0:
         first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
@@ -75,6 +74,7 @@ def verdict_nurlc(path):
             return "rejected", [("nurlc", 0, "the walk: " + msg[:60])], {}
         raise Unsupported("nurlc: " + msg[:40])
     prog = rd.prog
+    PRIMS = prog.prims
     every = dict(prog.fns)
 
     memo = {}
@@ -164,7 +164,7 @@ def verdict_nurlc(path):
 
 
 # NCORE_WALK=1: a library function whose body stays inside the raw boundary
-# is walked even where prims.py declares a summary for it (how far the
+# is walked even where nurlc declares a summary for it (how far the
 # declared summaries are still needed).
 WALK_FIRST = os.environ.get("NCORE_WALK") == "1"
 
