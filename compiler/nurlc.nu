@@ -57732,7 +57732,17 @@ unsafe @ bck_add_cap_name s name → v {
     : s ty ( nurl_sym_get syms name )
     ? == 0 ( nurl_str_starts ty `%Vec__` ) { ^ F } {}
     : s el ( __vec_elem_llvm ty )
-    ^ | ( seq el `%String` ) != 0 ( nurl_str_starts el `%Vec__` )
+    ? ! | ( seq el `%String` ) != 0 ( nurl_str_starts el `%Vec__` ) { ^ F } {}
+    ^ ( __vat_elem_no_view el )
+}
+
+// Does a value of LLVM type `el` hold no view (A2's `holdsView = false`): a
+// String, a number, or a Vec of those? Where elements hold views, a change
+// inside one ends every element's (`Eff.kills (.dropInAt i)`'s `hv`).
+@ __vat_elem_no_view s el → b {
+    ? ( seq el `%String` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts el `%Vec__` ) { ^ ( __vat_elem_no_view ( __vec_elem_llvm el ) ) } {}
+    ^ ( str_contains_word `i64 i32 i16 i8 i1 double float` el )
 }
 
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
@@ -74498,10 +74508,47 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ? ! ( __sx_callee_at_is_vec_at sx at ) { ^ ( nurl_str_cat `` `` ) } {}
     : i pl ( nurl_str_len pat )
     : s sx2 ( nurl_str_cat3 ( nurl_str_slice sx 0 at ) `(-|-)` ( nurl_str_slice sx + at pl - - ( nurl_str_len sx ) at pl ) )
-    ? ( str_contains_word ( __sx_leaf_names sx2 ) r ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (…and nothing else in it but the views A2 types as views of what
+    // they are given (`RhsT.view`: `string_data`, `string_bytes`,
+    // `slice_from_vec`, the library's): no other binding, which might reach
+    // R too — `( sel ( vec_at R 0 ) a1 )`, `a1` a view of R's element 1, is
+    // element 1 when `sel` lends its second argument (CodeRabbit on
+    // github#2370) — and no other call: A2's call boundary keeps no index
+    // (`Kind.coarse`), so a view a function hands back of an element is one
+    // of R's elements, any of them. AGORA-1037.)
+    ? | != 0 ( nurl_str_len ( __sx_leaf_names sx2 ) ) ! ( __sx_callees_in sx2 `vec_at string_data string_bytes slice_from_vec` ) { ^ ( nurl_str_cat `` `` ) } {}
     : s k ( __bck_elx_get line r )
     ? == 0 ( nurl_str_len k ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_str_cat3 r `:` k )
+}
+
+// Is every callee of source expression `sx` (a word followed by `(`) one
+// of the standard library's functions named in `ok` (a generic one by its
+// base name)? Read piece by piece, each up to the next `(`: the word that
+// ends a piece is a callee. (A leaf in a piece is read as one too, and
+// fails: the caller refuses a leaf anyway.)
+@ __sx_callees_in s sx s ok → b {
+    : ~ s rest ( nurl_str_cat sx `` )
+    : ~ b go T
+    ~ go {
+        : i f ( nurl_str_find rest `(` )
+        ? < f 0 { = go F } {
+            : ~ s ws ( __sx_leaf_names ( nurl_str_slice rest 0 f ) )
+            ~ != 0 ( nurl_str_len ws ) {
+                : s w ( str_first_word ws ) = ws ( str_skip_word ws )
+                ? ! ( __vex_std_callee w ok ) { ^ F } {}
+            }
+            = rest ( nurl_str_slice rest + f 1 - - ( nurl_str_len rest ) f 1 )
+        }
+    }
+    ^ T
+}
+
+// Is callee `cal` the standard library's function of one of the names in
+// `ok` (a generic one by its base name), not a program's own of the name?
+@ __vex_std_callee s cal s ok → b {
+    ? ! ( str_contains_word ok ( bck_generic_base cal ) ) { ^ F } {}
+    ^ | ( __fn_from_stdlib cal ) ( __fn_from_stdlib ( __callee_decl_name cal ) )
 }
 
 // Does view `bs` view, of `sids`, one element alone that is not element
@@ -74899,7 +74946,12 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         = g_bck_sx_elix -1
         ? & & != 0 g_bck_vex_any g_bck_sx_part == BCK_OWNED ( bck_st_get out g_bck_sx_wid ) {
             : s rs ( nurl_str_int g_bck_sx_wid )
-            ? ( __sx_is_vec_at_of ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) rs ) {
+            // (…changed by the library's own change of a Vec or String,
+            // which A2 types as a change through the borrow, inside that
+            // element (`StmtT.editB`, `Eff.dropInAt`). A function of the
+            // program's is a call, whose boundary keeps no index
+            // (`Kind.coarse`): its change is one to any of R's elements.)
+            ? & ( __sx_is_vec_at_of ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) rs ) ( __vex_std_callee cal `string_push_str string_push_bytes string_push_char string_push_int string_push_float vec_push vec_set vec_put vec_truncate vec_clear` ) {
                 : s ek ( __bck_elx_get ( bck_field rec 3 ) rs )
                 ? != 0 ( nurl_str_len ek ) { = g_bck_sx_elix ( nurl_str_to_int ek ) } {}
             } {}

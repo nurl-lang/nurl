@@ -854,8 +854,14 @@ container. A view of the container's own block — a `Slice` of the `Vec`
 of a `Vec` of Strings or `Vec`s that a local binding of the function owns:
 `: s d1 ( string_data ( vec_at vs 1 ) )` outlives `( string_push_str (
 vec_at vs 0 ) … )`. Out of a parameter, or out of a `Vec` of structs, the
-view of another element ends as the grown element's does: that is the
-shape the formal model types (`RhsT.atIdx`, AGORA-1037). An index that is not a literal, or two different
+view of another element ends as the grown element's does. So it does when
+a function of your own stands between: the view taken through one
+(`( idv ( vec_at vs 1 ) )`), the element grown by one (`( grow ( vec_at vs
+0 ) )`), or another binding in the view's expression. Only the library's
+own forms keep it — `vec_at`, under `string_data`, `string_bytes` or
+`slice_from_vec`, and the library's push, set or truncation through `(
+vec_at vs K )` — because that is the shape the formal model types
+(`RhsT.atIdx`, AGORA-1037): a call is a boundary that keeps no index. An index that is not a literal, or two different
 literals for one container on one line, names no element the checker can
 tell apart, and that view ends. Any change that may reorder the
 container, or what an index of it names, between the view and the call
