@@ -675,25 +675,26 @@ against 80.2 s (−0.2 %). Lean is asked only for a term that can be
 `elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3 to 7 and "the words as
 numbers") has the numbers, peak memory included.
 
-N.cap costs certify no time: over the 62 certify programs, one at a time,
-best of 3 alternated runs against the nurl-cert and `formal/` of main
-011e9589d (each tree a fresh copy, so neither has its build's page cache
-state), certify takes 56.4 s against 56.7 s (−0.5 %; −1.1 % without the
-joins program, which alone is a third of the corpus), the median program
-5 ms less. Lean's check of Caps.lean costs about 20 ms a program (the
-kernel's check of the list and elaborating `Cert.n_cap`); certify gets it
-back by running nurlc's second compile (the LLVM IR and the unsafe report,
-which go only into the manifest) on a thread while the translation and
-Lean run, by reading the core IR's calls in one scan, and by reading
-`formal/`'s commit from git's files instead of a `git` process. The sum of
-the peak RSS is +0.23 % (41.95 GB against 41.86 GB; the largest peak
-2.535 GB against 2.533 GB): +0.30 % over the 55 single-threaded programs,
-whose Caps.lean loads `A2.Reach` and `C.Caps` (5 MB of `formal/`'s build),
-−0.28 % over the 7 threaded ones. A certificate's imports carry no witness
-program any more (`C/ElabWitness.lean`, `A3/ClaimWitness.lean`, and the
-others the changelog names): an accepted program's Lean check loads 1.7 MB
-less of `C.Elab`, a threaded one's 17 MB less in all. A single-threaded
-program's Caps.lean loads no A3 (`C.Caps3` is apart).
+N.cap costs certify neither time nor memory: over the 62 certify programs,
+one at a time, best of 3 alternated runs against the nurl-cert and
+`formal/` of main 011e9589d (each tree a fresh copy, so neither has its
+build's page cache state), certify takes 64.56 s against 65.10 s (−0.8 %,
+the median program 10 ms less), and the sum of the peak RSS is −0.04 %
+(41.84 GB against 41.85 GB; the largest peak 2.533 GB against 2.534 GB):
+−0.66 % over the 7 threaded programs, +0.04 % over the 55 single-threaded
+ones. What N.cap adds, Lean's check of Caps.lean (about 20 ms a program,
+the kernel's check of the list and elaborating `Cert.n_cap`) and the 5 MB of
+`formal/`'s build its proof loads (`A2.Reach`, `C.Caps`), certify gets back:
+nurlc's second compile (the LLVM IR and the unsafe report, which go only
+into the manifest) runs on a thread while the translation and Lean run;
+Lean runs with two worker threads, not one per core (a check's parallel
+parts are few: alone, −3.0 % time and −0.34 % peak RSS); the core IR's
+calls are read in one scan, and `formal/`'s commit from git's files, not a
+`git` process; and a certificate's imports carry no witness program any
+more (`C/ElabWitness.lean`, `A3/ClaimWitness.lean` and the others the
+changelog names: an accepted program loads 1.7 MB less of `C.Elab`, a
+threaded one 17 MB less in all). A single-threaded program's Caps.lean
+loads no A3 (`C.Caps3` is apart).
 
 Without `--certify`, nothing changes:
 - `--list-sources=TAG` is off by default;
