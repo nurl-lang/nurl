@@ -1142,6 +1142,36 @@ $ `stdlib/std/net.nu`
     ^ ( ping )
 }
 EOF3
+# A function of the program's own that takes a result and matches it is
+# translated (`(.sum .int .int)`, `.isl`, `.getl`, `.getr`) and checked by the
+# kernel; only `main`, which calls write_file, is assumed.
+cat > "$NC/rmatch.nu" <<'EOF3'
+$ `stdlib/std/fs.nu`
+
+@ code !v IoErr r → i {
+    ?? r {
+        T _ → { ^ 0 }
+        F _ → { ^ 1 }
+    }
+}
+
+@ main → i {
+    ^ ( code ( write_file `out.txt` `hi` ) )
+}
+EOF3
+"$C" certify "$NC/rmatch.nu" "${CA[@]}" > "$NC/rmatch.out" 2>&1; crc=$?
+"$C" verify "$NC/rmatch.cert" --formal "$ROOT/formal" > "$NC/rmatch.vout" 2>&1; vrc=$?
+if [ "$crc" = 0 ] && [ "$vrc" = 0 ] && grep -q "M.safe assumed" "$NC/rmatch.out" \
+    && grep -q "params := \[(.inp, (.sum .int .int))\]" "$NC/rmatch.cert/Program.lean" \
+    && grep -q "(.getl 0)" "$NC/rmatch.cert/Program.lean" && grep -q "(.getr 0)" "$NC/rmatch.cert/Program.lean" \
+    && python3 - "$NC/rmatch.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+st = {f["name"]: f["status"] for f in m["coverage"]["functions"]}
+sys.exit(0 if st.get("code") == "proved" and st.get("main") == "unsupported" else 1)
+EOF3
+then ok "a function matching a result is translated and checked; only its caller is assumed"
+else bad "a function matching a result is translated and checked (certify rc $crc, verify rc $vrc)"; tail -3 "$NC/rmatch.out"; fi
 for n in fwrite netc; do
     "$C" certify "$NC/$n.nu" "${CA[@]}" > "$NC/$n.out" 2>&1; crc=$?
     "$C" verify "$NC/$n.cert" --formal "$ROOT/formal" > "$NC/$n.vout" 2>&1; vrc=$?
