@@ -7,7 +7,7 @@ checker it proposes (`tools/ncore/`) and the measurements below.
 
 **Where it stands.** S1 is in the compiler (AGORA-858): the walk builds
 the core IR and `nurlc --emit-core` prints it. [CORE_IR.md](CORE_IR.md)
-describes it, and `tools/ncore --nurlc` runs the reference checker on what
+describes it, and `tools/ncore` runs the reference checker on what
 nurlc lowers instead of on its own parser's lowering.
 
 S2 is in shadow (AGORA-859, AGORA-863). A program the walk refuses on an

@@ -18,12 +18,13 @@ checker the way the compiler lowered it.
 import os
 import subprocess
 
-from syntax import Unsupported
-from lower import FnIR, Program, Var
+from ir import Unsupported, FnIR, Program, Var
 
 # (NCORE_ROOT=<repository>: for a copy of this directory run from elsewhere)
-ROOT = os.environ.get("NCORE_ROOT") or os.path.abspath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+# (absolute, a relative NCORE_ROOT too: it is both where the default
+# compiler is looked for and the directory that compiler runs in)
+ROOT = os.path.abspath(os.environ.get("NCORE_ROOT") or
+                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 SCALAR_NAMES = {"i64": "i", "i1": "b", "double": "f", "float": "f32", "void": "v", "": "v",
                 "i8": "u", "u8": "u", "i16": "i16", "i32": "i32", "u16": "u16", "u32": "u32",
@@ -39,7 +40,12 @@ class TypeInfo:
 
 
 def nurlc_binary():
-    return os.environ.get("NURLC") or os.path.join(ROOT, "build", "nurlc")
+    """The compiler every probe is run through, as an absolute path: NURLC
+    (a relative one from the directory the run was started in), else the
+    repository's build/nurlc. The check that it exists and the launch (with
+    cwd=ROOT) then name the same file."""
+    env = os.environ.get("NURLC")
+    return os.path.abspath(env) if env else os.path.join(ROOT, "build", "nurlc")
 
 
 def emit_core(path):
@@ -336,7 +342,7 @@ class Reader:
         raise Unsupported("rvalue " + k)
 
     def finish_fn(self, raw):
-        from lower import Types
+        from ir import Types
         self.T = Types(self.prog)
         fn = FnIR(raw["name"], raw["line"])
         fn.ncap = 0
@@ -375,7 +381,7 @@ class Reader:
     def lower_body(self, fn):
         """The function's statements as check.py's tuples; raises Unsupported
         where the IR holds something the checker has no rule for yet."""
-        from lower import Types
+        from ir import Types
         self.T = Types(self.prog)
         lines = fn.raw["stmts"]
         self.pos = 0

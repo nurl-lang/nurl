@@ -6,7 +6,7 @@ one rule a row. This is the working list for stage S2 of
 in nurlc will transcribe, each with where docs/MEMORY.md states it. A rule
 that is here is applied to every spelling: the checker never sees one.
 
-`run.py --nurlc --all` says how many hole probes agree with their `// map:`
+`run.py --all` says how many hole probes agree with their `// map:`
 verdict under these rules. A probe that disagrees is a rule missing from
 this list, or one written too coarsely.
 

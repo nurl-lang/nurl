@@ -206,8 +206,8 @@ nurlc and reads the IR into the form `check.py` checks:
 
 ```
 cd tools/ncore
-PYTHONUTF8=1 python run.py --nurlc --list subset.txt
-PYTHONUTF8=1 python run.py --nurlc <probe>.nu
+PYTHONUTF8=1 python run.py --list subset.txt
+PYTHONUTF8=1 python run.py <probe>.nu
 ```
 
 The walk runs as it does in a compile, so its summaries are final where

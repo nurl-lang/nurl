@@ -11,7 +11,7 @@ lines (a finding: function, line, message) and one `eng verdict` line
   PYTHONUTF8=1 python engcmp.py --list files.txt --jobs 8
   PYTHONUTF8=1 python engcmp.py --verdicts [results.tsv] --jobs 8
         the engine's verdict on every program listed in a results file of
-        `run.py --nurlc` (default: results_nurlc.tsv, every hole probe)
+        `run.py` (default: results_nurlc.tsv, every hole probe)
         against the reference checker's verdict recorded there
 
 (NURLC=<binary>; NCORE_ENGCMP_TIMEOUT=<seconds> per program, default 300.)
@@ -30,7 +30,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fromnurlc              # noqa: E402
-from lower import Types, SCALARS   # noqa: E402
+from ir import Types, SCALARS   # noqa: E402
 from check import VIEW_TYPES  # noqa: E402
 
 KIND = {"s": 1, "ptr": 2, "opt": 3, "res": 4, "slice": 5, "closure": 6, "String": 7, "vec": 8, "box": 9, "named": 10}
@@ -176,7 +176,7 @@ def _verdict_job(job):
 
 
 def verdicts(results, jobs):
-    """The engine's verdict on every program of a `run.py --nurlc` results
+    """The engine's verdict on every program of a `run.py` results
     file against the reference's verdict in it."""
     ref = {}
     for line in open(results, encoding="utf-8"):

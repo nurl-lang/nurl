@@ -3,12 +3,13 @@
 """Run the core-IR checker over hole probes and compare with each probe's
 `// map:` verdict (rejected / runs-clean).
 
-  python tools/ncore/run.py [--nurlc] [--all] [--clean] [--list FILE] [--jobs N] [--show N] [probe.nu ...]
+  python tools/ncore/run.py [--all] [--clean] [--list FILE] [--jobs N] [--show N] [probe.nu ...]
 
---nurlc checks the IR nurlc itself lowers the program to (fromnurlc.py);
-without it the prototype's own parser and lowering are used. --clean takes
-every file given as a program that must be accepted (the tree's own code:
-a refusal there is a rule written too coarsely).
+The checker reads the IR nurlc itself lowers the program to (fromnurlc.py):
+the prototype's own parser and lowering, a mirror of nurlc's front end, went
+in AGORA-1046. (`--nurlc`, which chose this, is still accepted.) --clean
+takes every file given as a program that must be accepted (the tree's own
+code: a refusal there is a rule written too coarsely).
 """
 import os
 import signal
@@ -19,9 +20,7 @@ import traceback
 sys.setrecursionlimit(10000)
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from syntax import Unsupported, ParseError       # noqa: E402
-from load import load, lib_headers               # noqa: E402
-from lower import build_program                  # noqa: E402
+from ir import Unsupported, ParseError           # noqa: E402
 from check import check_program, CheckError      # noqa: E402
 import fromnurlc                                 # noqa: E402
 import derive                                    # noqa: E402
@@ -41,15 +40,6 @@ def expected(path):
                 cols = [c.strip() for c in line[len("// map:"):].split("|")]
                 return cols[2] if len(cols) > 2 else None
     return None
-
-
-def verdict(path):
-    decls, imports = load(path)
-    hdrs = dict(lib_headers())
-    hdrs["mem_dup"] = (["T"], [("in", ("tvar", "T"), "x")], ("tvar", "T"))
-    prog = build_program(decls, hdrs)
-    errors, summ = check_program(prog)
-    return ("rejected" if errors else "runs-clean"), errors, summ
 
 
 # What marks a diagnostic of the fused walk that the ownership engine does
@@ -185,7 +175,7 @@ def _timed_out(signum, frame):
 
 def one(job):
     """One probe's outcome: (name, status, detail, first error)."""
-    path, use_nurlc = job
+    path = job
     exp = expected(path)
     name = os.path.basename(path)
     # NCORE_TIMEOUT=<seconds>: a program the checker does not finish in time
@@ -195,7 +185,7 @@ def one(job):
         signal.signal(signal.SIGALRM, _timed_out)
         signal.alarm(limit)
     try:
-        got, errors, _ = (verdict_nurlc if use_nurlc else verdict)(path)
+        got, errors, _ = verdict_nurlc(path)
     except Unsupported as e:
         return (name, "skip", str(e)[:80], None)
     except TimeoutError:
@@ -215,7 +205,6 @@ def main(argv):
     files = []
     whole = write_list = False
     show = 15
-    use_nurlc = False
     jobs = 0
     i = 0
     while i < len(argv):
@@ -226,7 +215,6 @@ def main(argv):
             i += 2
             continue
         if a == "--nurlc":
-            use_nurlc = True
             i += 1
             continue
         if a == "--clean":
@@ -253,7 +241,12 @@ def main(argv):
             continue
         files.append(a if os.path.exists(a) else os.path.join(HOLES, a))
         i += 1
-    work = [(p, use_nurlc) for p in files]
+    # (every probe runs nurlc: say where it was looked for, not a traceback)
+    nc = fromnurlc.nurlc_binary()
+    if not (os.path.isfile(nc) and os.access(nc, os.X_OK)):
+        print(f"run.py: no nurlc at {nc}: build it (./build.sh) or set NURLC=<binary>", file=sys.stderr)
+        return 2
+    work = files
     if jobs > 1 and len(files) > 3:
         import multiprocessing
         with multiprocessing.Pool(jobs) as pool:
@@ -292,10 +285,12 @@ def main(argv):
     for n, e in mism["false_reject"][:show]:
         print("   ", n, "--", e)
     if len(files) > 3:
-        out = "results_clean.tsv" if CLEAN else "results_nurlc.tsv" if use_nurlc else "results_own.tsv"
+        # (results_nurlc.tsv is the full sweep's: engcmp.py --verdicts reads
+        # it as the reference, so a run over some probes writes its own)
+        out = "results_clean.tsv" if CLEAN else "results_nurlc.tsv" if whole else "results_subset.tsv"
         with open(os.path.join(HERE, out), "w", encoding="utf-8") as f:
             f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
-    if whole and use_nurlc and not CLEAN:
+    if whole and not CLEAN:
         return disagreements(done, write_list)
     return 0
 

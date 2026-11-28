@@ -7,9 +7,7 @@ decides the hole probes without any code per surface spelling.
 
 | file | what it does |
 |---|---|
-| `syntax.py` | lexer and parser for the subset the probes use; `Unsupported` for the rest |
-| `load.py` | a probe and the headers of the core stdlib files it imports |
-| `lower.py` | surface AST → core IR: every call, join, match and value block becomes a temporary, in evaluation order |
+| `ir.py` | the core IR's forms (`FnIR`, `Var`, `Program`) and the type facts the checker asks (`Types`); `Unsupported` for a construct it does not model |
 | `check.py` | the checker: places, loans, effects, formal/A2's `Eff.kills` lifted to places, summaries by a whole-program fixpoint |
 | `prims.py` | declared summaries of the stdlib functions the probes call (the `unsafe` trust boundary) |
 | `fromnurlc.py` | nurlc's core IR (`--emit-core`) read into the form `check.py` checks |
@@ -28,13 +26,16 @@ decides the hole probes without any code per surface spelling.
 
 `fromnurlc.py` reads the core IR nurlc itself builds
 (`nurlc --emit-core`, [docs/dev/CORE_IR.md](../../docs/dev/CORE_IR.md)):
-with `--nurlc` the checker runs on what the compiler lowered, for every
-probe and every construct, and `syntax.py` / `lower.py` are not used.
+the checker runs on what the compiler lowered, for every probe and every
+construct. It has no front end of its own: the parser and lowering that
+mirrored nurlc's went in AGORA-1046, by the owner's rule that Python is
+development tooling only and mirrors no NURL component (agora note
+python-dev-only). Nothing here is on a path a NURL user runs.
 
 ```
 cd tools/ncore
-PYTHONUTF8=1 python run.py --nurlc --jobs 8 --all  # every probe, on nurlc's IR (NURLC=<binary>; NCORE_CACHE=<dir> keeps the IR between runs)
-PYTHONUTF8=1 python run.py --nurlc --clean --list files.txt  # programs nurlc accepts (examples, tests): every one refused is a rule too coarse
+PYTHONUTF8=1 python run.py --jobs 8 --all  # every probe, on nurlc's IR (NURLC=<binary>; NCORE_CACHE=<dir> keeps the IR between runs)
+PYTHONUTF8=1 python run.py --clean --list files.txt  # programs nurlc accepts (examples, tests): every one refused is a rule too coarse
 PYTHONUTF8=1 python show.py --trace main <probe>.nu          # why: the state after each statement
 ```
 
@@ -50,7 +51,7 @@ PYTHONUTF8=1 python diagcmp.py --jobs 8 --tsv out.tsv  # every refusal golden: i
 A rule changed here is changed there, and the other way round: the
 comparison is what says they are still one table.
 
-`--nurlc --all` ends by comparing with `disagree.tsv`: a probe that agrees
+`--all` ends by comparing with `disagree.tsv`: a probe that agrees
 now is progress (`--write-list` takes it off the list), one that joined
 the list is named and the run fails. A change to the rules is held to
 that line, and to `--clean` over examples/ and the valid compiler tests.

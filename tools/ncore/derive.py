@@ -13,7 +13,7 @@ against docs/MEMORY.md and the probes.  `compare()` says where the two
 disagree.
 """
 
-from lower import Types
+from ir import Types
 from check import VIEW_TYPES
 
 
