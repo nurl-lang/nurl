@@ -171,6 +171,7 @@
       "type": "object",
       "required": [
         "source",
+        "root",
         "verdict",
         "reason",
         "slots"
@@ -178,6 +179,9 @@
       "additionalProperties": false,
       "properties": {
         "source": {
+          "type": "string"
+        },
+        "root": {
           "type": "string"
         },
         "verdict": {

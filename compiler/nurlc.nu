@@ -26124,7 +26124,7 @@ unsafe @ eng_print_types → v {
     = g_core_serial_next + g_core_serial_next 1
     = g_core_serial g_core_serial_next
     = g_core_fname ( __core_in fname )
-    = g_core_ffile ( __core_in file )
+    = g_core_ffile ( __core_in ( bck_core_file_name file ) )
     = g_core_fret 0
     = g_core_fline line
     = g_core_fflags flags
@@ -58011,6 +58011,40 @@ unsafe @ bck_trusted_file s path → b {
     }
     ( nurl_sym_def g_trust_memo path ? r `1` `0` )
     ^ r
+}
+
+// The name the core IR gives a source file (its `fn` lines' file column):
+// a file of the stdlib tree (bck_trusted_file) is `stdlib/` and its path
+// inside that tree, with `/` between the parts; any other file keeps the
+// path it was read by. The name depends on where the file lies, not on
+// the working directory the compile ran from: the readers of the core IR
+// (nurl-cert's translator and words, C.Elab.elabIR) tell the library
+// from the program by that `stdlib/` prefix alone. Before, the column was
+// the path as resolved, which was `stdlib/…` only when nurlc ran from the
+// stdlib's root; nurl-cert ran it there, and then a package's `deps/…`
+// imports never resolved (AGORA-1032).
+: ~ i g_core_fname_memo 0  // path → its core IR name
+unsafe @ bck_core_file_name s path → s {
+    ? == g_core_fname_memo 0 { = g_core_fname_memo ( nurl_sym_new ) } {}
+    ? != 0 ( nurl_sym_len g_core_fname_memo path ) { ^ ( nurl_sym_get g_core_fname_memo path ) } {}
+    : ~ s name path
+    ? ( bck_trusted_file path ) {
+        : s key ( __trust_key path )
+        : ~ s rest ( nurl_str_cat g_trust_roots `` )
+        : ~ b found F
+        ~ & ! found != 0 ( nurl_str_len rest ) {
+            : i k ( nurl_str_find rest `\n` )
+            : s root ( nurl_str_slice rest 0 k )
+            = rest ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+            ? != 0 ( nurl_str_starts key root ) {
+                : i rn ( nurl_str_len root )
+                = name ( nurl_str_cat `stdlib/` ( nurl_str_slice key rn - ( nurl_str_len key ) rn ) )
+                = found T
+            } {}
+        }
+    } {}
+    ( nurl_sym_def g_core_fname_memo path name )
+    ^ name
 }
 
 @ bck_unsafe_ctx → b {

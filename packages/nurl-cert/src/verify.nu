@@ -414,8 +414,14 @@ $ `caps.nu`
     // verify takes from the translation ledger row, checked.
     ? . o rebuild {
         : String src ( mj_get_str m `program.source` )
+        // from the root certify compiled from, as certify ran it
+        // (AGORA-1032): the library from --stdlib, a package's deps/ from
+        // the root
+        : String root ( mj_get_str m `program.root` )
         : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
-        ?? ( env_chdir ( string_data . o stdlib ) ) { T _ → {} F _ → {} }
+        : b env_ok ( cert_nurlc_env ( string_data . o stdlib ) )
+        : b in_root ?? ( env_chdir ( string_data root ) ) { T _ → T F _ → F }
+        ( __vf_check t & env_ok in_root `--rebuild: nurlc runs from the root certify compiled from` ( string_data root ) )
         : ( Vec String ) a1 ( vec_new [String] )
         ( vec_push [String] a1 ( string_from `--emit-core` ) )
         : String tag ( rand_hex_str 16 )
@@ -501,11 +507,11 @@ $ `caps.nu`
     // the values the schema fixes
     : ~ String bad ( string_new )
     ( __vf_obj m `tool` `name version` `` bad )
-    ( __vf_obj m `program` `source verdict reason slots` `` bad )
+    ( __vf_obj m `program` `source root verdict reason slots` `` bad )
     ( __vf_obj m `hashes` `sources core_ir` `llvm_ir program_lean claims_lean elab_lean caps_lean caps_tsv binary` bad )
     ( __vf_obj m `versions` `nurlc formal_tree formal_commit lean_toolchain` `` bad )
     ? ! ( nc_is ( mj_get_str m `tool.name` ) `nurl-cert` ) { ( string_push_str bad `tool.name ` ) } {}
-    ( __vf_strings m `tool.version program.source program.verdict program.reason hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain` bad )
+    ( __vf_strings m `tool.version program.source program.root program.verdict program.reason hashes.core_ir versions.nurlc versions.formal_tree versions.formal_commit versions.lean_toolchain` bad )
     ? ! ( __vf_enum ( mj_get_str m `program.verdict` ) `accepted refused unsupported error` ) { ( string_push_str bad `program.verdict ` ) } {}
     ? ! ?? ( json_get m `program.slots` ) { T j → ( __vf_count j ) F → F } { ( string_push_str bad `program.slots ` ) } {}
     ( __vf_sha m `hashes.core_ir` T bad )
