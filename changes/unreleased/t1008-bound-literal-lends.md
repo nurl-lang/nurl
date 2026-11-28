@@ -5,9 +5,12 @@
   `@ wrap String p → K { : K k @ K { p }  ^ k }`, `k` used to be a copy
   of `p`; now `^ k` hands back the literal as written, exactly as
   `^ @ K { p }` does. No copy is made, and the caller's result borrows its
-  argument. This applies when every later use of `k` is `^ k`, the
-  parameters are not named again after the binding, and `K` has no
-  `% Drop` of the program's own. Otherwise the binding copies as before.
+  argument. This applies when the literal's fields are `in` parameters
+  named whole or numbers, every later use of `k` in the block is `^ k`,
+  those parameters are not named again after the binding (not read, not
+  rebound, not a match arm's payload), no closure follows in the block,
+  and `K` has no `% Drop` of the program's own. Otherwise the binding
+  copies as before.
 
   **Break:** a caller that reads such a result after giving its argument a
   new value, or after the argument is released, is now refused, as it is

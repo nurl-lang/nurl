@@ -5,3 +5,4 @@ OUTPUT
 a string that lives on the heap
 4
 a string that lives on the heap
+a string that lives on the heap

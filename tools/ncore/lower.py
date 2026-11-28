@@ -426,7 +426,12 @@ def _names_in(node, out):
                 _names_in(x, out)
     elif isinstance(node, list):
         for x in node:
-            _names_in(x, out)
+            if isinstance(x, str):
+                # (a match arm's payload bindings are a list of names:
+                # `?? o { T p → … }` binds `p` there, as nurlc's scan meets it)
+                out.append(("n", x))
+            else:
+                _names_in(x, out)
 
 
 def _blit_rets(node, name, lit):

@@ -12,11 +12,21 @@ $ `stdlib/core/string.nu`
     ^ k
 }
 
+// (A match arm that binds a payload by the parameter's name stands
+// between: the literal stays a copy made at the binding, so the result is
+// the parameter's value, not the payload's — CodeRabbit on github#2382.)
+@ pick String p ? String o → K {
+    : K k @ K { p 1 }
+    ?? o { T p → { ^ k } F → { ^ k } }
+}
+
 @ main → i {
     : String a ( string_from `a string that lives on the heap` )
     : K r ( wrap a 4 )
     ( nurl_println ( string_data . r s ) )
     ( nurl_println_int . r n )
     ( nurl_println ( string_data a ) )
+    : K q ( pick a @ ?String { T ( string_from `the payload` ) } )
+    ( nurl_println ( string_data . q s ) )
     ^ 0
 }
