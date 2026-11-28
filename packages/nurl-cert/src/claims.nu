@@ -287,7 +287,7 @@ $ `words.nu`
     ^ o
 }
 
-// The A3 conditional template (formal/C/Complete.lean, AGORA-1035): the
+// The A3 conditional template (formal/C/Complete3.lean, AGORA-1035, AGORA-1040): the
 // verdict over `spawns` and `assumed`, and M.safe / M.leak / M.race over
 // every completion `P'` where the assumed functions satisfy `AssumedOK3`.
 @ __cl_claims3_cond s prof i nv → String {
@@ -302,10 +302,10 @@ $ `words.nu`
     ( string_push_str o `-- writes this file again and compares it byte for byte; do not edit it.\n` )
     ( string_push_str o `-- Program.lean is the program as a term of formal/A2 (P, entry), the\n` )
     ( string_push_str o `-- functions it spawns (spawns), and its assumed functions (assumed); the\n` )
-    ( string_push_str o `-- claims are A3's, conditional over every completion (formal/C/Complete.lean).\n` )
-    ( string_push_str o `import C.Complete\nimport Program\n\n` )
+    ( string_push_str o `-- claims are A3's, conditional over every completion (formal/C/Complete3.lean).\n` )
+    ( string_push_str o `import C.Complete3\nimport Program\n\n` )
     ( string_push_str o `namespace Cert\n\n` )
-    ( string_push_str o `/-- The verified checker accepts the threaded program outside its assumed functions (formal/C/Complete.lean). -/\n` )
+    ( string_push_str o `/-- The verified checker accepts the threaded program outside its assumed functions (formal/C/Complete3.lean). -/\n` )
     ( string_push_str o `theorem verdict : C.certOK3BA P spawns assumed entry ` )
     ( string_push_str o ns )
     ( string_push_str o ` = true := by ` )

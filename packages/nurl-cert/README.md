@@ -97,7 +97,7 @@ Needs:
 - `nurlc`;
 - `lean` on `PATH` (elan's: run inside `formal/`, it picks `formal/`'s
   toolchain), or `--lean PATH` / `$LEAN`;
-- `formal/` built (`cd formal && lake build C.Cert C.Cert3 C.Elab C.Caps C.Caps3`).
+- `formal/` built (`cd formal && lake build C.Cert C.Cert3 C.Elab C.Complete C.Complete3 C.Caps C.Caps3`).
 
 `verify` needs only Lean.
 

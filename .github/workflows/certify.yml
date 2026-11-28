@@ -83,7 +83,7 @@ jobs:
           echo "$HOME/leanbin" >> "$GITHUB_PATH"
       - name: Build the checker's modules (C.Cert, C.Cert3, C.Elab, C.Caps and what they import)
         working-directory: formal
-        run: lake build C.Cert C.Cert3 C.Elab C.Complete C.Caps C.Caps3
+        run: lake build C.Cert C.Cert3 C.Elab C.Complete C.Complete3 C.Caps C.Caps3
       - name: Build the toolchain
         run: ./build.sh --no-tests
       - name: Build nurl-cert
@@ -174,7 +174,7 @@ jobs:
       - name: Build the checker's modules
         working-directory: formal
         shell: bash
-        run: lake build C.Cert C.Cert3 C.Elab C.Complete C.Caps C.Caps3
+        run: lake build C.Cert C.Cert3 C.Elab C.Complete C.Complete3 C.Caps C.Caps3
       - name: Certify and verify one program of each kind
         shell: bash
         run: |

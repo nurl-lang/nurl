@@ -184,6 +184,7 @@ $ `stdlib/ext/json.nu`
     : String pbody ( string_substr prog ( nurl_str_len head ) - ( string_len prog ) ( nurl_str_len head ) )
     : ~ b threads F
     : ~ b cond F
+    : ~ b cond3 F
     : ~ String cbody ( string_new )
     ?? ( __lt_unimport claims ( __lt_v1 `import Program` ) ) {
         T c → { = cbody c }
@@ -200,8 +201,19 @@ $ `stdlib/ext/json.nu`
                             = cond T
                         }
                         F → {
-                            = why ( string_from `Claims.lean's imports are not the template's` )
-                            ^ @ ?String { F }
+                            // (a threaded conditional program's: C.Complete3,
+                            // which loads A3; a single-threaded one loads none)
+                            ?? ( __lt_unimport claims ( __lt_v2 `import C.Complete3` `import Program` ) ) {
+                                T c → {
+                                    = cbody c
+                                    = cond T
+                                    = cond3 T
+                                }
+                                F → {
+                                    = why ( string_from `Claims.lean's imports are not the template's` )
+                                    ^ @ ?String { F }
+                                }
+                            }
                         }
                     }
                 }
@@ -256,7 +268,7 @@ $ `stdlib/ext/json.nu`
     : String o ( string_with_cap + + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) ( string_len kbody ) 256 )
     ( string_push_str o `import C.Cert\n` )
     ? threads { ( string_push_str o `import C.Cert3\n` ) } {}
-    ? cond { ( string_push_str o `import C.Complete\n` ) } {}
+    ? cond { ( string_push_str o ? cond3 `import C.Complete3\n` `import C.Complete\n` ) } {}
     ? has_elab { ( string_push_str o `import C.Elab\n` ) } {}
     ? has_caps { ( string_push_str o ? caps3 `import C.Caps3\n` `import C.Caps\n` ) } {}
     ( string_push_str o `section\nopen A2 C\n` )
@@ -576,7 +588,8 @@ $ `stdlib/ext/json.nu`
     : String ptext ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → { ^ F } }
     : String o ( string_new )
     ? cond {
-        ( string_push_str o `import C.Complete
+        ( string_push_str o ? threads `import C.Complete3
+` `import C.Complete
 ` )
     } {
         ? threads { ( string_push_str o `import C.Cert3
