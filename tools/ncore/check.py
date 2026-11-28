@@ -42,7 +42,7 @@ def call_may_unwind(name):
     if name in RT_PANICS or (name.startswith("nurl_cpu_") and name.endswith("_missing")):
         return True
     return any(w in name for w in ("fiber", "park", "yield", "sched", "async"))
-from lower import SCALARS, Types, Var
+from ir import SCALARS, Types, Var
 
 
 def extern_may_panic(name):
@@ -88,7 +88,7 @@ def _dtor_fns(prog, ty, out, seen):
         return
     seen.add(ty)
     if ty[0] == "named" and len(ty) > 1 and isinstance(ty[1], str):
-        from lower import norm
+        from ir import norm
         if f"drop__{ty[1]}" in prog.fns:
             out.add(f"drop__{ty[1]}")
         # (a handle's payload, `( Rc D )` as fromnurlc names it: released
@@ -1681,7 +1681,7 @@ class FnCheck:
         # believes of it (derive.py)
         if derived is not None and derived(name) is not None:
             return derived(name)
-        from syntax import Unsupported
+        from ir import Unsupported
         raise Unsupported(f"no summary for {tmpl or name}")
 
     def releases_in(self, sm, k, op):
@@ -4544,7 +4544,7 @@ class FnCheck:
             return d[variant][i] if variant in d and i < len(d[variant]) else None
         if ty[0] == "named" and ty[1] in self.prog.structs:
             fs = self.prog.structs[ty[1]]
-            from lower import norm
+            from ir import norm
             return norm(fs[i][0]) if i < len(fs) else None
         return self.T.elem(ty)
 
@@ -4585,7 +4585,7 @@ class FnCheck:
         k = ty[0]
         if k == "named":
             if ty[1] in self.prog.structs:
-                from lower import norm
+                from ir import norm
                 return [((fname or str(i),), norm(fty0)) for i, (fty0, fname) in enumerate(self.prog.structs[ty[1]])]
             if ty[1] in getattr(self.prog, "enums", ()):
                 return [((f"#{vname}{i}",), fty) for vname, ftys in (self.T.variants(ty) or ()) for i, fty in enumerate(ftys)]

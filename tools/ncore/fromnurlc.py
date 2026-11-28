@@ -18,8 +18,7 @@ checker the way the compiler lowered it.
 import os
 import subprocess
 
-from syntax import Unsupported
-from lower import FnIR, Program, Var
+from ir import Unsupported, FnIR, Program, Var
 
 # (NCORE_ROOT=<repository>: for a copy of this directory run from elsewhere)
 ROOT = os.environ.get("NCORE_ROOT") or os.path.abspath(
@@ -336,7 +335,7 @@ class Reader:
         raise Unsupported("rvalue " + k)
 
     def finish_fn(self, raw):
-        from lower import Types
+        from ir import Types
         self.T = Types(self.prog)
         fn = FnIR(raw["name"], raw["line"])
         fn.ncap = 0
@@ -375,7 +374,7 @@ class Reader:
     def lower_body(self, fn):
         """The function's statements as check.py's tuples; raises Unsupported
         where the IR holds something the checker has no rule for yet."""
-        from lower import Types
+        from ir import Types
         self.T = Types(self.prog)
         lines = fn.raw["stmts"]
         self.pos = 0
