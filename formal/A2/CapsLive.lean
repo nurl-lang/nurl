@@ -238,7 +238,7 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
     | glob _ hf =>
       rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;>
         exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
-  case «at» =>
+  case «at» | atIdx =>
     cases he with
     | «at» hn hv _ =>
       obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv
@@ -715,7 +715,7 @@ theorem RhsT.liveCapsTgt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
       cases hc
       exact hM.tgt_of_node (Or.inl ⟨_, _, hv, Sub.refl _, _, _, _, rfl⟩) (h.val (by assumption) (by assumption) hv)
     · exact h.tgt hM (by assumption) (by assumption) (by assumption) hc
-  case «at» =>
+  case «at» | atIdx =>
     cases he with
     | «at» hn hv _ =>
       obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv
@@ -1507,7 +1507,7 @@ theorem RhsT.readsCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : 
     | glob _ hf =>
       rcases hf with ⟨_, _, _, _, rfl, _⟩ | ⟨_, _, _, _, rfl, _⟩ <;>
         exact lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h)
-  case «at» =>
+  case «at» | atIdx =>
     cases he with
     | «at» hn hv _ =>
       obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv
@@ -1807,7 +1807,7 @@ theorem RhsT.readsCapsTgt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : 
       cases hc
       exact hM.tgt_of_node (Or.inl ⟨_, _, hv, Sub.refl _, _, _, _, rfl⟩) ((h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) hv).1)
     · exact (h _ _ _ _ (by assumption) (by assumption) (by simp [Rhs.vars]) (by assumption)).2 _ hc
-  case «at» =>
+  case «at» | atIdx =>
     cases he with
     | «at» hn hv _ =>
       obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv

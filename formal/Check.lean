@@ -652,6 +652,14 @@ import D
 #print axioms A2.DropInWitness.set_keeps_view
 #print axioms A2.DropInWitness.drop_would_end
 #print axioms A2.DropInWitness.struct_root_drops
+-- (A2/EditB.lean, A2/Stability.lean, A2/ElemIdxWitness.lean, AGORA-1037): an element of an owned
+-- `Vec` at a number is lent inside that element (`RhsT.atIdx`, `Kind.innerAt`), and a change inside
+-- another element keeps it (`Eff.dropInAt`, `vkeepAt`, `hkeepAt`): AGORA-374's example
+#print axioms A2.ElemIdxWitness.set_keeps_other
+#print axioms A2.ElemIdxWitness.at_typed
+#print axioms A2.out_atIdx
+#print axioms A2.vkeepAt
+#print axioms A2.hkeepAt
 -- (AGORA-937 item 2): a lent parameter holding views has a region; typing anchors it through
 -- the region's view (RootbAnchR), and frames, which bind no region, keep RootbAnch
 #print axioms A2.killE_rootbR

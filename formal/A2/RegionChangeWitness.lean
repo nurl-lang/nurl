@@ -53,7 +53,7 @@ theorem thru_region : ThruOKR K [] (.push 4) Ee.ty Ee.path := by
   subst hd
   refine ⟨by simp, fun y hy => ?_, regionE, rfl, Or.inr rfl, Or.inr ⟨rfl, ?_⟩, ?_, by simp, ?_⟩
   · simp [Edit.stored] at hy; subst hy; decide
-  · rw [eff_dropIn]; rfl
+  · exact eff_dropIn
   · intro v E hE hd _
     unfold K at hE
     repeat' split at hE

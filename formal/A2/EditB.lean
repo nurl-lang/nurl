@@ -2343,6 +2343,22 @@ theorem vkeep_view_below {m m' : Mem} {o : Var} {T T' n n' : Val}
         by simpa using hle, NSE_wf (Repl.elem hr') hw hn⟩
   · simp at hks
 
+/-- AGORA-1037: a rewrite of a node inside element `j` of a root node
+    whose addresses are distinct is a rewrite of element `j`: the root
+    node keeps its other elements, at their indices. -/
+theorem repl_belowAt_mid {n n' T T' : Val} (hr : Repl n n' T T') {j : Nat} (hb : BelowAt j n T)
+    (hnd : T.ids.Nodup) {a : Nat} (ha : a ∈ n.ids) :
+    ∃ u c d pre post e0 e0', T = .node u c d (pre ++ e0 :: post) ∧
+      T' = .node u c d (pre ++ e0' :: post) ∧ j = pre.length := by
+  obtain ⟨ty, c, d, es, e, rfl, he, hs⟩ := hb
+  cases hr with
+  | here => exact (Below.not_self (BelowAt.below ⟨ty, c, d, es, e, rfl, he, hs⟩)).elim
+  | @elem _ _ _ pre post e0 e0' hr' =>
+    simp only [ids_node, List.nodup_cons] at hnd
+    have hk : (pre ++ e0 :: post)[pre.length]? = some e0 := by simp
+    exact ⟨_, _, _, pre, post, e0, e0', rfl, rfl,
+      nodup_idsL_index hnd.2.2 he hk (hs.ids a ha) (hr'.sub.ids a ha)⟩
+
 /-- What a change that does not reallocate does to the root it reaches
     `k`: a `.drop`, or a `.dropIn` with the root a node and the change's
     node strictly inside its elements (`Lands .inner`, the root's node its
@@ -2351,10 +2367,11 @@ theorem effAt_dropE {op : Edit} {k : Kind} {s : Bool} {Eo : Entry} {T n0 n : Val
     (hre : op.effAt k s Eo.rvec ≠ .realloc) (hnr : Eo.mode ≠ .region) (hwT : WFv Eo.ty T) (htop : Top n0 T)
     (hla : Lands k n n0) :
     op.effAt k s Eo.rvec = .drop ∨
-      (op.effAt k s Eo.rvec = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below n T) := by
-  rcases Edit.effAt_not_realloc hre with h | ⟨h, hk, hv⟩
+      (op.effAt k s Eo.rvec = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below n T) ∨
+      (∃ j, op.effAt k s Eo.rvec = .dropInAt j ∧ (∃ u c d es, T = .node u c d es) ∧ BelowAt j n T) := by
+  rcases Edit.effAt_not_realloc hre with h | ⟨h, hk, hv⟩ | ⟨j, h, hk, hv⟩
   · exact Or.inl h
-  · refine Or.inr ⟨h, ?_⟩
+  · refine Or.inr (Or.inl ⟨h, ?_⟩)
     obtain ⟨u, hu⟩ := Ty.isVec_eq (by rwa [Entry.rvec_of_ne hnr] at hv)
     rw [hu] at hwT
     subst hk
@@ -2366,6 +2383,19 @@ theorem effAt_dropE {op : Edit} {k : Kind} {s : Bool} {Eo : Entry} {T n0 n : Val
       · cases h1
       · exact ⟨⟨_, _, _, _, rfl⟩, hb⟩
       · cases h1
+  · -- AGORA-1037: through a borrow inside element `j`, strictly inside element `j`
+    refine Or.inr (Or.inr ⟨j, h, ?_⟩)
+    obtain ⟨u, hu⟩ := Ty.isVec_eq (by rwa [Entry.rvec_of_ne hnr] at hv)
+    rw [hu] at hwT
+    subst hk
+    cases hwT with
+    | node _ =>
+      cases htop
+      rcases hla with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨j', h1, hb⟩
+      · cases h1
+      · cases h1
+      · cases h1
+      · cases h1; exact ⟨⟨_, _, _, _, rfl⟩, hb⟩
 
 /-! ### The owner's change -/
 
@@ -2385,7 +2415,8 @@ theorem MInv.edit_dropE {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi :
     (hw' : WFv (.vec t) (.node t c d' es')) (hblk : m'.blk = m1.blk)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es'))
     (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i)
-    (he : e = .drop ∨ (e = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below (.node t c d es) T)) :
+    (he : e = .drop ∨ (e = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below (.node t c d es) T) ∨
+      (∃ j, e = .dropInAt j ∧ (∃ u c d es, T = .node u c d es) ∧ BelowAt j (.node t c d es) T)) :
     MInv m' (A2.kill e false o Γ1) := by
   have hmo : Eo.mode = .own := by
     rcases hcan with h | ⟨b, h, _⟩
@@ -2399,20 +2430,30 @@ theorem MInv.edit_dropE {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi :
       refine ⟨?_, hself⟩
       intro _ _ _ _ ⟨_, _, hks, _⟩
       exact absurd rfl hks
-    | inner => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
-    | innerAt _ => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
+    | inner => rcases he with rfl | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> simp [Eff.kills] at hk
+    | innerAt i =>
+      rcases he with rfl | ⟨rfl, _⟩ | ⟨j, rfl, _, hb⟩
+      · simp [Eff.kills] at hk
+      · simp [Eff.kills] at hk
+      · -- AGORA-1037: a change inside element `j` keeps what lies inside element `i ≠ j`
+        have hij : i ≠ j := by intro h; subst h; simp [Eff.kills] at hk
+        obtain ⟨u, cT, dT, pre, post, e0, e0', rfl, rfl, rfl⟩ :=
+          repl_belowAt_mid hr hb (hi.heap.nodup o _ hT) (a := c) (by simp [ids_node])
+        exact ⟨vkeepAt hT hT' (getElem?_mid_ne pre post e0 e0' hij),
+          hkeepAt hT hT' (getElem?_mid_ne pre post e0 e0' hij)⟩
     | view =>
-      rcases he with rfl | ⟨rfl, hTn, hb⟩
+      rcases he with rfl | ⟨rfl, hTn, hb⟩ | ⟨_, rfl, hTn, hb⟩
       · simp [Eff.kills] at hk
       · exact ⟨vkeep_view_below hT hT' hTn hr hb (fun τ0 h0 => h0.node_hole hw'), hself.view_of_self⟩
-    | share => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
+      · exact ⟨vkeep_view_below hT hT' hTn hr hb.below (fun τ0 h0 => h0.node_hole hw'), hself.view_of_self⟩
+    | share => rcases he with rfl | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> simp [Eff.kills] at hk
     | name b t => exact ⟨vkeep_name _ _ _ _ _, hkeep_name _ _ _ _ _⟩
   have hnew : e ≠ .replace → ∀ Ex', some (killE e false o Eo) = some Ex' → Eo.live = true →
       Eo.held = [] → Eo.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = [] := by
     intro _ Ex' hx' hl0 hh0 _
     simp only [Option.some.injEq] at hx'; subst hx'
     rw [killE_nil (root_vdeps (by rw [hmo]; rfl) hh0)]; exact ⟨hl0, hh0⟩
-  have hne : e ≠ .replace := by rcases he with rfl | ⟨rfl, _⟩ <;> decide
+  have hne : e ≠ .replace := by rcases he with rfl | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> simp
   have h := hi.change hanch ho hoF (hmn_of_ne_replace false hne o) hhs (by rw [hmo]; simp) hst hheap
     hnv (fun k hk _ => hkeep k hk) (NewSlot.edit hi hanch ho hoF hmo hT hT' hst hhv hr hw' hblk hsh') hds (fun h => by cases h)
     (fun h => by cases h) hnew
@@ -2461,7 +2502,8 @@ theorem MInv.edit_dropE_ne {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (h
     (hw' : WFv (.vec t) (.node t c d' es')) (hblk : m'.blk = m1.blk)
     (hsh' : SharesOK m' (.vec t) (.node t c d' es'))
     (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i)
-    (he : e = .drop ∨ (e = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below (.node t c d es) T)) :
+    (he : e = .drop ∨ (e = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below (.node t c d es) T) ∨
+      (∃ j, e = .dropInAt j ∧ (∃ u c d es, T = .node u c d es) ∧ BelowAt j (.node t c d es) T)) :
     MInv m' (A2.kill e false o Γ1) := by
   have hmo : Eo.mode = .own := by
     rcases hcan with h | ⟨b, h, _⟩
@@ -2475,20 +2517,30 @@ theorem MInv.edit_dropE_ne {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (h
       refine ⟨?_, hself⟩
       intro _ _ _ _ ⟨_, _, hks, _⟩
       exact absurd rfl hks
-    | inner => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
-    | innerAt _ => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
+    | inner => rcases he with rfl | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> simp [Eff.kills] at hk
+    | innerAt i =>
+      rcases he with rfl | ⟨rfl, _⟩ | ⟨j, rfl, _, hb⟩
+      · simp [Eff.kills] at hk
+      · simp [Eff.kills] at hk
+      · -- AGORA-1037: a change inside element `j` keeps what lies inside element `i ≠ j`
+        have hij : i ≠ j := by intro h; subst h; simp [Eff.kills] at hk
+        obtain ⟨u, cT, dT, pre, post, e0, e0', rfl, rfl, rfl⟩ :=
+          repl_belowAt_mid hr hb (hi.heap.nodup o _ hT) (a := c) (by simp [ids_node])
+        exact ⟨vkeepAt hT hT' (getElem?_mid_ne pre post e0 e0' hij),
+          hkeepAt hT hT' (getElem?_mid_ne pre post e0 e0' hij)⟩
     | view =>
-      rcases he with rfl | ⟨rfl, hTn, hb⟩
+      rcases he with rfl | ⟨rfl, hTn, hb⟩ | ⟨_, rfl, hTn, hb⟩
       · simp [Eff.kills] at hk
       · exact ⟨vkeep_view_below hT hT' hTn hr hb (fun τ0 h0 => h0.node_hole hw'), hself.view_of_self⟩
-    | share => rcases he with rfl | ⟨rfl, _⟩ <;> simp [Eff.kills] at hk
+      · exact ⟨vkeep_view_below hT hT' hTn hr hb.below (fun τ0 h0 => h0.node_hole hw'), hself.view_of_self⟩
+    | share => rcases he with rfl | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> simp [Eff.kills] at hk
     | name b t => exact ⟨vkeep_name _ _ _ _ _, hkeep_name _ _ _ _ _⟩
   have hnew : e ≠ .replace → ∀ Ex', some (killE e false o Eo) = some Ex' → Eo.live = true →
       Eo.held = [] → Eo.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = [] := by
     intro _ Ex' hx' hl0 hh0 _
     simp only [Option.some.injEq] at hx'; subst hx'
     rw [killE_nil (root_vdeps (by rw [hmo]; rfl) hh0)]; exact ⟨hl0, hh0⟩
-  have hne : e ≠ .replace := by rcases he with rfl | ⟨rfl, _⟩ <;> decide
+  have hne : e ≠ .replace := by rcases he with rfl | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> simp
   have h := hi.change_ne hanch ho hxa hnr (by rw [hmo]; simp) hst hheap
     hnv (fun k hk _ => hkeep k hk) (NewSlot.edit_ne hi hanch ho hxa hmo hT hT' hst hhv hr hw' hblk hsh') hds (fun h => by cases h)
     (fun h => by cases h) hnew

@@ -249,9 +249,9 @@ theorem CtxRel.killNamesH {Γ : Ctx} {F : List Var} (hanch : RootbAnchRH Γ F) :
     effect ends no view. -/
 theorem ThruCanDo.spared {Γ : Ctx} {r : Var} {Er : Entry} {e : Eff} (hEr : Γ r = some Er)
     (h : ThruCanDo Er e) : RegionSpared Γ e false r := by
-  rcases h with h | ⟨_, hk⟩
+  rcases h with h | ⟨_, rfl⟩
   · exact RegionSpared.of_ne hEr (fun hr => by have := h.ownSlot; rw [hr] at this; cases this) _ _
-  · exact fun _ => hk
+  · exact fun _ => rfl
 
 /-- `StmtT.editB`'s context: every binding keeps its mode and type, and every
     borrowed parameter its entry. -/

@@ -767,7 +767,7 @@ def thruOKRB (D : List Var) (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (Ps
     | some Er =>
       (Er.live || decide (Er.mode = .region)) &&
       (canDoB2 Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ||
-        (decide (Er.mode = .region) && !((op.effAt d.kind (decide (Er.ty = tx)) Er.rvec).kills false .view))) &&
+        (decide (Er.mode = .region) && decide (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec = .dropIn))) &&
       dtorSafeB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root &&
       decide (d.kind ≠ .share) &&
       heldOKB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) d.root
@@ -786,7 +786,7 @@ theorem thruOKRB_sound {D : List Var} {Γ1 : Ctx} {F : List Var} {op : Edit} {tx
   | none => intro hr; cases hr
   | some Er =>
     intro hr
-    simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hr
+    simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hr
     obtain ⟨⟨⟨⟨hl, hc⟩, hds⟩, hsh⟩, hho⟩ := hr
     refine ⟨Er, rfl, hl, ?_, dtorSafeB_sound hs hds, hsh, heldOKB_sound hs hho⟩
     rcases hc with hc | hc

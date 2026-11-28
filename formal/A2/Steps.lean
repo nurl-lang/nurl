@@ -2413,6 +2413,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | «at» hy hl ht hx =>
     cases he with
     | «at» hn hvec _ => exact ⟨RhsPost.same hi, (out_at hi hy hl ht hn hvec).setFresh _⟩
+  | atIdx hy hl ht hmo =>
+    cases he with
+    | «at» hn hvec hev => cases hev; exact ⟨RhsPost.same hi, out_atIdx hi hy hl ht hmo hn hvec⟩
   | slit =>
     cases he with
     | slit hfr => exact rhs_slit hi hfr
