@@ -1166,3 +1166,7 @@ import D
 #print axioms C.caps_witness_open
 -- Phase D2: an accepted drop-validation path is safe on a concrete heap
 #print axioms D.validated_safe
+-- a result `!T E` as `sum E T`, matched with `.getl` / `.getr` (C/ResultWitness.lean, AGORA-1044)
+#print axioms C.ResultWitness.code_typed
+#print axioms C.ResultWitness.viewThenMove_typed
+#print axioms C.ResultWitness.moveThenView_refused
