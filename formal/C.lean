@@ -21,8 +21,10 @@ import C.DedupWitness
 import C.Cert
 import C.Cert3
 import C.Elab
+import C.ElabWitness
 import C.Complete
 import C.Caps
+import C.CapsWitness
 import C.Caps3
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:

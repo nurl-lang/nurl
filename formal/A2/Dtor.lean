@@ -1,4 +1,4 @@
-import A2.DynCell
+import A2.NoRootb
 
 /-! # A2-drop.3a: the destructor on the type, checked
 
