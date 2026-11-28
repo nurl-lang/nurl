@@ -1,22 +1,24 @@
 // tolean.nu — nurlc's core IR as a program of formal/A2's calculus, for
-// the verified checker of formal/C to decide (AGORA-1020; the translation
-// AGORA-975 wrote in Python, tools/ncore/tolean.py, which stays the
-// reference: this file prints exactly what it prints, byte for byte, and
-// refuses exactly what it refuses, with the same message, as
-// tools/ncore/tolean_parity.sh checks over every certify program and
-// every hole probe).
+// the verified checker of formal/C to decide (AGORA-1020). It began as the
+// NURL port of the translation AGORA-975 wrote in Python, held to it byte
+// for byte; that prototype is retired (AGORA-1048: no Python mirror of a
+// NURL component), and this file is the translation. Its term is compared
+// with formal/C's own elaborator, `elabIR`, over the corpus
+// (tools/ncore/elab_parity.sh); a bundle with `Elab.lean` has the term the
+// kernel built itself (Cert.elab), and only one without it rests on this
+// file (the `translation` ledger row).
 //
 //   ( tolean_translate core_text ) → !String String
 //
 // T: the Lean file (`import C.A2Prog` … the `#eval` of the checker's
-// verdict), as tolean.py prints it on stdout. F: why the program is not
-// translated, as tolean.py prints it after `unsupported: `; or, starting
-// `internal: `, a core IR this reader cannot read, where tolean.py stops
+// verdict), as the prototype prints it on stdout. F: why the program is not
+// translated, as the prototype prints it after `unsupported: `; or, starting
+// `internal: `, a core IR this reader cannot read, where the prototype stops
 // with an exception (the translation panics there, and tolean_translate
 // recovers).
 //
-// What is translated, and how, is tolean.py's; each function here is the
-// one of that file it is named after, and its comments say why the
+// Each function here is named after the prototype's, and its comments say
+// why the
 // translation is what it is. In short: a function's body is a block
 // whose statements are A2's, each binding scoped over the rest of its
 // list; numbers are A2's integers, a String or a Vec of numbers a buffer,
@@ -27,7 +29,7 @@
 // (`intrinsic`). Anything else is unsupported, and the program is not
 // emitted.
 //
-// Beyond tolean.py (A3, AGORA-1020): a program that spawns
+// Beyond the prototype (A3, AGORA-1020): a program that spawns
 // (`thread_spawn_owned` in a function of its own) is translated for A3's
 // checker (`C.certOK3B P spawns entry 1`, formal/C/Cert3.lean): a thread
 // handle and its error enum are integers, a result `{ i1, T, E }` is
@@ -39,28 +41,28 @@
 // calls it; the spawn is a call of the wrapper (A3 runs it as a thread,
 // `def spawns` lists the wrappers), and its result the ok variant around a
 // handle; `thread_join` reads the handle and answers a number. A program
-// that does not spawn is translated exactly as tolean.py translates it.
+// that does not spawn is translated exactly as the prototype translates it.
 //
-// Intentional deviations from tolean.py (fail closed on malformed IR):
-// where tolean.py reads a core IR nurlc never prints as if it were well
+// Intentional deviations from the prototype (fail closed on malformed IR):
+// where the prototype reads a core IR nurlc never prints as if it were well
 // formed, this translator refuses it (`internal: malformed …`, exit 1 of
 // `nurl-cert translate`), before translating the function:
 // - a statement whose operand count is below 0 or exceeds the operand
 //   words it has, or is short of them (all but `agg`, whose type follows)
 //   (`call`, `closure`, `callind`, `scalar`, `agg`), or whose count is not
-//   a number: tolean.py takes the words there are (`eval call f 1` became
+//   a number: the prototype takes the words there are (`eval call f 1` became
 //   a call of no argument), or stops where it first reads the count;
 // - a block opener (`scope`, `if`, `loop`, `match`, `foreach`, `defer`)
 //   with no `end` before the function's end, and a closer out of place
 //   (an `end` with no block open, an `else` not in an `if`, an `arm` not
-//   in a `match`, a `loopcond` not in a `loop`): tolean.py ran an unclosed
+//   in a `match`, a `loopcond` not in a `loop`): the prototype ran an unclosed
 //   block to the function's end. An empty `scope` … `end` stays valid.
 // - a variable id below 0 in a statement (`malformed: …`), and in the
 //   core IR's records (coreir.nu: a count below 0, a function left open, a
 //   variable's id below 0 or kind outside 0–3, a type's counts past its
 //   line).
 // (A limit, not a choice: a variable id past core_id_max, or a count or
-// parameter number past 64 bits, which tolean.py reads as an unbounded
+// parameter number past 64 bits, which the prototype reads as an unbounded
 // integer, is refused here too.)
 
 $ `stdlib/core/string.nu`
@@ -133,7 +135,7 @@ $ `coreir.nu`
 // `op.startswith("v") and op[1:].isdigit()`: a whole variable.
 @ __vref s op → b { ^ & ( __sw op `v` ) ( __isdig_from op 1 ) }
 
-// `int(a[k:])` of an id, where tolean.py's `int` would stop the run on
+// `int(a[k:])` of an id, where the prototype's `int` would stop the run on
 // anything but a number. (Python's integers have no bound: an id past
 // core_id_max, which nurlc never prints, stops this run too: A2's
 // numbering of it is printed, and would not fit.)
@@ -189,7 +191,7 @@ $ `coreir.nu`
 }
 
 // A number of digits (`isdigit` checked) as an index, or -1 past 64 bits:
-// then it is no parameter's (tolean.py compares it with the count).
+// then it is no parameter's (the prototype compares it with the count).
 @ __pidx s a → i {
     ^ ?? ( core_parse_int a ) {
         T v → v
@@ -308,7 +310,7 @@ $ `coreir.nu`
 : TlMod {
     CoreIR ir
     // the program's functions (no file of the standard library's), as
-    // records of ir.fns: tolean.py's FNS
+    // records of ir.fns: the prototype's FNS
     ( Vec i ) prog
     // a program function's name → its index (A2's `Prog`): NAMES
     ( HashMap String i ) names
@@ -322,10 +324,10 @@ $ `coreir.nu`
     // per program function (closure code): MOVED_CAPS, the captures every
     // literal of it moves into the environment
     ( Vec ( Vec i ) ) moved
-    // A3 (beyond tolean.py): does the program spawn (`thread_spawn_owned`
+    // A3 (beyond the prototype): does the program spawn (`thread_spawn_owned`
     // in a function of its own)? Only then are threads, results, channel
     // shares and spawned closures translated: a program that does not
-    // spawn is translated exactly as tolean.py translates it.
+    // spawn is translated exactly as the prototype translates it.
     b threaded
     // per program function: the closure values (core ids) a spawn takes,
     // through their `use` copies back to their literal, and each one's code
@@ -340,7 +342,7 @@ $ `coreir.nu`
 
 // What the translation changes as it goes: the closure interfaces and the
 // types being expanded (the module's), and the function being translated
-// (tolean.py's `Fn`).
+// (the prototype's `Fn`).
 : TlSt {
     ( Vec String ) clo_list
     i clo_base
@@ -406,7 +408,7 @@ $ `coreir.nu`
     ^ ( string_data . ( vec_at [CoreVar] . ( vec_at [CoreFn] . . m ir fns ( __cf m p ) ) vars k ) ty )
 }
 
-// fn["vars"][id]: tolean.py stops on a variable the function does not have.
+// fn["vars"][id]: the prototype stops on a variable the function does not have.
 @ __vty TlMod m i p i id → s {
     ? ! ( __vhas m p id ) { ( panic `internal: a variable the function does not declare` ) } {}
     ^ ( __vtyd m p id `` )
@@ -455,7 +457,7 @@ $ `coreir.nu`
 // A statement of the function being translated, by reference: k ≥ 0 its
 // body's line k, k < 0 that line (-k - 1), a `ret`, turned `retnx`.
 // Word j of it: a word the statement does not have stops the run, as
-// tolean.py's list index does (`__lws`: "" for it).
+// the prototype's list index does (`__lws`: "" for it).
 @ __lw TlMod m i p i r i j → s {
     ? >= j ( __lnw m p r ) { ( panic `internal: a word the core IR's statement does not have` ) } {}
     ^ ( __lws m p r j )
@@ -1043,7 +1045,7 @@ $ `coreir.nu`
     ^ ( string_new )
 }
 
-// ── A function (tolean.py's `Fn`) ────────────────────────────────────
+// ── A function (the prototype's `Fn`) ────────────────────────────────────
 
 @ __var TlSt t i k → i {
     ? . t has_vmap {
@@ -2478,7 +2480,7 @@ $ `coreir.nu`
     ^ @ !v String { F o }
 }
 
-// The function's body is well formed where tolean.py does not check it
+// The function's body is well formed where the prototype does not check it
 // (the deviations above): every block closed by its `end`, each closer in
 // its block, and no operand count past the operand words there are.
 @ __wellformed TlMod m i p → !v String {
@@ -2549,7 +2551,7 @@ $ `coreir.nu`
 // Fn.__init__ (signature part): the function's parameters, A2's numbering
 // of them, its result and what it lends. With `check_locals` F, skips
 // checking local variables' types so stubs can reuse the exact same
-// signature mapping; with T, runs in the exact order of tolean.py.
+// signature mapping; with T, runs in the exact order of the prototype.
 @ __fn_sig_init TlMod m inout TlSt t i p b check_locals → !v String {
     \ ( __wellformed m p )
     ? & . m threaded > ( string_len ( vec_at [String] . m serr p ) ) 0 { ^ @ !v String { F ( string_clone ( vec_at [String] . m serr p ) ) } } {}
@@ -3384,10 +3386,10 @@ $ `coreir.nu`
     ^ ( __lean m t )
 }
 
-// The Lean file of the program in core IR `text` (tolean.py's `emit`), or
+// The Lean file of the program in core IR `text` (the prototype's `emit`), or
 // why it is not translated; each of its own functions not translated goes
 // into `miss`, and `cur` holds the name of the function being translated.
-// With `all` F it stops at the first one, as tolean.py does: the verdict
+// With `all` F it stops at the first one, as the prototype does: the verdict
 // and its reason are the same either way. With `all` T and a single-threaded
 // program, each missed function whose signature and body can be classified
 // gets a stub (`__fn_stub`, `stubs`, `def assumed`), so the rest of the
@@ -3449,7 +3451,7 @@ $ `coreir.nu`
     // Every function is translated, also after one that is not (AGORA-1015):
     // each one the translation does not cover goes into `miss` with its
     // reason, and the program is refused with the first of them, as
-    // tolean.py refuses it — unless `all` is set on a single-threaded
+    // the prototype refuses it — unless `all` is set on a single-threaded
     // program and every missed function gets a stub (AGORA-1033).
     ( vec_push [i] reached 1 )
     : ~ i p 0
@@ -3618,7 +3620,7 @@ $ `coreir.nu`
 }
 
 // The Lean file of the program in core IR `text`, or why it is not
-// translated: tolean.py's `unsupported` reason, or `internal: …` where
+// translated: the prototype's `unsupported` reason, or `internal: …` where
 // the core IR is not one the translation can read.
 @ tolean_translate s text → !String String {
     : ( Vec TlMiss ) miss ( vec_new [TlMiss] )

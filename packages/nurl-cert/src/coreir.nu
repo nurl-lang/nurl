@@ -27,8 +27,8 @@
 // read as something else: a column a record needs that is not an integer
 // (as Python's `int()` reads one, within 64 bits; a variable's id within
 // core_id_max), a `ty` line with fewer fields than it counts, an `endfn`
-// with no function open. So is, deliberately stricter than
-// tools/ncore/tolean.py (which reads these), what is malformed in shape
+// with no function open. So is, deliberately stricter than the retired
+// Python prototype was (it read these), what is malformed in shape
 // (`internal: line N of the core IR: malformed: …`): a count below 0 (a
 // parameter, field, type-argument, variant or payload count), a type
 // argument, variant or payload count past what the line holds (or, for
@@ -238,7 +238,7 @@ $ `stdlib/std/hashmap.nu`
     ^ o
 }
 
-// A line that is malformed where tools/ncore/tolean.py would read it anyway
+// A line that is malformed where the retired Python prototype read it anyway
 // (a count below 0, a function left open, …): refused all the same, and
 // named `malformed` (deliberately stricter than the prototype).
 @ __cr_mal i line s what → String {
@@ -247,7 +247,7 @@ $ `stdlib/std/hashmap.nu`
     ^ ( __cr_bad line ( string_data w ) )
 }
 
-// A count tools/ncore/tolean.py never reads (a type's argument, variant
+// A count the retired Python prototype never read (a type's argument, variant
 // and payload counts), as an integer: one that is not is malformed.
 @ __cr_count ( Vec String ) f i k i line s what → !i String {
     ?? ( core_parse_int ( __cr_col f k ) ) {

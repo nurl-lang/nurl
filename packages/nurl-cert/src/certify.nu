@@ -43,9 +43,9 @@ $ `stdlib/std/channel.nu`
 
 // ── The translation (one interface) ──────────────────────────────────
 //
-// `.core` text in, Program.lean out. The translator is tolean.nu (the
-// NURL port of the Python prototype tools/ncore/tolean.py, which it
-// matches byte for byte: tools/ncore/tolean_parity.sh); only its frame is
+// `.core` text in, Program.lean out. The translator is tolean.nu (checked
+// against formal/C's elabIR in the kernel: tools/ncore/elab_parity.sh,
+// Cert.elab); only its frame is
 // rewritten here: the import (C.Cert, which has the claims' lemmas) and
 // the `#eval` line (the claims replace it). The shape check in shape.nu
 // then holds the result to the program grammar.
@@ -497,7 +497,7 @@ open A2 C
     } {
         ( json_arr_push L ( mj_row `translation` `the translation from source to the Lean term: nurlc --emit-core, then nurl-cert's translator (packages/nurl-cert/src/tolean.nu)`
         `nothing yet proves that P is the program the source describes (AGORA-1020 moves it inside the kernel's sight)`
-        `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted, tested by tests/translate_test.sh and tools/ncore/tolean_parity.sh)` mc ) )
+        `compiler/nurlc.nu (--emit-core), packages/nurl-cert/src/tolean.nu` `nurl-cert's translator (untrusted; tested by tests/translate_test.sh, and over the certify corpus compared with formal/C's elabIR, tools/ncore/elab_parity.sh)` mc ) )
     }
     ( json_arr_push L ( mj_row `library-summaries` `the standard library as the term has it: its calls are A2 primitives and declared summaries`
     `the library's unsafe base follows formal/B's models by inspection, not by proof (AGORA-1014 ties each to its theorem)`

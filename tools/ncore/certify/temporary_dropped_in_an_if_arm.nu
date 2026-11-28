@@ -1,7 +1,8 @@
 $ `stdlib/core/string.nu`
 
-// A temporary bound and dropped inside an `if` arm. tolean_selftest.sh adds a
-// read of it after the `if`: the translation must report that unsupported.
+// A temporary bound and dropped inside an `if` arm. translate_test.sh (part 1)
+// adds a read of it after the `if`: the translation must report that
+// unsupported.
 
 @ main → i {
     : String a ( string_from `abc` )

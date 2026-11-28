@@ -70,7 +70,7 @@ theorem cert_leak_panic {P : Prog} {s : Stmt} {nv : Nat} (h : certOK2B P s nv = 
 
 /-! ### A witness
 
-The term nurlc and `tools/ncore/tolean.py` make of
+The term nurlc and nurl-cert's translator (`tolean.nu`) make of
 `tools/ncore/certify/vec_push_len.nu` (a `Vec` built, pushed twice, its
 length read, dropped at the end), and its claims, the verdict decided by
 the kernel: what a bundle's Claims.lean states, here inside the proof. -/

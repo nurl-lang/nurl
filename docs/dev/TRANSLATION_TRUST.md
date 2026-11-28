@@ -1,5 +1,7 @@
 # Taking the translation out of the trusted path
 
+(2026-11-28, AGORA-1048: the Python prototype `tools/ncore/tolean.py` and its byte-parity check are retired — no Python mirror of a NURL component. The translator is `tolean.nu`; its term is compared with `elabIR` over the corpus, and a bundle with `Elab.lean` has the kernel-built term. The record below keeps the measurements as they were made.)
+
 Status: **design** (AGORA-1020 part 2). Part 1, the translator in NURL
 (`packages/nurl-cert/src/tolean.nu`, byte-identical to tolean.py over
 4300 core IRs), is what certificates are made with. This note decides how the step from nurlc's core IR to the

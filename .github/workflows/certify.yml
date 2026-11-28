@@ -90,7 +90,7 @@ jobs:
         env:
           NURL_STDLIB: ${{ github.workspace }}
         run: cd packages/nurl-cert && ../../nurl.sh src/main.nu ../../build/nurl-cert
-      - name: The translator - fail closed, and the same bytes as tools/ncore/tolean.py
+      - name: The translator - fail closed
         env:
           NURL_CERT: ${{ github.workspace }}/build/nurl-cert
         run: packages/nurl-cert/tests/translate_test.sh
