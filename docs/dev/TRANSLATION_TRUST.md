@@ -104,7 +104,8 @@ encoding is a ledger row with a design note. The decisions:
 |---|---|---|
 | scalars → `.int`; an untracked number (`c`) → `Expr.any`; a computation over tracked operands `e` → `(.add .any (.lt e (.lit 0)))`, any number with `e` still read | a number's value is no part of the memory model, and the model's runs must include the program's whatever its numbers (AGORA-1030: `.lit 0` made the model take every if's else arm) | design note, A2's `Ty.int` and `Eval.any`; `C.ite_any_both` shows both arms are runs |
 | a raw string bound from a literal or a fresh string → `(.vec .int)`; held in a value → `(.slice .int)` | owned text vs a view (MEMORY.md §1, §2.13) | ledger row; needs the IR's own provenance flag to be proved |
-| options → `sum int t`; structs → nested `prod`, one field = the field | layout-free shapes | design note (shapes only, no ownership choice) |
+| options → `sum int t` (not an option of raw text, `{ i1, i8* }`: a raw string held in a value is a view, AGORA-1045); structs → nested `prod`, one field = the field | layout-free shapes | design note (shapes only, no ownership choice) |
+| results `!T E` (`{ i1, T, E }`) → `sum E T`, the error (`F`) the first variant; a match's payloads `.getr` / `.getl`; an enum whose variants carry only numbers and that has no destructor (`IoErr`, `NetErr`, `ThreadErr`) → `.int`, its tag; a result's literal is not translated (its type with an integer `E` reads like an option's), nor a result holding raw text (`i8*`, a view, as in a struct field) | layout-free shapes; an enum of numbers holds no memory | design note (shapes only, no ownership choice; AGORA-1044) + kernel witnesses, `formal/C/ResultWitness.lean`: the match typed, a payload's view read after the result moved refused |
 | destructor types → `.dtor f u`, a one-field struct padded with an int | `% Drop` runs `f` at the end of every value | design note + A2-drop's theorems |
 | closures → `.fn [σ] .any`; captures by name vs in the environment (`CORE_VF_ENVOWN`), mode `inp` / `(.inout .drop)` | a capture by name is a dependency on the binding (MEMORY.md §2.11) | ledger row (the mode choice is precision, the code is checked against it, but by-name vs by-value is meaning) |
 | a spawned closure → an interface of class `.send`; the spawn → A3's spawn-only `letcall` of a wrapper `[(.sink, .fn [m] .send)] → .int` that calls it; the join → a read; `Thread` / `ThreadErr` → `.int`; `!T E` → `sum E T` | a spawn moves the closure to a new thread; its captures are held by value (no view, no name, no destructor value); `thread_spawn_owned` always succeeds | ledger row: the spawn's failure path is outside the model; the closure is moved, where nurlc copies its environment (a reuse after the spawn is unsupported, not refused) |
@@ -930,7 +931,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   field the struct does not have, an option's literal into a variable of
   another type or given none (`eval agg …`), a struct's literal of no
   operand, a payload other than `T 0` (a result's error, which the
-  translator reads only in a program that spawns), a match whose arm names
+  translator reads, `.getl`), a match whose arm names
   repeat or are not `T` and `F`. The type checks run for every variable
   and result of every function, as the translator's `__fn_init`. Where the
   translator takes more, `elabIR` refuses (stricter, never laxer):

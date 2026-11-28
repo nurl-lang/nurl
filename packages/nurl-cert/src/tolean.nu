@@ -823,7 +823,7 @@ $ `coreir.nu`
         : i ci ( __clo_index t ty )
         ^ @ !String String { T ( __f1 `(.fn [%] .any)` ( string_data ( __ns ci ) ) ) }
     } {}
-    ? & & . m threaded ( __sw ty `{ i1, ` ) ( __ew ty ` }` ) {
+    ? & ( __sw ty `{ i1, ` ) ( __ew ty ` }` ) {
         // A3: a result `{ i1, T, E }` is `sum E T`: the error (F) the first
         // variant, as an option's None, the value (T) the second
         : String inner ( __sl ty 6 -2 )
@@ -833,6 +833,12 @@ $ `coreir.nu`
             : String e ( __from ( string_data inner ) + cm 2 )
             \ ( __no_clo ( string_data a ) )
             \ ( __no_clo ( string_data e ) )
+            // (a raw string held in a value is a view, MEMORY.md §2.13, not
+            // translated yet, as a struct field's: also one nested in a
+            // member, an option of raw text inside a result)
+            ? | ( __has ( string_data a ) `i8*` ) ( __has ( string_data e ) `i8*` ) {
+                ^ @ !String String { F ( __f1 `type %: a raw string held in a result` ty ) }
+            } {}
             : String le \ ( __lean_ty m t ( string_data e ) )
             : String la \ ( __lean_ty m t ( string_data a ) )
             ^ @ !String String { T ( __f2 `(.sum % %)` ( string_data le ) ( string_data la ) ) }
@@ -842,6 +848,11 @@ $ `coreir.nu`
         // an option: `sum int t`, None the first variant
         : String inner ( __sl ty 6 -2 )
         \ ( __no_clo ( string_data inner ) )
+        // (a raw string held in a value is a view, MEMORY.md §2.13, not
+        // translated yet, as a struct field's; AGORA-1045)
+        ? ( __eq ( string_data inner ) `i8*` ) {
+            ^ @ !String String { F ( __f1 `type %: a raw string held in an option` ty ) }
+        } {}
         : String x \ ( __lean_ty m t ( string_data inner ) )
         ^ @ !String String { T ( __f1 `(.sum .int %)` ( string_data x ) ) }
     } {}
@@ -850,13 +861,16 @@ $ `coreir.nu`
     : s t2 ( string_data tt )
     ? . m threaded {
         // A3: a thread's handle is an integer (A3 has none: modelling no
-        // join only adds interleavings); its error an enum of numbers
+        // join only adds interleavings)
         ? ( __eq t2 `%Thread` ) { ^ @ !String String { T ( string_from `.int` ) } } {}
         ? ( __eq t2 `%ThreadErr` ) {
             ? ! ( __scalar_enum m t2 ) { ^ @ !String String { F ( string_from `type %ThreadErr: an enum holding more than numbers` ) } } {}
-            ^ @ !String String { T ( string_from `.int` ) }
         } {}
     } {}
+    // an enum whose variants carry only numbers (%ThreadErr, %IoErr,
+    // %NetErr): an integer, its tag; not one with a destructor, which is
+    // A2's `Ty.dtor` (below)
+    ? & ( __scalar_enum m t2 ) ! ( __dtor_has m t2 ) { ^ @ !String String { T ( string_from `.int` ) } } {}
     ? ( __sw t2 `%Vec__` ) {
         : String inner ( __from t2 6 )
         \ ( __no_clo ( string_data inner ) )
@@ -1338,7 +1352,9 @@ $ `coreir.nu`
     : s k ( __rw m t r off 0 )
     : s w1 ? | | | ( __eq k `agg` ) ( __eq k `use` ) ( __eq k `payload` ) ( __eq k `scalar` ) ( __rw m t r off 1 ) ``
     ? & & ( __eq k `agg` ) | ( __eq w1 `T` ) ( __eq w1 `F` ) != dest ( __nil ) {
-        ? & . m threaded ( __is_result ( __vty m p dest ) ) { ^ @ !String String { F ( __u m p `a result literal` ) } } {}
+        // (a result's literal: not translated; its type `sum E T` with an
+        // integer E reads like an option's, whose None has no payload)
+        ? ( __is_result ( __vty m p dest ) ) { ^ @ !String String { F ( __u m p `a result literal` ) } } {}
         : String ty \ ( __lean_ty m t ( __vty m p dest ) )
         ? ! ( __sw ( string_data ty ) `(.sum .int ` ) { ^ @ !String String { F ( __u m p ( string_data ( __f1 `aggregate of type %` ( string_data ty ) ) ) ) } } {}
         : String pay ( __sl ( string_data ty ) 11 -1 )
@@ -1358,8 +1374,8 @@ $ `coreir.nu`
         : i x \ ( __pvar m t w1 )
         ^ @ !String String { T ( __f1 `.getr %` ( string_data ( __ns x ) ) ) }
     } {}
-    ? & & . m threaded ( __eq k `payload` ) & ( __eq ( __rw m t r off 2 ) `F` ) ( __eq ( __rw m t r off 3 ) `0` ) {
-        // A3: a result's error, its first variant's payload, lent
+    ? & ( __eq k `payload` ) & ( __eq ( __rw m t r off 2 ) `F` ) ( __eq ( __rw m t r off 3 ) `0` ) {
+        // a result's error, its first variant's payload, lent
         ? & ( __vref w1 ) ( __is_result ( __vtyd m p ( __pint_from w1 1 ) `` ) ) {
             : i x \ ( __pvar m t w1 )
             ^ @ !String String { T ( __f1 `.getl %` ( string_data ( __ns x ) ) ) }
@@ -3235,7 +3251,8 @@ $ `coreir.nu`
     : i nw ( __nw m p l )
     ? >= off nw { ^ @ !v String { F ( __u m p `stub: missing rvalue` ) } } {}
     : s rw ( __wd m p l off )
-    ? | | | | ( __eq rw `use` ) ( __eq rw `agg` ) ( __eq rw `scalar` ) ( __eq rw `payload` ) ( __eq rw `closure` ) {
+    // (`none`: a slot not yet given a value, no call and no change)
+    ? | | | | | ( __eq rw `use` ) ( __eq rw `agg` ) ( __eq rw `scalar` ) ( __eq rw `payload` ) ( __eq rw `closure` ) ( __eq rw `none` ) {
         ^ @ !v String { T }
     } {}
     ? ( __eq rw `callind` ) {

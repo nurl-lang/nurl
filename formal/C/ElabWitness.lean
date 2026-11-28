@@ -611,6 +611,13 @@ example : (elabS (irTy "%Channel__i64" [["ty", "%Channel__i64", "1", "0-----", "
 /-- …and an option of a closure (the translator: a closure inside a value). -/
 example : (elabS (irTy "{ i1, { i64 (i8*)*, i8* } }" [])).isNone := by decide +kernel
 example : (elabS (irTy "{ i1, %String }" [])).isSome := by decide +kernel
+/-- …and an option of raw text, as the translator refuses it (raw text held
+    in a value is a view, AGORA-1045), also as a struct's field. -/
+example : (elabS (irTy "{ i1, i8* }" [])).isNone := by decide +kernel
+example : (elabS (irTy "%H" [["ty", "%H", "1", "0-----", "H", "A", "0", "F", "2", "name", "{ i1, i8* }", "n", "i64",
+    "V", "0"]])).isNone := by decide +kernel
+example : (elabS (irTy "%H" [["ty", "%H", "1", "0-----", "H", "A", "0", "F", "2", "name", "{ i1, %String }", "n", "i64",
+    "V", "0"]])).isSome := by decide +kernel
 
 /-- A field read by a library call goes through the pairs (`rdF`); a field
     of a type that is no struct of the subset (a `Vec`'s handle `ctl`) is

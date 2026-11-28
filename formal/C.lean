@@ -29,6 +29,7 @@ public import C.Complete3
 public import C.CompleteWitness
 public import C.Caps
 public import C.CapsWitness
+public import C.ResultWitness
 public import C.Caps3
 
 @[expose] public section

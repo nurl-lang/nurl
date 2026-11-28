@@ -40,6 +40,8 @@
 #     one leaves it open; seeded programs get exactly the classes their
 #     reachable calls have (a print in main, behind a closure, in a
 #     destructor, in a spawned thread; none from a function nothing calls);
+#     a file writer and a network client, whose library calls return a
+#     result, certify conditionally with exactly the classes they reach;
 #     and verify fails on each of: the list, the capability table, a class,
 #     a sentence or the status edited.
 # ============================================================
@@ -1102,6 +1104,96 @@ for n in pure prints closure unreached thread dtor; do
         || { bad "$n's N.cap bundle verifies"; grep -v '^  ok' "$NC/$n.vout" | head -5; }
 done
 ok "the seeded N.cap bundles verify"
+
+# A program that writes a file and one that opens a network connection
+# (AGORA-1038, AGORA-1044): stdlib's file and network calls return a result
+# (`!v IoErr`, `!TcpConn NetErr`), translated as `sum E T` with the error
+# enum an integer. Each helper calling one is assumed (its library callee is
+# not translated), so the bundles are conditional; N.cap names the classes
+# the calls reach, with the chain from the helper to the runtime.
+cat > "$NC/fwrite.nu" <<'EOF3'
+$ `stdlib/std/fs.nu`
+
+@ save → i {
+    ?? ( write_file `out.txt` `hello` ) {
+        T _ → { ^ 0 }
+        F _ → { ^ 1 }
+    }
+}
+
+@ main → i {
+    ^ ( save )
+}
+EOF3
+cat > "$NC/netc.nu" <<'EOF3'
+$ `stdlib/std/net.nu`
+
+@ ping → i {
+    ?? ( tcp_connect `example.org` 80 ) {
+        T c → {
+            ( tcp_close_conn c )
+            ^ 0
+        }
+        F _ → { ^ 1 }
+    }
+}
+
+@ main → i {
+    ^ ( ping )
+}
+EOF3
+# A function of the program's own that takes a result and matches it is
+# translated (`(.sum .int .int)`, `.isl`, `.getl`, `.getr`) and checked by the
+# kernel; only `main`, which calls write_file, is assumed.
+cat > "$NC/rmatch.nu" <<'EOF3'
+$ `stdlib/std/fs.nu`
+
+@ code !v IoErr r → i {
+    ?? r {
+        T _ → { ^ 0 }
+        F _ → { ^ 1 }
+    }
+}
+
+@ main → i {
+    ^ ( code ( write_file `out.txt` `hi` ) )
+}
+EOF3
+"$C" certify "$NC/rmatch.nu" "${CA[@]}" > "$NC/rmatch.out" 2>&1; crc=$?
+"$C" verify "$NC/rmatch.cert" --formal "$ROOT/formal" > "$NC/rmatch.vout" 2>&1; vrc=$?
+if [ "$crc" = 0 ] && [ "$vrc" = 0 ] && grep -q "M.safe assumed" "$NC/rmatch.out" \
+    && grep -q "params := \[(.inp, (.sum .int .int))\]" "$NC/rmatch.cert/Program.lean" \
+    && grep -q "(.getl 0)" "$NC/rmatch.cert/Program.lean" && grep -q "(.getr 0)" "$NC/rmatch.cert/Program.lean" \
+    && python3 - "$NC/rmatch.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+st = {f["name"]: f["status"] for f in m["coverage"]["functions"]}
+sys.exit(0 if st.get("code") == "proved" and st.get("main") == "unsupported" else 1)
+EOF3
+then ok "a function matching a result is translated and checked; only its caller is assumed"
+else bad "a function matching a result is translated and checked (certify rc $crc, verify rc $vrc)"; tail -3 "$NC/rmatch.out"; fi
+for n in fwrite netc; do
+    "$C" certify "$NC/$n.nu" "${CA[@]}" > "$NC/$n.out" 2>&1; crc=$?
+    "$C" verify "$NC/$n.cert" --formal "$ROOT/formal" > "$NC/$n.vout" 2>&1; vrc=$?
+    if [ "$crc" = 0 ] && [ "$vrc" = 0 ] && python3 - "$NC/$n.cert/manifest.json" "$n" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1])); n = sys.argv[2]
+nc = [c for c in m["claims"] if c["id"] == "N.cap"][0]
+ch = {w["class"]: [x.split(" (")[0] for x in w["chain"]] for w in m["capabilities"]["classes"]}
+fns = {f["name"] for f in m["capabilities"]["functions"]}
+ok = m["program"]["verdict"] == "accepted" and nc["status"] == "assumed" and fns == {"main", n == "fwrite" and "save" or "ping"}
+if n == "fwrite":
+    ok = ok and ch.get("fs.write", [])[:2] == ["save", "write_file"] and ch["fs.write"][-1] == "fopen" \
+        and not any(c.startswith("net.") for c in ch) and "create, write or remove files" in nc["sentence"]["en"].split("It never:")[0]
+else:
+    ok = ok and ch.get("net.connect", [])[:2] == ["ping", "tcp_connect"] and ch["net.connect"][-1] == "nurl_tcp_connect_ms" \
+        and ch.get("net.io", [])[:2] == ["ping", "tcp_close_conn"] and ch["net.io"][-1] == "nurl_tcp_close" \
+        and "fs.write" not in ch and "open network connections" in nc["sentence"]["en"].split("It never:")[0]
+sys.exit(0 if ok else 1)
+EOF3
+    then ok "$n: a result-returning library call certified conditionally; N.cap names what it reaches, and the bundle verifies"
+    else bad "$n: N.cap of a result-returning library call (certify rc $crc, verify rc $vrc)"; tail -3 "$NC/$n.out"; fi
+done
 
 # Tampering with N.cap: each is refused by verify.
 K="$NC/prints.cert"
