@@ -42,6 +42,8 @@
 #     destructor, in a spawned thread; none from a function nothing calls);
 #     a file writer and a network client, whose library calls return a
 #     result, certify conditionally with exactly the classes they reach;
+#     a foreign call through a `dyn` method and one in a global's initializer,
+#     not translated yet, fail closed (unsupported, N.cap open);
 #     and verify fails on each of: the list, the capability table, a class,
 #     a sentence or the status edited.
 # ============================================================
@@ -1142,6 +1144,56 @@ $ `stdlib/std/net.nu`
     ^ ( ping )
 }
 EOF3
+# Constructs N.cap does not reach yet fail closed (AGORA-1038): a foreign call
+# reached through a `dyn` method (its `virt` call, and the `%dyn.T` type, are
+# not translated) and one in a module global's initializer (globals are not
+# translated). Each program is `unsupported`, N.cap stays open, and the bundle
+# claims no capabilities and holds no Caps.lean.
+cat > "$NC/dynp.nu" <<'EOF3'
+% Speaker [T] {
+    @ speak T self i volume → i
+}
+
+: Dog { i pitch }
+
+% Speaker Dog { @ speak Dog d i volume → i {
+    ( nurl_println `woof` )
+    ^ + . d pitch volume
+} }
+
+@ announce %Speaker s i v → i { ^ ( speak s v ) }
+
+@ main → i {
+    : Dog d @ Dog { 3 }
+    ^ ( announce ( dyn Speaker d ) 1 )
+}
+EOF3
+cat > "$NC/globp.nu" <<'EOF3'
+$ `stdlib/std/thread.nu`
+
+@ mk → ( Locked i ) {
+    ( nurl_println `init` )
+    ^ ( locked_new [i] 5 )
+}
+
+: ( Locked i ) g ( mk )
+
+@ main → i {
+    ^ 0
+}
+EOF3
+for n in dynp globp; do
+    "$C" certify "$NC/$n.nu" "${CA[@]}" > "$NC/$n.out" 2>&1 || true
+    if [ ! -e "$NC/$n.cert/Caps.lean" ] && python3 - "$NC/$n.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+nc = [c for c in m["claims"] if c["id"] == "N.cap"]
+sys.exit(0 if m["program"]["verdict"] == "unsupported" and len(nc) == 1 and nc[0]["status"] == "open"
+         and "capabilities" not in m else 1)
+EOF3
+    then ok "$n: N.cap fails closed (unsupported, open, no capabilities)"
+    else bad "$n: N.cap fails closed"; tail -3 "$NC/$n.out"; fi
+done
 # A function of the program's own that takes a result and matches it is
 # translated (`(.sum .int .int)`, `.isl`, `.getl`, `.getr`) and checked by the
 # kernel; only `main`, which calls write_file, is assumed.
