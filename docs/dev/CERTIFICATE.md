@@ -679,12 +679,16 @@ N.cap costs certify neither time nor memory: over the 62 certify programs,
 one at a time, best of 3 alternated runs against the nurl-cert and
 `formal/` of main 011e9589d (each tree a fresh copy, so neither has its
 build's page cache state), certify takes 64.56 s against 65.10 s (−0.8 %,
-the median program 10 ms less), and the sum of the peak RSS is −0.04 %
-(41.84 GB against 41.85 GB; the largest peak 2.533 GB against 2.534 GB):
-−0.66 % over the 7 threaded programs, +0.04 % over the 55 single-threaded
-ones. What N.cap adds, Lean's check of Caps.lean (about 20 ms a program,
-the kernel's check of the list and elaborating `Cert.n_cap`) and the 5 MB of
-`formal/`'s build its proof loads (`A2.Reach`, `C.Caps`), certify gets back:
+the median program 10 ms less; a second such run, after the last formal/
+change: 58.98 s against 60.01 s, −1.7 %), and the sum of the peak RSS is
+the same within the runs' noise (about ±0.1 %): −0.04 % and +0.02 %
+(41.84 GB against 41.85 GB; the largest peak 2.532 GB against 2.532 GB),
+−0.66 % and −0.50 % over the 7 threaded programs, +0.04 % and +0.09 % over
+the 55 single-threaded ones. What N.cap adds, Lean's check of Caps.lean (about 20 ms a program,
+the kernel's check of the list and elaborating `Cert.n_cap`) and the 4.3 MB of
+`formal/`'s build its proof loads (`A2.Reach`, `C.Caps`; no wildcard case in
+the definitions they unfold, whose equation lemma would negate every other
+constructor), certify gets back:
 nurlc's second compile (the LLVM IR and the unsafe report, which go only
 into the manifest) runs on a thread while the translation and Lean run;
 Lean runs with two worker threads, not one per core (a check's parallel
