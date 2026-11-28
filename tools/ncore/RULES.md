@@ -327,7 +327,10 @@ checker give it. Each rule names the probes that hold all three to it.
 2. **D4b. `^ ( id x )` of an owned raw string of this frame is copied at
    the return,** wherever `id` is defined: definition order plays no part.
    A callee compiled later answers at module end (`__nurl_ownstr_if`,
-   AGORA-867, github#2284). Probes: `raw_string_handed_back_by_a_generic_callee_above_runs_clean`, `…_below_runs_clean`, `raw_string_pick_of_a_local_or_a_parameter_below_runs_clean`, `raw_string_maker_below_hands_back_fresh_text_runs_clean` and the other AGORA-867 probes.
+   AGORA-867, github#2284). The core IR states the copy: `^ ( g a )` hands
+   back `nurl_strdup` of what `g` returns, which owns fresh text and holds
+   nothing, so the engine and this checker give nurlc's answer
+   (AGORA-946). Probes: `raw_string_handed_back_by_a_generic_callee_above_runs_clean`, `…_below_runs_clean`, `raw_string_pick_of_a_local_or_a_parameter_below_runs_clean`, `raw_string_maker_below_hands_back_fresh_text_runs_clean` and the other AGORA-867 probes.
 3. **D4c. A function that hands back an `in` parameter, or a part of one,
    lends it, in every spelling.** The caller's argument stays the
    caller's, and the result borrows it, which is A2's `lends` summary. The

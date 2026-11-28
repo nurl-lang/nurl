@@ -54,6 +54,9 @@ PRIMS = {
     "nurl_str_int": S(["in"], res="own"),
     "nurl_str_len": S(["in"]),
     "nurl_str_cat": S(["in", "in"], res="own"),
+    # a raw string's own copy of its text: what a return hands back where
+    # it copies (D4b, `^ ( g a )` of a raw string this frame owns; AGORA-946)
+    "nurl_strdup": S(["in"], res="own"),
     "nurl_str_cat3": S(["in"] * 3, res="own"),
     "nurl_str_cat4": S(["in"] * 4, res="own"),
     "nurl_str_slice": S(["in", "in", "in"], res="own"),
