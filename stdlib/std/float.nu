@@ -11,8 +11,8 @@
 //   ( float_ceil  x )       → f
 //   ( float_round x )       → f      half-away-from-zero
 //   ( float_pow   x y )     → f      x^y, allows fractional and negative y
-//   ( float_log   x )       → f      natural log
-//   ( float_exp   x )       → f      e^x
+//   ( float_log   x )       → f      natural log   } the same bits on every
+//   ( float_exp   x )       → f      e^x           } host (see below)
 //   ( float_sin / cos / tan x ) → f
 //   ( float_atan2 y x )     → f      angle of (x, y), range [-π, π]
 //   ( float_trunc x )       → f      round toward zero
@@ -111,6 +111,15 @@ $ `stdlib/core/errors.nu`
 
 & `m` @ erfc f x → f
 
+// float_exp / float_log are NURL's own, not libm's (AGORA-568): glibc,
+// UCRT, MinGW and macOS round them differently, so a program gave other
+// numbers on another OS. These give the same bits everywhere, within 0.52
+// ulp (stdlib/nurl_detmath.h: musl's table-driven exp and log, without
+// fma). The raw `exp` / `log` above stay the host's.
+& `c` @ nurl_det_exp f x → f
+
+& `c` @ nurl_det_log f x → f
+
 // ── float_* wrappers ──────────────────────────────────────────────
 
 @ float_abs f x → f { ^ ( fabs x ) }
@@ -125,9 +134,9 @@ $ `stdlib/core/errors.nu`
 
 @ float_round_even f x → f { ^ ( rint x ) }
 
-@ float_log f x → f { ^ ( log x ) }
+@ float_log f x → f { ^ ( nurl_det_log x ) }
 
-@ float_exp f x → f { ^ ( exp x ) }
+@ float_exp f x → f { ^ ( nurl_det_exp x ) }
 
 @ float_sin f x → f { ^ ( sin x ) }
 

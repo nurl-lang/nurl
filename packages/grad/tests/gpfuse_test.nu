@@ -25,6 +25,10 @@ $ `deps/gpukit/src/dev.nu`
 
 : ~ i g_fail 0
 
+// GATE 3's digest of the fused forward values on the cpu backend: the same
+// on Linux, Windows and macOS.
+: i GPFUSE_CPU_DIGEST 60028811162058
+
 @ check b ok s label → v {
     ? ok { ( nurl_print `  ok ` ) = g_pass + g_pass 1 } { ( nurl_print `  FAIL ` ) = g_fail + g_fail 1 }
     ( nurl_print label ) ( nurl_print `\n` )
@@ -208,6 +212,18 @@ $ `deps/gpukit/src/dev.nu`
     }
     ? cpub {
         ( check cbits `fused == CPU tape bit-identical (cpu backend)` )
+        // GATE 3 — the same bits on every host (AGORA-568): the kernels'
+        // exp and log are stdlib/nurl_detmath.h's, as the tape's are, not the
+        // host libm's. A digest of every fused value is pinned.
+        : ~ i dig 0
+        = k 0
+        ~ < k ( vec_len [f] fusedv ) {
+            : i b ( f64_to_bits ( _tf fusedv k ) )
+            = dig & + * dig 31 + & b 4294967295 & >> b 32 4294967295 140737488355327
+            = k + k 1
+        }
+        ( nurl_print `  fused digest ` ) ( nurl_println_int dig )
+        ( check == dig GPFUSE_CPU_DIGEST `fused values are the pinned bits (cpu backend, every host)` )
     } {
         ( nurl_print `  worst rel vs CPU tape on cuda: ` ) ( nurl_print ( nurl_str_float wrel ) ) ( nurl_print `
 ` )

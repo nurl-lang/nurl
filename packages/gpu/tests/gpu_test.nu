@@ -8,13 +8,16 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/float.nu`
+$ `stdlib/std/floatbits.nu`
 $ `src/gpu.nu`
 
 & `c` @ nurl_bits_to_f32 i b → f32
 
 : ~ i g_fail 0
-// test_detmath's checksum, the same on every host.
+// test_detmath's checksums, the same on every host.
 : i DETMATH_SUM 37490245958358
+: i DETMATH_DSUM 34244255515935
 
 @ check b cond s name → v {
     ? cond { ( nurl_print `  ok  ` ) } { ( nurl_print `  FAIL ` ) = g_fail + g_fail 1 }
@@ -358,6 +361,52 @@ unsafe @ test_detmath → v {
     }
     ( nurl_print `  checksum ` ) ( nurl_print ( nurl_str_int sum ) ) ( nurl_print `\n` )
     ( check == sum DETMATH_SUM `the float transcendentals' bits are the pinned ones` )
+
+    // The double ones (AGORA-568): stdlib/nurl_detmath.h, the same code
+    // the runtime's float_exp / float_log run. Each result's two words go
+    // into a second pinned checksum, and exp and log must equal
+    // float_exp / float_log bit for bit: the kernel's copy of the header
+    // and the runtime's are one function.
+    : GpuKernel kd ( gpu_compile g `extern "C" __global__ void detmathd(unsigned int* o, int n){
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    double x = (double)(i - n/2) * 0.01373;
+    double big = (double)i * 977.13;
+    double v[12] = { exp(x*0.4), log(fabs(x) + 0.001), log1p(fabs(x)), expm1(x*0.1), tanh(x*0.3), erf(x*0.1),
+                     erfc(x*0.1), sin(x), cos(x), sin(big*1.0e9), cos(big), pow(fabs(x) + 0.01, x*0.2) };
+    for (int k = 0; k < 12; k++) { unsigned int u[2]; memcpy(u, &v[k], 8); o[(i*12 + k)*2] = u[0]; o[(i*12 + k)*2 + 1] = u[1]; }
+}` `detmathd` )
+    ? ! ( gpu_kernel_ok kd ) { ( check F `compile detmathd` ) ^ {} } {}
+    : i dwords * n 24
+    : GpuBuffer dd ( gpu_alloc g * dwords 4 )
+    : GpuHost hd ( gpu_host_alloc * dwords 4 )
+    : ( Vec i ) dargs ( vec_new [i] )
+    ( vec_push [i] dargs ( gpu_arg_buffer dd ) )
+    ( vec_push [i] dargs ( gpu_arg_i32 n ) )
+    ( gpu_launch kd ( gpu_grid n 256 ) 256 dargs )
+    ( gpu_sync g )
+    ( gpu_download ( gpu_host_ptr hd ) dd )
+    : ~ i dsum 0
+    = j 0
+    ~ < j dwords {
+        = dsum & + * dsum 31 & ( gpu_host_get_i32 hd j ) 4294967295 140737488355327
+        = j + j 1
+    }
+    ( nurl_print `  double checksum ` ) ( nurl_print ( nurl_str_int dsum ) ) ( nurl_print `\n` )
+    ( check == dsum DETMATH_DSUM `the double transcendentals' bits are the pinned ones` )
+    : ~ i same 0
+    : ~ i q 0
+    ~ < q n {
+        : f x * # f - q / n 2 0.01373
+        : i eb ( f64_to_bits ( float_exp * x 0.4 ) )
+        : i lb ( f64_to_bits ( float_log + ( float_abs x ) 0.001 ) )
+        : i base * q 24
+        : b e_ok & == & eb 4294967295 & ( gpu_host_get_i32 hd base ) 4294967295 == & >> eb 32 4294967295 & ( gpu_host_get_i32 hd + base 1 ) 4294967295
+        : b l_ok & == & lb 4294967295 & ( gpu_host_get_i32 hd + base 2 ) 4294967295 == & >> lb 32 4294967295 & ( gpu_host_get_i32 hd + base 3 ) 4294967295
+        ? & e_ok l_ok { = same + same 1 } {}
+        = q + q 1
+    }
+    ( check == same n `a kernel's double exp and log equal float_exp / float_log bit for bit` )
 }
 
 @ main → i {
