@@ -347,7 +347,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
     out of the Vec by a `let … call vec_at…`).
 - **Fail closed.** Each check the translator makes on these constructs is
   made too, with a kernel witness of its refusal and of its well-formed
-  neighbour (formal/C/Elab.lean, "step 4"): an owner given a borrowed
+  neighbour (formal/C/ElabWitness.lean, "step 4"): an owner given a borrowed
   parameter's value, raw text assigned from another binding, an owned
   result aliasing a parameter (`ret_alias`), a buffer or an element of it
   named after its `drop`. Where the translator reads more than the subset
@@ -539,7 +539,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
     does, beside the calls that hand back a view.
 - **Fail closed.** Each check the translator makes on these is made too,
   each with a kernel witness of the refusal and of its well-formed
-  neighbour (formal/C/Elab.lean, "step 5"): a slice of a `Vec` of views, a
+  neighbour (formal/C/ElabWitness.lean, "step 5"): a slice of a `Vec` of views, a
   `foreach` over a `Vec` of views or over a `String`, a literal pushed into
   a `Vec` of raw strings, `vec_reserve` of a `Vec` of views,
   `string_push_str` of a number, a borrowed slice parameter copied into an
@@ -697,7 +697,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   - `nurl_println_int`: the read of a number.
 - **Fail closed.** Each check the translator makes on closures is made too,
   each with a kernel witness of the refusal and of its well-formed
-  neighbour (formal/C/Elab.lean, "step 6"): a capture that is not a
+  neighbour (formal/C/ElabWitness.lean, "step 6"): a capture that is not a
   variable, a literal of fewer captures than its code has, a capture of a
   type other than a number or a buffer of numbers (a `Vec` of raw strings),
   a number capture taken by pointer, a closure parameter taken `inout`, a
@@ -923,7 +923,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
     the `None` arm first, and `payload v T 0`: the payload lent, `.getr`.
 - **Fail closed.** Each check the translator makes on these is made too,
   each with a kernel witness of its refusal and of its well-formed
-  neighbour (formal/C/Elab.lean, "step 7"): a struct holding raw text (a
+  neighbour (formal/C/ElabWitness.lean, "step 7"): a struct holding raw text (a
   field `i8*`), a closure inside a struct or an option, a struct inside
   itself, a struct of no fields or with no `ty` line, an owning field's
   value moved or copied (`use v/items` of a Vec), a nested field path, a
@@ -1115,7 +1115,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   it read every `i64` as a destructor value.)
 - **Fail closed.** Each check the translator makes on these is made too,
   each with a kernel witness of its refusal and of its well-formed
-  neighbour (formal/C/Elab.lean, "step 8"): a destructor value a call hands
+  neighbour (formal/C/ElabWitness.lean, "step 8"): a destructor value a call hands
   back (`let x call …`, a library call included), a destructor binding
   assigned, a destructor value handed back (a function's result), a
   destructor parameter `sink` or `inout` (by its flags or the walk's
@@ -1234,7 +1234,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   `__is_dtor`'s `%t` meets no type `tyOf` takes without its `%`.
 - **Fail closed.** Each check the translator makes is made too, each with
   a kernel witness of its refusal and of its well-formed neighbour
-  (formal/C/Elab.lean, "step 9"): a channel of raw text, of a struct or of
+  (formal/C/ElabWitness.lean, "step 9"): a channel of raw text, of a struct or of
   a channel (`__chan_elem`), a channel call on a literal (its rule needs a
   variable; no other rule takes the call), a `chan_new` given an
   argument, a send of an element type no channel holds. Where the
@@ -1338,7 +1338,7 @@ A program that calls `thread_spawn_owned` is translated for A3 and gets
   any other way; a spawned closure capturing anything by name; a
   `%ThreadErr` whose variants carry more than numbers; a result's literal.
   Each has a kernel witness of its refusal beside its well-formed
-  neighbour (formal/C/Elab.lean, "step 10"). Stricter: every word of every
+  neighbour (formal/C/ElabWitness.lean, "step 10"). Stricter: every word of every
   line is read for a use of the chain (the translator reads the operands);
   a function's spawned closures of two closure types; a result or a
   thread's handle inside another type (the translator nests them).
