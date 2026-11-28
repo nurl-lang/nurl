@@ -64943,7 +64943,28 @@ unsafe @ bck_sx_ev s st s e b arg → s {
                 // it lives while `v` grows, agora #422's review.)
                 ? && && arg __lrp ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retpart##` w ) ) js ) {
                     : s __prt ( nurl_sym_get g_root_syms w )
-                    ? && != 0 ( nurl_str_len __prt ) == 0 ( bck_bind_class ( nurl_llty __prt ) ) { = __lj ( __src_as_ind __lj ) } {}
+                    : i __pcl ? != 0 ( nurl_str_len __prt ) ( bck_bind_class ( nurl_llty __prt ) ) -1
+                    ? == __pcl 0 { = __lj ( __src_as_ind __lj ) } {}
+                    // (…and one that owns its storage and holds views too,
+                    // `( vec_at [( Vec s )] vv 0 )`: its storage is reached
+                    // through vv's element as well, and what it holds stays
+                    // what it is — read as `%k`'s answer 4 reads it. Read as
+                    // vv's own storage, a push into that element left a view
+                    // of its buffer be: AGORA-1041.)
+                    ? == __pcl 3 {
+                        : i __b1 g_sxe_pos
+                        = g_sxe_pos __a0
+                        : b __sv8 g_sxe_vonly
+                        = g_sxe_vonly F
+                        = g_sxe_held T
+                        = g_sxe_hctn T
+                        : s __hl3 ( __src_drop_handles ( bck_sx_ev st e T ) )
+                        = g_sxe_hctn F
+                        = g_sxe_held F
+                        = g_sxe_vonly __sv8
+                        = g_sxe_pos __b1
+                        = __lj ( __word_union ( __src_as_ind ( __word_drop_all __lj __hl3 ) ) __hl3 )
+                    } {}
                 } {}
                 // (An owner the returned closure only captured: a copy of
                 // its handle, `~id` — not an address into its storage. A
