@@ -74576,7 +74576,8 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 // branch or leave; a call row (a pending call, keep, read or lend) of a
 // compiled callee whose summaries change nothing of that argument; and a
 // String lent out of a Vec by `vec_at`, which holds no container whose
-// order a change to it could reach. AGORA-374.
+// order a change to it could reach, or a Vec lent out of a Vec of Vecs.
+// AGORA-374, AGORA-1037.
 @ __bck_vex_keeps s rec i kc → b {
     ? | | | | | | | | | | | == kc 1 == kc 2 == kc 3 == kc 4 == kc 5 == kc 6 == kc 7 == kc 19 == kc 20 == kc 21 == kc 22 == kc 51 { ^ T } {}
     ? | | | | | | | | | | == kc 23 == kc 24 == kc 25 == kc 26 == kc 27 == kc 28 == kc 29 == kc 30 == kc 31 == kc 39 == kc 45 { ^ T } {}
@@ -74584,8 +74585,18 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ? & == kc 32 ! ( bck_field_is rec 0 `pendeff` ) {
         ? ( __bck_callee_keeps_order ( bck_field rec 5 ) ( bck_field rec 6 ) ) { ^ T } {}
         : s w1 ( bck_field rec 1 )
-        ? | == 0 ( nurl_str_starts w1 `@vec_at__String(` ) == 0 ( nurl_str_ends w1 `|-)` ) { ^ F } {}
-        ^ == ( nurl_str_find w1 `(` ) 15
+        ? == 0 ( nurl_str_ends w1 `|-)` ) { ^ F } {}
+        ? != 0 ( nurl_str_starts w1 `@vec_at__String(` ) { ^ == ( nurl_str_find w1 `(` ) 15 } {}
+        // (…and a Vec lent out of a Vec of Vecs, `( vec_at vv K )`, the one
+        // call (CodeRabbit on github#2370): a change inside element K
+        // reorders nothing of vv, and that element is no named owner with
+        // facts of its own — they are made of a local owner alone,
+        // __vat_idx_ok. What it ends is element K's views, told apart by
+        // index where its buffer moves, __bck_vex_other; formal A2 types
+        // it as `.dropInAt K`, A2/ElemIdxWitness.lean.)
+        ? == 0 ( nurl_str_starts w1 `@vec_at__Vec__` ) { ^ F } {}
+        : i lp ( nurl_str_find w1 `(` )
+        ^ < ( nurl_str_find ( nurl_str_slice w1 + lp 1 - - ( nurl_str_len w1 ) lp 1 ) `(` ) 0
     } {}
     ^ F
 }

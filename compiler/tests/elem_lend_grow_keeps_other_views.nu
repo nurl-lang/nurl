@@ -58,11 +58,33 @@ $ `stdlib/core/slice.nu`
     ( nurl_println_int ( slice_len [String] sl ) )
 }
 
+// …and the same for a Vec of Vecs: growing element 0 keeps a view of
+// element 1 (formal A2's ElemIdxWitness, `.dropInAt 0`).
+@ two_vecs → ( Vec ( Vec i ) ) {
+    : ( Vec ( Vec i ) ) vv ( vec_new [( Vec i )] )
+    ( vec_push [( Vec i )] vv ( vec_new [i] ) )
+    ( vec_push [( Vec i )] vv ( vec_new [i] ) )
+    ( vec_push [i] ( vec_at [( Vec i )] vv 1 ) 7 )
+    ^ vv
+}
+
+@ other_vec_element → v {
+    : ( Vec ( Vec i ) ) vv ( two_vecs )
+    : ( Slice i ) d1 ( slice_from_vec [i] ( vec_at [( Vec i )] vv 1 ) )
+    : ~ i k 0
+    ~ < k 64 {
+        ( vec_push [i] ( vec_at [( Vec i )] vv 0 ) k )
+        = k + k 1
+    }
+    ( nurl_println_int ( slice_at [i] d1 0 ) )
+}
+
 @ main → i {
     ( other_element )
     ( other_element_bytes )
     ( slice_of_the_vec )
     ( each_element_in_a_loop )
     ( through_a_forwarder )
+    ( other_vec_element )
     ^ 0
 }
