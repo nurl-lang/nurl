@@ -2747,6 +2747,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // rather than moving: the literal stores them too (`^ @ H { \ … x … x }`;
 // agora #463).
 : ~ i g_ret_lit_pos -1
+// Where a `^ k` of a bound literal (AGORA-1008, __blit_ok) resumes once the
+// literal it hands back has been read at its binding: -1 none.
+: ~ i g_blit_after -1
 : ~ i g_ret_lit_lex 0
 : ~ s g_ret_clo_share ``
 // The captures of the closure literal being built that its env only views
@@ -8938,7 +8941,11 @@ unsafe @ gen_ret i lex i syms i cg → s {
     = g_ret_lq + g_ret_lq 1
     : i __rbx0 g_ret_blk_exit
     = g_ret_blk_exit 0
+    : i __ba0 g_blit_after
+    = g_blit_after -1
     : s r ( __gen_ret lex syms cg )
+    ? >= g_blit_after 0 { ( nurl_lex_set_pos lex g_blit_after ) } {}
+    = g_blit_after __ba0
     ( __ret_blk_exit_flush )
     = g_ret_blk_exit __rbx0
     = g_ret_lq - g_ret_lq 1
@@ -8989,6 +8996,16 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     : i __ret_col ( nurl_lex_col lex )
     ? ! __ret_imp { ( nurl_lex_advance lex ) } {}
+    // `^ k` of a bound literal (`: K k @ K { p }`, __blit_ok): the literal
+    // is handed back as written there — `^ @ K { p }`, read at its own
+    // place — so the bound spelling lends what the direct one lends
+    // (D4c, AGORA-1008). gen_ret resumes after `k`.
+    ? & & ! __ret_imp ( is_ident_tok ( nurl_lex_type lex ) ) != 0 ( nurl_sym_len2 syms ( nurl_lex_val lex ) `__blitpos` ) {
+        : i __bpos ( nurl_str_to_int ( nurl_sym_get2 syms ( nurl_lex_val lex ) `__blitpos` ) )
+        ( nurl_lex_advance lex )
+        = g_blit_after ( nurl_lex_cur_start lex )
+        ( nurl_lex_set_pos lex __bpos )
+    } {}
     // Bare `^` — a return with no value expression (the next token ends
     // the statement/block). Legal ONLY in a `→ v` function, where it is
     // an early return that emits `ret void`. In a value-returning
@@ -79800,6 +79817,72 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     } {}
 }
 
+// AGORA-1008 (D4c's bound spelling). At `@` of `: T name @ K { … }`: is
+// this a literal whose fields are this function's `in` parameters, named
+// whole and still the parameters (or numbers), bound only to be handed
+// back? Then it is the literal `^ @ K { … }` hands back, which lends those
+// parameters (D4c) — no copy is made. Asked of the rest of the block:
+// every `name` there is `^ name`; no field's parameter is named again (a
+// change through it, a read or a shadowing binding would make the literal
+// read at the `^` differ from the one bound); no closure. The literal's
+// position when it is, the lexer past it; -1 and the lexer where it was
+// when it is not, and the binding is made as before. A field that is such
+// a parameter with a `% Drop` of its own is lent too, as in the direct
+// spelling: the copy, and that copy's destructor run, are what D4c removes.
+@ __blit_ok i lex i syms s name s ptype → i {
+    ? | | != 0 g_bck_closure_depth == 0 g_borrowck != ( nurl_lex_type lex ) TT_AT { ^ -1 } {}
+    : i at ( nurl_lex_cur_start lex )
+    ( nurl_lex_advance lex )
+    // (Not a literal of a type with a destructor of the program's own: that
+    // is a value of this frame, not a copy — made at the `^`, its drop on a
+    // path that hands back something else would not run.)
+    : b ty_ok & & == ( nurl_lex_type lex ) TT_IDENT ( seq ptype ( nurl_str_cat `%` ( nurl_lex_val lex ) ) ) ! ( __has_user_drop ptype )
+    ? ! ty_ok { ( nurl_lex_set_pos lex at ) ^ -1 } {}
+    ( nurl_lex_advance lex )
+    ? != ( nurl_lex_type lex ) TT_LBRACE { ( nurl_lex_set_pos lex at ) ^ -1 } {}
+    ( nurl_lex_advance lex )
+    : s self ( nurl_sym_get syms `__fn_self_name__` )
+    : ~ s flds ``
+    : ~ b ok T
+    : ~ i np 0
+    ~ & ok != ( nurl_lex_type lex ) TT_RBRACE {
+        : i tt ( nurl_lex_type lex )
+        : s w ( nurl_lex_val lex )
+        ? == tt TT_INT {} {
+            : i pi ( nurl_sym_word_index syms `__fn_param_names__` w )
+            ? | | | | | ! ( is_ident_tok tt ) < pi 0 == 0 ( nurl_sym_len2 syms w `__param` ) != 0 ( nurl_sym_len2 syms w `__inout` ) != 0 ( nurl_sym_len2 syms w `__sinkp` ) ( str_contains_word ( nurl_sym_get g_fn_sink self ) ( nurl_str_int pi ) ) { = ok F } {
+                = flds ( __word_union flds w )
+                = np + np 1
+            }
+        }
+        ( nurl_lex_advance lex )
+        ? == ( nurl_lex_type lex ) TT_EOF { = ok F } {}
+    }
+    ? | ! ok == np 0 { ( nurl_lex_set_pos lex at ) ^ -1 } {}
+    ( nurl_lex_advance lex )
+    : i after ( nurl_lex_cur_start lex )
+    // The rest of the block.
+    : ~ i depth 1
+    : ~ i prev TT_RBRACE
+    : ~ i rets 0
+    ~ & ok & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_LBRACE { = depth + depth 1 } {}
+        ? == tt TT_RBRACE { = depth - depth 1 } {}
+        ? == tt TT_BACKSLASH { = ok F } {}
+        ? ( is_ident_tok tt ) {
+            : s w ( nurl_lex_val lex )
+            ? ( seq w name ) { ? == prev TT_CARET { = rets + rets 1 } { = ok F } } {}
+            ? ( str_contains_word flds w ) { = ok F } {}
+        } {}
+        = prev tt
+        ( nurl_lex_advance lex )
+    }
+    ( nurl_lex_set_pos lex after )
+    ? | ! ok == rets 0 { ( nurl_lex_set_pos lex at ) ^ -1 } {}
+    ^ at
+}
+
 unsafe @ gen_let_or_struct i lex i syms i cg → s {
     // One statement's worth of lifetime — see g_init_terminated.
     = g_init_terminated 0
@@ -80310,6 +80393,17 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( __warn_if_shadows_param lex syms name )
             ( lint_note_bind lex name )
             ( nurl_lex_advance lex )
+            // A literal of `in` parameters bound only to be handed back
+            // (`: K k @ K { p }  ^ k`): nothing is made here; each `^ k`
+            // hands the literal back as written (__blit_ok, AGORA-1008).
+            ? & ! is_mutable == ( nurl_lex_type lex ) TT_AT {
+                : i __blp ( __blit_ok lex syms name ptype )
+                ? >= __blp 0 {
+                    ( nurl_sym_def syms ( nurl_str_cat name `__blitpos` ) ( nurl_str_int __blp ) )
+                    ( lint_note_used name )
+                    ^ ( nurl_str_cat `` `` )
+                } {}
+            } {}
             // Stash inner-T and inner-E NURL idents under
             // `<name>__res_nurl_T` / `<name>__res_nurl_E` for later retrieval
             // by gen_match's payload-binding logic. T is used for the Ok arm

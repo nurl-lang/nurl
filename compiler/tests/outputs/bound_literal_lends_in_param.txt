@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a string that lives on the heap
+4
+a string that lives on the heap
+a string that lives on the heap

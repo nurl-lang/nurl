@@ -331,14 +331,15 @@ each, so that the probes agree; an engine that decides the drops itself
 (stage S3) can give one answer for all of them, and which is D4 too.
 The owner's D4c (#4173) is "lent" in every spelling: the literal
 spellings and the `??` payload of an option are lent since AGORA-995, in
-nurlc and in the checker; the bound literal (`: K k @ K { p }`) is the
-rest of that task.
+nurlc and in the checker; the bound literal (`: K k @ K { p }  ^ k`) since
+AGORA-1008, where it is bound only to be handed back.
 
 | written | nurlc's answer | the caller's argument |
 |---|---|---|
 | `^ p`, `^ . p f`, `?? p { V x → { ^ x } }`, `^ ?? e { V x → x … }` over an enum of the program's, `^ @ ?T { T p }`; `^ ?? o { T x → x F → … }` and `: r ?? o {…}  ^ r`, `o` an option or a result, D4c since AGORA-995 | lent (`retpart`, `ret_borrow`, per call where another path is fresh) | stays the caller's; the result borrows it |
 | `^ @ K { p }`, `^ @ E { V p }`, `^ @ ?K { T @ K { p } }`, `^ @ KK { @ K { p } }` | lent (`retlend`, `ret_borrow`, lend kind 1), D4c since AGORA-995; kept (`keeps`) where the literal holds a value of its own beside `p` | stays the caller's; moved into the call beside an own field |
-| `: K k @ K { p }` then `^ k`; `( vec_push out @ K { p } )`; `= . o f @ K { p }` | a copy of `p` is made | stays the caller's |
+| `: K k @ K { p }` then `^ k`, `k` named nowhere else and `p` nowhere after the binding, no closure there, `K` with no `% Drop` of the program's | lent, as `^ @ K { p }`: each `^ k` hands back the literal as written (AGORA-1008, __blit_ok in nurlc; the checker reads nurlc's IR, which is the direct spelling's) | stays the caller's; the result borrows it |
+| that binding read, changed or handed on before `^ k`, or `p` named again after it; `( vec_push out @ K { p } )`; `= . o f @ K { p }` | a copy of `p` is made | stays the caller's |
 
 ## Declared summaries
 
