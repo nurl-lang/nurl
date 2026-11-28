@@ -1,7 +1,7 @@
 # Conditional certificates
 
 Status: **step 1 proved** (AGORA-1015, M2 part 2; spec.program-cert §4,
-spec.program-cert.2 §6 M2): `formal/C/Complete.lean` (phase C15) proves
+spec.program-cert.2 §6 M2): `formal/C/Complete.lean` (phase C15; threaded programs in `formal/C/Complete3.lean`, its witnesses in `formal/C/CompleteWitness.lean`) proves
 the transfer, the decided verdict `certOK2BA` and the three conditional
 claims on the standard axioms, with a witness that their hypotheses hold
 for a real program. Steps 2–4 (the translator, `elabIR`, the bundle) are

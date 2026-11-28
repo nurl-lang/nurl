@@ -27,7 +27,7 @@ cover the program, 3 when the checker refuses it. `nurl verify` runs
 `formal/` through `$NURL_FORMAL`, then next to `nurl.sh`. They need `lean`
 on `PATH` (elan's: run inside `formal/`, it picks `formal/`'s toolchain;
 or `--lean PATH` / `$LEAN`), and `formal/` built (`lake build C.Cert
-C.Cert3 C.Elab C.Complete C.Caps C.Caps3`).
+C.Cert3 C.Elab C.Complete C.Complete3 C.Caps C.Caps3`).
 
 The flag's and the subcommand's names are working names. The owner
 confirms them before 1.0.
@@ -256,8 +256,10 @@ prog.cert/
   - for a conditional certificate (AGORA-1033, AGORA-1035), `def assumed : List Nat := […]`
     (the indices of the assumed functions, each holding a stub `.seq s .panic`
     whose signature, callees and `hasThru` come from the core IR; `Claims.lean`
-    imports `C.Complete`, decides `C.certOK2BA P assumed entry 1` — or
-    `C.certOK3BA P spawns assumed entry 1` for a threaded program — and states
+    imports `C.Complete`, decides `C.certOK2BA P assumed entry 1` — or, for a
+    threaded program, imports `C.Complete3` and decides
+    `C.certOK3BA P spawns assumed entry 1`; a single-threaded one loads no A3
+    (AGORA-1040) — and states
     `M.safe` and `M.leak` (and `M.race` for a threaded program) over every
     completion `P'` satisfying `C.Completes` and `C.AssumedOK` / `C.AssumedOK3`;
     each assumed function has a trust-ledger row `assumed-fn:<name>` and the

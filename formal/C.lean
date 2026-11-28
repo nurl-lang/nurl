@@ -23,6 +23,8 @@ import C.Cert3
 import C.Elab
 import C.ElabWitness
 import C.Complete
+import C.Complete3
+import C.CompleteWitness
 import C.Caps
 import C.CapsWitness
 import C.Caps3
@@ -51,7 +53,7 @@ boolean (`certOK2B`), and A2's memory safety and leak freedom for it
 program's (`C/Cert3.lean`, AGORA-1020): `certOK3B` adds A3's conditions
 (the spawned functions, no module global), and `cert3_safe`, `cert3_race`
 and `cert3_leak` give A3's claim on every interleaving from the entry.
-C15, conditional certificates (`C/Complete.lean`, AGORA-1015): a program
+C15, conditional certificates (`C/Complete.lean`; threaded, `C/Complete3.lean`, AGORA-1015, AGORA-1040): a program
 whose translation leaves functions out holds a stub at each (its signature,
 callees and `hasThru`); `certOK2BA` checks the rest, and `cert_safe_cond`,
 `cert_leak_end_cond` and `cert_leak_panic_cond` give A2's claims for every
