@@ -1,4 +1,8 @@
-import C.Caps
+module
+
+public import C.Caps
+
+@[expose] public section
 
 /-! C16's witnesses: the closure of a program's names computed in Lean
 (`reachB`), and the check at a program with a call (`capsWitness`): its

@@ -1,4 +1,8 @@
-import A2.CapsEval
+module
+
+public import A2.CapsEval
+
+@[expose] public section
 
 namespace A2
 

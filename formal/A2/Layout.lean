@@ -1,4 +1,8 @@
-import A2.Basic
+module
+
+public import A2.Basic
+
+@[expose] public section
 
 /-!
 # A Vec's control block is never another Vec's buffer (Agora #879)

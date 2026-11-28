@@ -1,5 +1,9 @@
-import A2.CapsLive
-import A2.CapClause
+module
+
+public import A2.CapsLive
+public import A2.CapClause
+
+@[expose] public section
 
 namespace A2
 

@@ -369,7 +369,7 @@ prog.cert/
   its olean, then Claims.lean and Elab.lean against it. certify and
   verify check them in one Lean process instead, one file made in the
   work directory (`cert_lean_check`, packages/nurl-cert/src/lean.nu):
-  `import C.Cert` (and `import C.Cert3` for a threaded Claims.lean,
+  `module`, then `import C.Cert` (and `import C.Cert3` for a threaded Claims.lean,
   `import C.Elab` with Elab.lean); `section`, `open A2 C`, Program.lean's
   definitions, `end`; Claims.lean without its imports; Elab.lean without
   its imports. The file means what the modules mean:
@@ -389,6 +389,15 @@ prog.cert/
     refused;
   - no `.olean` passes from one process to the next, so a planted
     `Program.olean` is no longer an attack surface.
+  - the file is a Lean module (AGORA-1043), as formal/'s are, so Lean
+    loads only what formal/'s modules make public: their definitions,
+    with their bodies (each file's `@[expose] public section`), and their
+    theorems' statements, not their proofs, nor Lean's own private
+    parts. The kernel checks the claims against the same definitions; a
+    proof in formal/ is checked once, when formal/ builds. The claims
+    are the module's private declarations, so `#print axioms` names
+    `Cert.m_safe` `_private.All.0.Cert.m_safe`, and certify reads either
+    name. A Lean check of a certificate takes about 40 % less memory.
 
   Lean runs it with `--json`, so every message, `#print axioms` output
   included, comes with its file and line. A message is placed by its own

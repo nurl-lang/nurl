@@ -1,4 +1,8 @@
-import A1.Rhs
+module
+
+public import A1.Rhs
+
+@[expose] public section
 
 /-! A1 — the memory side of each step. -/
 

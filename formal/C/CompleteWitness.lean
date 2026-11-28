@@ -1,4 +1,8 @@
-import C.Complete3
+module
+
+public import C.Complete3
+
+@[expose] public section
 
 /-! C15's witnesses: a program with an assumed function whose checker
 verdict, completion and claims hold, single-threaded and threaded. Apart

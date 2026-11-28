@@ -1,4 +1,8 @@
-import A3.BorFree
+module
+
+public import A3.BorFree
+
+@[expose] public section
 
 /-! A3.0 — what one thread's step does to the others: it moves the shared
 `nid` up, and (A3.1) adds blocks, whose payloads the shared part of the

@@ -1,5 +1,9 @@
-import A3.Claim
-import A2.Dtor
+module
+
+public import A3.Claim
+public import A2.Dtor
+
+@[expose] public section
 
 /-! The give-back of a check-out (Agora #805, #825, #837), and `locked_restore`
 of a destructor value (Agora #810): lemmas about every typed program, which

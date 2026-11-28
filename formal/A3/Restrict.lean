@@ -1,4 +1,8 @@
-import A3.Owned
+module
+
+public import A3.Owned
+
+@[expose] public section
 
 /-! A3.0 — the downward frame lemma: a step on the shared address space is
 a step on the thread's own part of it.

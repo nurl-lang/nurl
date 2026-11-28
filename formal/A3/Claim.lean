@@ -1,8 +1,12 @@
-import A3.SpawnPres
-import A3.Restrict
-import A3.Lift
-import A3.SpawnOld
-import A3.SpawnNew
+module
+
+public import A3.SpawnPres
+public import A3.Restrict
+public import A3.Lift
+public import A3.SpawnOld
+public import A3.SpawnNew
+
+@[expose] public section
 
 /-! A3.0 — the claim. -/
 

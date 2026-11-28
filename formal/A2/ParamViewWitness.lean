@@ -1,4 +1,8 @@
-import A2.StoreViewWitness
+module
+
+public import A2.StoreViewWitness
+
+@[expose] public section
 
 /-! # Agora #909's own example: a destructor stores a view of its borrowed parameter through a fresh borrow
 

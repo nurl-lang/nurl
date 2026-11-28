@@ -1,4 +1,8 @@
-import A2.ClosureDropWitness
+module
+
+public import A2.ClosureDropWitness
+
+@[expose] public section
 
 /-! # AGORA-395: a closure that changes elements through a borrow, called through its package
 

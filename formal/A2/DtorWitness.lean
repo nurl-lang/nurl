@@ -1,4 +1,8 @@
-import A2.Dtor
+module
+
+public import A2.Dtor
+
+@[expose] public section
 
 /-! # A2-drop.3a's witness (`A2.DtorWitness`): the program, its destructor,
 its maker and its callers, typed, with `memory_safe` applied (the guarantee

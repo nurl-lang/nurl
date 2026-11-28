@@ -1,5 +1,9 @@
-import A3.Config
-import A3.Keep
+module
+
+public import A3.Config
+public import A3.Keep
+
+@[expose] public section
 
 /-! A3.0 — a thread's own step keeps the configuration invariant.
 

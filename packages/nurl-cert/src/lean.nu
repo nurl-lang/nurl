@@ -143,6 +143,18 @@ $ `stdlib/ext/json.nu`
     ^ @ ?String { T o }
 }
 
+// `import <name>`, and with `meta`, `meta import <name>` too.
+@ __lt_imp String o s name b meta_too → v {
+    ( string_push_str o `import ` )
+    ( string_push_str o name )
+    ( string_push_char o 10 )
+    ? meta_too {
+        ( string_push_str o `meta import ` )
+        ( string_push_str o name )
+        ( string_push_char o 10 )
+    } {}
+}
+
 @ __lt_v1 s a → ( Vec String ) {
     : ( Vec String ) v ( vec_new [String] )
     ( vec_push [String] v ( string_from a ) )
@@ -266,11 +278,17 @@ $ `stdlib/ext/json.nu`
         F → {}
     }
     : String o ( string_with_cap + + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) ( string_len kbody ) 256 )
-    ( string_push_str o `import C.Cert\n` )
-    ? threads { ( string_push_str o `import C.Cert3\n` ) } {}
-    ? cond { ( string_push_str o ? cond3 `import C.Complete3\n` `import C.Complete\n` ) } {}
-    ? has_elab { ( string_push_str o `import C.Elab\n` ) } {}
-    ? has_caps { ( string_push_str o ? caps3 `import C.Caps3\n` `import C.Caps\n` ) } {}
+    // (a module, AGORA-1043: it loads only what formal/'s modules make
+    // public, not their proofs or Lean's own private parts; the fast
+    // profile's `native_decide` runs the checker's compiled code, which a
+    // module reaches by a `meta import`)
+    : b fast | ( string_contains claims `native_decide` ) ?? caps { T c → ( string_contains c `native_decide` ) F → F }
+    ( string_push_str o `module\n` )
+    ( __lt_imp o `C.Cert` fast )
+    ? threads { ( __lt_imp o `C.Cert3` fast ) } {}
+    ? cond { ( __lt_imp o ? cond3 `C.Complete3` `C.Complete` fast ) } {}
+    ? has_elab { ( __lt_imp o `C.Elab` F ) } {}
+    ? has_caps { ( __lt_imp o ? caps3 `C.Caps3` `C.Caps` fast ) } {}
     ( string_push_str o `section\nopen A2 C\n` )
     ( string_push_str o ( string_data pbody ) )
     ( string_push_str o `\nend\n\n` )
@@ -361,14 +379,14 @@ $ `stdlib/ext/json.nu`
 }
 
 // The lines of `text`'s import header: its first lines, as long as they
-// start `import `.
+// start `import ` or `meta import ` (after its `module` line).
 @ __lt_header_lines s text → i {
     : ( Slice u ) t ( slice_of_str text )
     : i n ( slice_len [u] t )
     : ~ i lines 0
     : ~ i k 0
     ~ < k n {
-        ? ! ( __lt_at t k `import ` ) { ^ lines } {}
+        ? ! | | ( __lt_at t k `import ` ) ( __lt_at t k `meta import ` ) & == lines 0 ( __lt_at t k `module\n` ) { ^ lines } {}
         = lines + lines 1
         ~ & < k n != ( slice_byte t k ) 10 { = k + k 1 }
         = k + k 1
@@ -586,7 +604,7 @@ $ `stdlib/ext/json.nu`
 // error. Program.lean has passed the grammar check (shape.nu) before.
 @ cert_lean_refutes s lean s formal s bundle s work b threads b cond → b {
     : String ptext ?? ( nc_read ( string_data ( nc_join bundle `Program.lean` ) ) ) { T x → x F → { ^ F } }
-    : String o ( string_new )
+    : String o ( string_from `module\n` )
     ? cond {
         ( string_push_str o ? threads `import C.Complete3
 ` `import C.Complete
@@ -636,17 +654,41 @@ theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
 
 // The axioms `#print axioms` lists for `name`, comma-separated as Lean
 // prints them ("" for none), or none when the name is not reported.
+// Does `l` start `'_private.<module>.0.<name>' ` (`tail` = `.0.<name>' `),
+// with a module name of letters, digits, `_` and `.` between?
+@ __lt_private_of String l s tail → b {
+    : s p `'_private.`
+    ? ! ( string_starts_with l p ) { ^ F } {}
+    : ( Slice u ) t ( slice_of_str ( string_data l ) )
+    : i n ( slice_len [u] t )
+    : i a ( nurl_str_len p )
+    // (the module's name: letters, digits, `_` and `.`, then the tail)
+    : ~ i k a
+    ~ < k n {
+        ? ( __lt_at t k tail ) { ^ > k a } {}
+        : i c ( slice_byte t k )
+        ? ! | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 | == c 95 == c 46 { ^ F } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 @ cert_lean_axioms String log s name → ?String {
     : ( Vec String ) ls ( nc_lines ( string_data log ) )
     : String head ( string_from `'` )
     ( string_push_str head name )
     ( string_push_str head `' ` )
+    // (in the combined file, a module, the claims are its private
+    // declarations: Lean names `Cert.m_safe` `_private.<module>.0.Cert.m_safe`)
+    : String ptail ( string_from `.0.` )
+    ( string_push_str ptail name )
+    ( string_push_str ptail `' ` )
     : i n ( vec_len [String] ls )
     : ~ i k 0
     ~ < k n {
         ?? ( vec_get [String] ls k ) {
             T l → {
-                ? ( string_starts_with l ( string_data head ) ) {
+                ? | ( string_starts_with l ( string_data head ) ) ( __lt_private_of l ( string_data ptail ) ) {
                     ? ( string_contains l `does not depend on any axioms` ) { ^ @ ?String { T ( string_new ) } } {}
                     ?? ( string_index_of l `[` ) {
                         T a → {

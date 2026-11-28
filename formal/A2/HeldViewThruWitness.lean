@@ -1,5 +1,9 @@
-import A2.Closure
-import A2.ThruPre
+module
+
+public import A2.Closure
+public import A2.ThruPre
+
+@[expose] public section
 
 /-! AGORA-933 in A2: a callee that changes a `Vec` it reaches through a slice
 its parameter holds, `( vec_reserve ( slice_at ( vec_at vv 0 ) 0 ) 4096 )`

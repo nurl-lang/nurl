@@ -1,4 +1,8 @@
-import A2.NameWf
+module
+
+public import A2.NameWf
+
+@[expose] public section
 
 /-! A2 — Agora #909: the rules keep fresh borrows fresh (`FreshOK`): a live
 fresh borrow's path is structural and rooted at the frame's own bindings. -/

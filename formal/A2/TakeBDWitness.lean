@@ -1,5 +1,9 @@
-import A2.DtorWitness
-import A2.TakeBWitness
+module
+
+public import A2.DtorWitness
+public import A2.TakeBWitness
+
+@[expose] public section
 
 /-!
   A2 — a destructor value moved out through a borrow (AGORA-900).

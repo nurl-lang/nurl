@@ -1,4 +1,8 @@
-import A2.DtorWitness
+module
+
+public import A2.DtorWitness
+
+@[expose] public section
 
 /-!
 # A2-drop.3b: dropping a `Vec` of destructor values in place, as code (Agora #607)

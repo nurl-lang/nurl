@@ -1,4 +1,8 @@
-import A2.Invariant
+module
+
+public import A2.Invariant
+
+@[expose] public section
 
 /-! A2 — basic facts: updates, trees and their addresses. -/
 

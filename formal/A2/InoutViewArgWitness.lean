@@ -1,5 +1,9 @@
-import A2.FreshWitness
-import A2.TakeWitness
+module
+
+public import A2.FreshWitness
+public import A2.TakeWitness
+
+@[expose] public section
 
 /-! # AGORA-909 (github#2041), direct call: an `inout` callee changing elements, called with a view
 

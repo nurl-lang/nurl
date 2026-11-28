@@ -1,5 +1,9 @@
-import A2.DtorWitness
-import A2.EnvHand
+module
+
+public import A2.DtorWitness
+public import A2.EnvHand
+
+@[expose] public section
 
 /-! # Agora #609: a closure whose environment is a destructor value, a witness
 

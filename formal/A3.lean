@@ -1,37 +1,39 @@
-import A3.Defs
-import A3.Frame
-import A3.Fresh
-import A3.BorFree
-import A3.Nid
-import A3.Rel
-import A3.Ghost
-import A3.Thread
-import A3.Touch
-import A3.Config
-import A3.Owned
-import A3.Keep
-import A3.Pres
-import A3.Mark
-import A3.Cell
-import A3.Assemble
-import A3.SpawnPres
-import A3.Restrict
-import A3.SpawnOld
-import A3.Lift
-import A3.SpawnNew
-import A3.Claim
-import A3.ClaimWitness
-import A3.Make
-import A3.LockGive
-import A3.LockDtorWitness
-import A3.LockArcDtorWitness
-import A3.RwDtorWitness
-import A3.Reap
-import A3.ReapWitness
-import A3.Keys
-import A3.ChanDtorWitness
-import A3.LockExcl
-import A3.LockRoot
-import A3.Kinds
-import A3.ClaimFull
-import A3.Reach
+module
+
+public import A3.Defs
+public import A3.Frame
+public import A3.Fresh
+public import A3.BorFree
+public import A3.Nid
+public import A3.Rel
+public import A3.Ghost
+public import A3.Thread
+public import A3.Touch
+public import A3.Config
+public import A3.Owned
+public import A3.Keep
+public import A3.Pres
+public import A3.Mark
+public import A3.Cell
+public import A3.Assemble
+public import A3.SpawnPres
+public import A3.Restrict
+public import A3.SpawnOld
+public import A3.Lift
+public import A3.SpawnNew
+public import A3.Claim
+public import A3.ClaimWitness
+public import A3.Make
+public import A3.LockGive
+public import A3.LockDtorWitness
+public import A3.LockArcDtorWitness
+public import A3.RwDtorWitness
+public import A3.Reap
+public import A3.ReapWitness
+public import A3.Keys
+public import A3.ChanDtorWitness
+public import A3.LockExcl
+public import A3.LockRoot
+public import A3.Kinds
+public import A3.ClaimFull
+public import A3.Reach

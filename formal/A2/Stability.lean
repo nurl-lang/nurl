@@ -1,4 +1,8 @@
-import A2.Ctx
+module
+
+public import A2.Ctx
+
+@[expose] public section
 
 /-! A2 — what a change of memory leaves valid.
 

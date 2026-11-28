@@ -1,4 +1,8 @@
-import A2.Typing
+module
+
+public import A2.Typing
+
+@[expose] public section
 
 /-! # A call is handed no argument that views its own storage, where the callee moves or changes it (AGORA-606, AGORA-563)
 

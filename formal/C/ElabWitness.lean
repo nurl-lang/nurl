@@ -1,4 +1,8 @@
-import C.Elab
+module
+
+public import C.Elab
+
+@[expose] public section
 
 /-! C.Elab's witnesses: IRs written out, the terms `elabIR` builds from
 them, checked (steps 2 to 10, and the conditional stubs of AGORA-1036).

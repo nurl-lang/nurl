@@ -1,4 +1,8 @@
-import A2.Elem
+module
+
+public import A2.Elem
+
+@[expose] public section
 
 /-! A2 — an element moved out through a borrow (AGORA-889, `Stmt.takeB`).
 

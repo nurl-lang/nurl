@@ -1,6 +1,10 @@
-import A3.Pres
-import A3.Mark
-import A3.SpawnOld
+module
+
+public import A3.Pres
+public import A3.Mark
+public import A3.SpawnOld
+
+@[expose] public section
 
 /-! A3.5 — library handles whose copies are one state: confinement.
 

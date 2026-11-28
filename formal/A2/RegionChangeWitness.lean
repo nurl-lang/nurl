@@ -1,4 +1,8 @@
-import A2.HeldViewThruWitness
+module
+
+public import A2.HeldViewThruWitness
+
+@[expose] public section
 
 /-! AGORA-937, item 3: a change through a region.
 

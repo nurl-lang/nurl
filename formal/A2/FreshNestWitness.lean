@@ -1,4 +1,8 @@
-import A2.FreshProjWitness
+module
+
+public import A2.FreshProjWitness
+
+@[expose] public section
 
 /-! # AGORA-909: a nested projection, fresh at every step
 

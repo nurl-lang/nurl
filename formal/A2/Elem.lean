@@ -1,4 +1,8 @@
-import A2.EditBV
+module
+
+public import A2.EditBV
+
+@[expose] public section
 
 /-! A2 — an element handed over (Agora #391): the elements of an owned `Vec`
 in another order.

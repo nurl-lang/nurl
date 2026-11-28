@@ -1,4 +1,8 @@
-import A2.TypingFacts
+module
+
+public import A2.TypingFacts
+
+@[expose] public section
 
 /-! A2 — a change of elements through a borrow (Agora #295, `StmtT.editB`).
 

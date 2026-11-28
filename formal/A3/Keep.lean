@@ -1,4 +1,8 @@
-import A3.Owned
+module
+
+public import A3.Owned
+
+@[expose] public section
 
 /-! A3.0 — a thread's step leaves the other threads' addresses as they were.
 

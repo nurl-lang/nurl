@@ -1,4 +1,8 @@
-import A2.Soundness
+module
+
+public import A2.Soundness
+
+@[expose] public section
 
 /-!
   A3 — threads (`A3/DESIGN.md`): the configuration and its steps, what a

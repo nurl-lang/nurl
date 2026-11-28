@@ -1,4 +1,8 @@
-import C.A2Expr
+module
+
+public import C.A2Expr
+
+@[expose] public section
 
 /-!
 # C6: A2's core right-hand sides, decided (AGORA-970)

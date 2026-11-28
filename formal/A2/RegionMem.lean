@@ -1,4 +1,8 @@
-import A2.ThruPre
+module
+
+public import A2.ThruPre
+
+@[expose] public section
 
 /-! A2 — AGORA-937 stage 3b, first part: what a parameter's region reaches
 in memory (`A2/THRU_STAGE3_DESIGN.md`).

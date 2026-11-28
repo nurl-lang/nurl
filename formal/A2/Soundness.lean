@@ -1,6 +1,10 @@
-import A2.Codes
-import A2.SrcKeep
-import A2.EnvHand
+module
+
+public import A2.Codes
+public import A2.SrcKeep
+public import A2.EnvHand
+
+@[expose] public section
 
 /-! A2 — soundness: a well-typed program never reaches a configuration that
 is about to touch memory it may not.  Every step checks allocation and

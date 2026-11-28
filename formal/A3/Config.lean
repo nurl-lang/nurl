@@ -1,4 +1,8 @@
-import A3.Touch
+module
+
+public import A3.Touch
+
+@[expose] public section
 
 /-! A3.0 — the configuration invariant.
 

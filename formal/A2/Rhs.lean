@@ -1,4 +1,8 @@
-import A2.Frame
+module
+
+public import A2.Frame
+
+@[expose] public section
 
 /-! A2 — evaluating a right-hand side keeps the invariant and yields a value
 valid as its entry says. -/

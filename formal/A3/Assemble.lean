@@ -1,4 +1,8 @@
-import A3.Cell
+module
+
+public import A3.Cell
+
+@[expose] public section
 
 /-! A3.0 — the claim, from the configuration invariant.
 

@@ -1,4 +1,8 @@
-import A2.ArcDtorWitness
+module
+
+public import A2.ArcDtorWitness
+
+@[expose] public section
 
 /-! A2 — Agora #790: an orphan the unwinding makes is reaped inside the frame
 that caught it.

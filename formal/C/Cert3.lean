@@ -1,5 +1,9 @@
-import C.Cert
-import C.A3Prog
+module
+
+public import C.Cert
+public import C.A3Prog
+
+@[expose] public section
 
 /-!
 # C14: a threaded program's certificate claims (AGORA-1020)

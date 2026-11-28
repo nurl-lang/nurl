@@ -1,6 +1,10 @@
-import A3.Reap
-import A2.DtorWitness
-import A3.Keys
+module
+
+public import A3.Reap
+public import A2.DtorWitness
+public import A3.Keys
+
+@[expose] public section
 
 /-! A3 — Agora #755, a channel of destructor values, and a witness.
 

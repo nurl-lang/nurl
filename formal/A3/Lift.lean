@@ -1,4 +1,8 @@
-import A3.Rel
+module
+
+public import A3.Rel
+
+@[expose] public section
 
 /-! A3.0 — a thread's step on the whole address space.
 

@@ -1,6 +1,10 @@
-import A2.TypingFacts
-import A2.NameWf
-import A2.Wf
+module
+
+public import A2.TypingFacts
+public import A2.NameWf
+public import A2.Wf
+
+@[expose] public section
 
 /-! # Agora #909: each new premise holds with the fresh bit off
 

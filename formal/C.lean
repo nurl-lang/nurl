@@ -1,33 +1,37 @@
-import C.Check
-import C.Join
-import C.Call
-import C.Sub
-import C.Prog
-import C.A2Expr
-import C.A2Rhs
-import C.A2Stmt
-import C.A2Data
-import C.A2Chan
-import C.A2Pack
-import C.A2Call
-import C.A2Panic
-import C.A2Prog
-import C.A3Prog
-import C.A2Weaker
-import C.Dedup
-import C.A2Exit
-import C.A2Glue
-import C.DedupWitness
-import C.Cert
-import C.Cert3
-import C.Elab
-import C.ElabWitness
-import C.Complete
-import C.Complete3
-import C.CompleteWitness
-import C.Caps
-import C.CapsWitness
-import C.Caps3
+module
+
+public import C.Check
+public import C.Join
+public import C.Call
+public import C.Sub
+public import C.Prog
+public import C.A2Expr
+public import C.A2Rhs
+public import C.A2Stmt
+public import C.A2Data
+public import C.A2Chan
+public import C.A2Pack
+public import C.A2Call
+public import C.A2Panic
+public import C.A2Prog
+public import C.A3Prog
+public import C.A2Weaker
+public import C.Dedup
+public import C.A2Exit
+public import C.A2Glue
+public import C.DedupWitness
+public import C.Cert
+public import C.Cert3
+public import C.Elab
+public import C.ElabWitness
+public import C.Complete
+public import C.Complete3
+public import C.CompleteWitness
+public import C.Caps
+public import C.CapsWitness
+public import C.Caps3
+
+@[expose] public section
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over

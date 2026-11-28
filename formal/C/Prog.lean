@@ -1,4 +1,8 @@
-import C.Sub
+module
+
+public import C.Sub
+
+@[expose] public section
 
 /-!
 # C4: whole programs (AGORA-970)

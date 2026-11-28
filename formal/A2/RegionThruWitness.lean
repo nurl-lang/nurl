@@ -1,4 +1,8 @@
-import A2.Closure
+module
+
+public import A2.Closure
+
+@[expose] public section
 
 /-! AGORA-937 (turn-on 2) in A2: a through-changing call that passes a
 view-holding parameter's own region.

@@ -1,4 +1,8 @@
-import A2.NoRootb
+module
+
+public import A2.NoRootb
+
+@[expose] public section
 
 /-! # A2-drop.3a: the destructor on the type, checked
 

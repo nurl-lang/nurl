@@ -1,5 +1,9 @@
-import A3.Rel
-import A2.Repl
+module
+
+public import A3.Rel
+public import A2.Repl
+
+@[expose] public section
 
 /-! A3.0 — what a step's owned trees hold: addresses the step's start
 owned, or fresh ones.  A step moves trees between slots, takes subtrees out

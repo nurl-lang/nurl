@@ -1,4 +1,8 @@
-import A2.InoutViewArgWitness
+module
+
+public import A2.InoutViewArgWitness
+
+@[expose] public section
 
 /-! # AGORA-909: a call that hands a view to a function pushing through a field of its `inout` parameter
 

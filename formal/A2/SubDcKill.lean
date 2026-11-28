@@ -1,4 +1,8 @@
-import A2.RegionMem
+module
+
+public import A2.RegionMem
+
+@[expose] public section
 
 /-! AGORA-937, stage 3d groundwork (item 4): the kinds-composed lift of a
 change through a region ends, at the caller, exactly what the callee ends.

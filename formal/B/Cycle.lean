@@ -1,3 +1,7 @@
+module
+
+@[expose] public section
+
 /-!
 # B7: the cycle collector's criterion (AGORA-970)
 

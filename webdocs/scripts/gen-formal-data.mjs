@@ -393,7 +393,7 @@ function parseLeanFile(phase, modName, filePath) {
 
   const imports = [];
   for (const line of lines) {
-    const m = line.match(/^import\s+([A-Za-z0-9_.]+)/);
+    const m = line.match(/^(?:public\s+)?import\s+([A-Za-z0-9_.]+)/);
     if (m) imports.push(m[1]);
   }
 

@@ -1,4 +1,8 @@
-import A2.Typing
+module
+
+public import A2.Typing
+
+@[expose] public section
 
 /-! A2 — AGORA-937: a parameter's region.
 

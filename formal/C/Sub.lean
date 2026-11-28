@@ -1,4 +1,8 @@
-import C.Call
+module
+
+public import C.Call
+
+@[expose] public section
 
 /-!
 # C2: subsumption by certificate (AGORA-970)

@@ -1,4 +1,8 @@
-import A2.Preservation
+module
+
+public import A2.Preservation
+
+@[expose] public section
 
 /-! A2 — progress: a well-typed configuration has finished, or it steps (or
 panics, which is a defined way to stop). -/

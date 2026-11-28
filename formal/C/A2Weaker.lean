@@ -1,5 +1,9 @@
-import C.A2Panic
-import A2.Ctx
+module
+
+public import C.A2Panic
+public import A2.Ctx
+
+@[expose] public section
 
 /-!
 # C7w: A2's `Weaker` decided; joins by weakening (AGORA-975)

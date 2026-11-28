@@ -1,4 +1,8 @@
-import A3.LockDtorWitness
+module
+
+public import A3.LockDtorWitness
+
+@[expose] public section
 
 /-! A3 — Agora #803, `Locked D` where `D` holds a share: the give-back of a
 destructor payload that fails its crossing check, and a witness.

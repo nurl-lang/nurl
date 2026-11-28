@@ -1,4 +1,8 @@
-import A2.Steps
+module
+
+public import A2.Steps
+
+@[expose] public section
 
 /-! A2 — nothing leaks: every live address is in a tree some binding owns
 (`Covers`), and every step keeps it so. -/

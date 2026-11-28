@@ -1,5 +1,9 @@
-import A2.DtorWitness
-import A2.Settle
+module
+
+public import A2.DtorWitness
+public import A2.Settle
+
+@[expose] public section
 
 /-! A2 — Agora #610, a witness: an `Arc` of a destructor value.
 

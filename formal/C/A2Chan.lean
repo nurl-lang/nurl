@@ -1,4 +1,8 @@
-import C.A2Data
+module
+
+public import C.A2Data
+
+@[expose] public section
 
 /-!
 # C8c: A3.4's channels and A3.2's locks, decided (AGORA-975)

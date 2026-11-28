@@ -1,4 +1,8 @@
-import A2.KillVarsStep
+module
+
+public import A2.KillVarsStep
+
+@[expose] public section
 
 namespace A2
 

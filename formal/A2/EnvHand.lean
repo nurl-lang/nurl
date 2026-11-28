@@ -1,5 +1,9 @@
-import A2.Codes
-import A2.SrcKeep
+module
+
+public import A2.Codes
+public import A2.SrcKeep
+
+@[expose] public section
 
 /-! A2 — the environment handed over (A2-envhand): a call through an owned
 package of a method whose interface takes the receiver `inout`

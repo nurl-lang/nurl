@@ -1,5 +1,9 @@
-import C.Cert
-import A2.Reach
+module
+
+public import C.Cert
+public import A2.Reach
+
+@[expose] public section
 
 /-!
 # C16: what a program can run, decided (AGORA-1013)

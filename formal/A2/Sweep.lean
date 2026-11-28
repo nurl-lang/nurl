@@ -1,4 +1,8 @@
-import A2.Heap
+module
+
+public import A2.Heap
+
+@[expose] public section
 
 /-! A2 — A3.1's sweep: the blocks nothing reaches are removed, and their
 payloads freed (`Mem.sweep`).  It touches nothing else: the slots, `nid` and

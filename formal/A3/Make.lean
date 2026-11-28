@@ -1,5 +1,9 @@
-import A3.Claim
-import A3.Kinds
+module
+
+public import A3.Claim
+public import A3.Kinds
+
+@[expose] public section
 
 /-! A3.6's rest — module globals made before `main`, read at their declared types.
 

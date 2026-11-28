@@ -1,5 +1,9 @@
-import A3.LockExcl
-import A3.Kinds
+module
+
+public import A3.LockExcl
+public import A3.Kinds
+
+@[expose] public section
 
 /-! A3.2 — Agora #808: **a check-out's root share outlives its body.**
 

@@ -1,4 +1,8 @@
-import A3.Frame
+module
+
+public import A3.Frame
+
+@[expose] public section
 
 /-! A3.0 — what one step does to the address space: it allocates only fresh
 addresses, and `nid` never goes back.  A thread's step therefore never

@@ -1,5 +1,9 @@
-import A3.Defs
-import A2.Reach
+module
+
+public import A3.Defs
+public import A2.Reach
+
+@[expose] public section
 
 /-! A3 — the functions a threaded run can name (AGORA-1013).
 

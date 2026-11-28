@@ -1,4 +1,8 @@
-import A2.Progress
+module
+
+public import A2.Progress
+
+@[expose] public section
 
 /-! A2 — the rules keep contexts well-formed: live entries depend only on
 roots the context has. -/

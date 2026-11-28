@@ -1,5 +1,9 @@
-import A2.Codes
-import A2.SweepD
+module
+
+public import A2.Codes
+public import A2.SweepD
+
+@[expose] public section
 
 /-! A2 — the functions a run can name (AGORA-1013).
 

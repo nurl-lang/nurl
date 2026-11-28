@@ -1,5 +1,9 @@
-import C.A2Call
-import C.Join
+module
+
+public import C.A2Call
+public import C.Join
+
+@[expose] public section
 
 /-!
 # AGORA-988 witness: re-pushing a slice keeps one dependency

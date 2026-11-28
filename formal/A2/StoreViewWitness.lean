@@ -1,5 +1,9 @@
-import A2.FreshWitness
-import A2.EditBVFnWitness
+module
+
+public import A2.FreshWitness
+public import A2.EditBVFnWitness
+
+@[expose] public section
 
 /-! # Agora #916: a destructor of a type that holds views stores a view of its own local through a fresh borrow
 

@@ -1,4 +1,8 @@
-import C.A2Call
+module
+
+public import C.A2Call
+
+@[expose] public section
 
 /-!
 # C7x: A2's `exit`, decided by obligations (AGORA-970, AGORA-975)

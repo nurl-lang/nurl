@@ -1,4 +1,8 @@
-import A2.Semantics
+module
+
+public import A2.Semantics
+
+@[expose] public section
 
 /-
   A2 — the ownership rules as a type system.

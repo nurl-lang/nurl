@@ -1,4 +1,8 @@
-import A2.Soundness
+module
+
+public import A2.Soundness
+
+@[expose] public section
 
 /-!
   A2 — early exits (Agora #871): `break`, `continue` and an early `^`, typed

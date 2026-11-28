@@ -1,5 +1,9 @@
-import A2.FrameClause
-import A2.CallMem
+module
+
+public import A2.FrameClause
+public import A2.CallMem
+
+@[expose] public section
 
 namespace A2
 

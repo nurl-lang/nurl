@@ -1,4 +1,8 @@
-import B.Vec
+module
+
+public import B.Vec
+
+@[expose] public section
 
 /-!
 # B6: `Channel`'s queue (AGORA-970)

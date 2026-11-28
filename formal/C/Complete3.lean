@@ -1,5 +1,9 @@
-import C.Complete
-import C.Cert3
+module
+
+public import C.Complete
+public import C.Cert3
+
+@[expose] public section
 
 /-! C15 for threaded programs (AGORA-1035): A3's claims over every completion
 of a program with assumed functions. Apart from `C/Complete.lean` so that a

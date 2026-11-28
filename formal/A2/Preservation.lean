@@ -1,7 +1,11 @@
-import A2.TakeB
-import A2.StepCaps
-import A2.CapsLive
-import A2.FrameClause
+module
+
+public import A2.TakeB
+public import A2.StepCaps
+public import A2.CapsLive
+public import A2.FrameClause
+
+@[expose] public section
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/

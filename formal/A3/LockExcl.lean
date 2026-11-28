@@ -1,4 +1,8 @@
-import A3.Reap
+module
+
+public import A3.Reap
+
+@[expose] public section
 
 /-! A3.2 — Agora #808: **a checked-out lock block and its frame**, over the
 configuration's run.

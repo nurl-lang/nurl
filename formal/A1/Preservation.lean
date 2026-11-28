@@ -1,4 +1,8 @@
-import A1.TypingFacts
+module
+
+public import A1.TypingFacts
+
+@[expose] public section
 
 /-! A1 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/

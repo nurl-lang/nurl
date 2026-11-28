@@ -1,4 +1,8 @@
-import D.Drops
+module
+
+public import D.Drops
+
+@[expose] public section
 
 /-! Phase D: code generation preserves the semantics, by translation
 validation. D2 (`D/Drops.lean`): what a drop validator's "validated"

@@ -1,5 +1,9 @@
-import A2.DtorWitness
-import A2.ThruClosureWitness
+module
+
+public import A2.DtorWitness
+public import A2.ThruClosureWitness
+
+@[expose] public section
 
 /-! # A destructor that changes elements through a borrow of its own local
 

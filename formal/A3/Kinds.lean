@@ -1,4 +1,8 @@
-import A3.Keys
+module
+
+public import A3.Keys
+
+@[expose] public section
 
 /-! A3.5 — Agora #815: **no block is named by both a lock share and a cell share.**
 

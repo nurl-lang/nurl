@@ -1,5 +1,9 @@
-import C.A2Prog
-import A3.ClaimFull
+module
+
+public import C.A2Prog
+public import A3.ClaimFull
+
+@[expose] public section
 
 /-!
 # C12: A3's claim for a checked program (AGORA-970)

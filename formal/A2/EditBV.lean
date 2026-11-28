@@ -1,4 +1,8 @@
-import A2.EditB
+module
+
+public import A2.EditB
+
+@[expose] public section
 
 /-! A2 — a view stored through a borrow (Agora #295, `StmtT.editBV`).
 

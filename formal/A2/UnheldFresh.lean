@@ -1,4 +1,8 @@
-import A2.Unfresh
+module
+
+public import A2.Unfresh
+
+@[expose] public section
 
 /-! # Agora #916: each new premise holds with the held-freshness bit off
 

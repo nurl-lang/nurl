@@ -1,4 +1,8 @@
-import A1.Syntax
+module
+
+public import A1.Syntax
+
+@[expose] public section
 
 /-
   A1 — operational semantics.

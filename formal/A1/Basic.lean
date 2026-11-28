@@ -1,4 +1,8 @@
-import A1.Invariant
+module
+
+public import A1.Invariant
+
+@[expose] public section
 
 /-! A1 — basic facts: updates, trees and their addresses. -/
 

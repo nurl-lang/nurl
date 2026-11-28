@@ -1,4 +1,8 @@
-import A2.Typing
+module
+
+public import A2.Typing
+
+@[expose] public section
 
 /-
   A2 — what a well-typed configuration guarantees about memory.

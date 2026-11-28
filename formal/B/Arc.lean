@@ -1,4 +1,8 @@
-import B.Rc
+module
+
+public import B.Rc
+
+@[expose] public section
 
 /-!
 # B5: `Arc` and `ArcWeak` (AGORA-970)

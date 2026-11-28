@@ -1,4 +1,8 @@
-import A2.Soundness
+module
+
+public import A2.Soundness
+
+@[expose] public section
 
 /-!
   A2 — a take out of an `inout .replace` place (Agora #826).
