@@ -288,7 +288,9 @@ prog.cert/
   a `sink` or `inout` parameter or held in another value; channels of
   numbers, `String`s and `Vec`s of numbers; and threads, A3's programs:
   spawned closures holding those by value, their spawns, joins and
-  results, `C.Elab.elabIR3`, which builds the spawn wrappers too;
+  results, `C.Elab.elabIR3`, which builds the spawn wrappers too; and
+  conditional certificates with stubs at `assumed`, `C.Elab.elabIRCond` /
+  `C.Elab.elabIR3Cond` (AGORA-1036);
   `docs/dev/TRANSLATION_TRUST.md`, route (b), steps 2 and 4 to 10). Every
   certify program is in it. It is a pure function of
   Program.core (`cert_elab_lean`, `packages/nurl-cert/src/claims.nu`):

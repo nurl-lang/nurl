@@ -142,7 +142,7 @@ theorem InPay.sub {m : Mem} {n n' : Val} (h : InPay m n) (hs : Sub n' n) : InPay
 
 /-- What is reached inside a payload stays inside it. -/
 theorem comp_share_lands {k : Kind} {N n0 : Val} (hk : Lands k N n0) : comp .share k = .share := by
-  rcases hk with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ <;> rfl
+  rcases hk with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨_, rfl, _⟩ <;> rfl
 
 /-- What lands in what a dependency lands, in way `k`, lands through it with
     the composed kind. -/
@@ -425,6 +425,52 @@ theorem lendOf_href {τ : Ty} {e : Val} (hw : WFv τ e) {c : Nat} (h : lendOf e 
 theorem comp_isName {a b : Kind} (ha : a.isName = false) (hb : b.isName = false) :
     (comp a b).isName = false := by
   cases a <;> cases b <;> simp_all [comp, Kind.isName]
+
+/-- AGORA-374: forgetting indices commutes with composing. -/
+theorem comp_coarse (a k : Kind) : (comp a k).coarse = comp a.coarse k.coarse := by
+  cases a <;> cases k <;> rfl
+
+theorem comp_coarse_of {a k : Kind} (hk : k.isIdx = false) : comp a.coarse k = (comp a k).coarse := by
+  rw [comp_coarse, Kind.coarse_of_not_idx hk]
+
+/-- AGORA-374: what is derived, its indices forgotten, does not depend on
+    the index of the way it is derived at. -/
+theorem derive_map_coarse (y : Var) (E : Entry) (k : Kind) :
+    (derive y E k).map Dep.coarse = (derive y E k.coarse).map Dep.coarse := by
+  unfold derive; split
+  · simp only [List.map_cons, List.map_nil, List.cons.injEq, and_true]
+    show (⟨y, (rootKind E.ty k).coarse⟩ : Dep) = ⟨y, (rootKind E.ty k.coarse).coarse⟩
+    congr 1; cases E.ty <;> cases k <;> rfl
+  · simp only [List.map_map]
+    congr 1; funext d
+    show (⟨d.root, (comp d.kind k).coarse⟩ : Dep) = ⟨d.root, (comp d.kind k.coarse).coarse⟩
+    rw [comp_coarse, comp_coarse, Kind.coarse_coarse]
+
+/-- AGORA-374: composing two ways that name no index names none. -/
+theorem comp_notIdx {a b : Kind} (ha : a.isIdx = false) (hb : b.isIdx = false) :
+    (comp a b).isIdx = false := by
+  cases a <;> cases b <;> simp_all [comp, Kind.isIdx]
+
+/-- AGORA-374: what a call lends names no index: the call speaks in the four
+    memory ways. -/
+theorem argDeps_notIdx {Γ : Ctx} {args : List Var} {jk : Nat × Kind} {d : Dep} (h : d ∈ argDeps Γ args jk) :
+    d.kind.isIdx = false := by
+  unfold argDeps at h; split at h
+  · cases h
+  · obtain ⟨d0, _, rfl⟩ := List.mem_map.mp h; simp
+
+theorem heldOfArgs_notIdx {Γ : Ctx} {args : List Var} {d : Dep} (h : d ∈ heldOfArgs Γ args) :
+    d.kind.isIdx = false := by
+  unfold heldOfArgs at h
+  rcases List.mem_append.mp h with h | h
+  · obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_compAll.mp h
+    obtain ⟨_, _, _, hm⟩ := mem_argMem.mp hd0
+    exact comp_notIdx (coarseMem_notIdx hm) (by rcases hk with rfl | rfl | rfl | rfl <;> rfl)
+  · simp only [argNames, List.mem_flatMap] at h
+    obtain ⟨a, _, ha⟩ := h
+    split at ha
+    · cases ha
+    · exact Kind.notIdx_of_name (List.mem_filter.mp ha).2
 
 theorem comp_share {a b : Kind} (hb : b.isName = false) (h : comp a b ≠ .share) : a ≠ .share := by
   rintro rfl; cases b <;> simp_all [comp, Kind.isName]
@@ -1135,10 +1181,11 @@ theorem MInv.root_namer {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (ha
       have hn0 : n0 = .node t c0 d0 es0 := by
         rw [heq] at hsn
         exact (sub_antisymm hsn htop.sub).symm
-      rcases hla with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hbl⟩
+      rcases hla with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hbl⟩ | ⟨_, _, hbl⟩
       · exact Or.inl hk
       · exact Or.inr hk
       · rw [hn0, heq] at hbl; exact (Below.irrefl hbl).elim
+      · have hbl := hbl.below; rw [hn0, heq] at hbl; exact (Below.irrefl hbl).elim
     · obtain ⟨Er, hEr, hrbm⟩ := hrb ⟨w', hc'⟩
       exact (hfz n0 hsn (rootb_anchor hi hanch dep.root Er n0 hEr hrbm
         (Or.inr (Or.inl ⟨w', c', hc', ht', hna⟩)) (by
@@ -1214,10 +1261,11 @@ theorem MInv.root_namer_ne {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
       have hn0 : n0 = .node t c0 d0 es0 := by
         rw [heq] at hsn
         exact (sub_antisymm hsn htop.sub).symm
-      rcases hla with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hbl⟩
+      rcases hla with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hbl⟩ | ⟨_, _, hbl⟩
       · exact Or.inl hk
       · exact Or.inr hk
       · rw [hn0, heq] at hbl; exact (Below.irrefl hbl).elim
+      · have hbl := hbl.below; rw [hn0, heq] at hbl; exact (Below.irrefl hbl).elim
     · obtain ⟨Er, hEr, hrbm⟩ := hrb ⟨w', hc'⟩
       exact (hfz n0 hsn (rootb_anchor_ne hi hanch hxa dep.root Er n0 hEr hrbm
         (Or.inr (Or.inl ⟨w', c', hc', ht', hna⟩)) (by
@@ -1242,7 +1290,8 @@ theorem MInv.namer {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch :
     {x : Var} (hxF : x ∉ F) {T : Val} (hT : m.st x = some ⟨true, some T⟩) {c : Nat} (hcT : c ∈ T.ids)
     {y : Var} {Ey : Entry} (hy : Γ y = some Ey) (hl : Ey.live = true) {v : Val}
     (hs : m.st y = some ⟨false, some v⟩) (hb : Bare (.href c) v) :
-    ∃ dep ∈ Ey.vdeps, dep.root = x ∧ (dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner) := by
+    ∃ dep ∈ Ey.vdeps, dep.root = x ∧ (dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner ∨
+      ∃ i, dep.kind = .innerAt i) := by
   have hm := hi.bor_mode hy hs
   have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
   obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
@@ -1273,11 +1322,12 @@ theorem MInv.namer {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch :
       | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hro; simp [Mode.isRoot] at hro
-    have hk : dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner := by
-      rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩
+    have hk : dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner ∨ ∃ i, dep.kind = .innerAt i := by
+      rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨i, h, _⟩
       · exact Or.inl h
       · exact Or.inr (Or.inl h)
-      · exact Or.inr (Or.inr h)
+      · exact Or.inr (Or.inr (Or.inl h))
+      · exact Or.inr (Or.inr (Or.inr ⟨i, h⟩))
     rcases hr with ⟨T1, hT1, htop⟩ | ⟨w', c', hc', ht', hna⟩ | ⟨w', d', o', l', hc', ht', hda⟩ |
       ⟨w', k, q, _, _, rfl⟩ | ⟨w', k, _, _, rfl⟩
     · have hs1 : Sub (.node t1 c d1 es1) T1 := hsn.trans htop.sub
@@ -1310,7 +1360,8 @@ theorem MInv.namer_ne {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
       ((∀ t, E.ty ≠ .vec t) → ∀ d ∈ E.held, d.root = x → d.kind.bound ≠ .none)) {T : Val} (hT : m.st x = some ⟨true, some T⟩) {c : Nat} (hcT : c ∈ T.ids)
     {y : Var} {Ey : Entry} (hy : Γ y = some Ey) (hl : Ey.live = true) {v : Val}
     (hs : m.st y = some ⟨false, some v⟩) (hb : Bare (.href c) v) :
-    ∃ dep ∈ Ey.vdeps, dep.root = x ∧ (dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner) := by
+    ∃ dep ∈ Ey.vdeps, dep.root = x ∧ (dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner ∨
+      ∃ i, dep.kind = .innerAt i) := by
   have hm := hi.bor_mode hy hs
   have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
   obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
@@ -1341,11 +1392,12 @@ theorem MInv.namer_ne {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
       | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hro; simp [Mode.isRoot] at hro
-    have hk : dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner := by
-      rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩
+    have hk : dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner ∨ ∃ i, dep.kind = .innerAt i := by
+      rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨i, h, _⟩
       · exact Or.inl h
       · exact Or.inr (Or.inl h)
-      · exact Or.inr (Or.inr h)
+      · exact Or.inr (Or.inr (Or.inl h))
+      · exact Or.inr (Or.inr (Or.inr ⟨i, h⟩))
     rcases hr with ⟨T1, hT1, htop⟩ | ⟨w', c', hc', ht', hna⟩ | ⟨w', d', o', l', hc', ht', hda⟩ |
       ⟨w', k, q, _, _, rfl⟩ | ⟨w', k, _, _, rfl⟩
     · have hs1 : Sub (.node t1 c d1 es1) T1 := hsn.trans htop.sub

@@ -323,7 +323,7 @@ theorem StmtT.ctxRelS {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : 
     have h2 := CtxRel.killH ha.toRH hcF .replace false (hny1.kills .replace false) hcr1
       (HeldSpared.of_none (ha.noHeld hcV hcF hcn1) _ _)
     exact h2.trans (ih hks ((h2.anchRS ha).anti (fun v hv => by simp [Stmt.killVars, hv])) (hnx.kill _ _ _))
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hyv hym _ hpy _ hr hk _ hpin _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hyv hym _ hpy _ hr hk _ _ hpin _ _ ihs ihp =>
     intro _ hanch hn
     have hyF : y ∉ F := by cases hr; assumption
     have hyn : Ey.mode ≠ .region := by rw [hym]; simp
@@ -487,7 +487,7 @@ theorem StmtT.ctxRelS {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : 
   | @free _ Γ F x E t hx _ hmo _ hxF hpin =>
     exact fun _ hanch _ => CtxRel.movedH hanch.toRH hx (by rw [hmo]; simp) hxF hpin.1 (by rw [hmo]; simp)
       (hanch.noHeld (by simp [Stmt.killVars]) hxF (fun Ex h => by rw [hx] at h; cases h; rw [hmo]; simp))
-  | insert _ _ _ ih => exact fun _ hanch hn => ih rfl (hanch.anti (fun v hv => by
+  | insert _ _ _ _ ih => exact fun _ hanch hn => ih rfl (hanch.anti (fun v hv => by
       simp only [Stmt.killVars, List.mem_cons, List.not_mem_nil, or_false] at hv
       rcases hv with rfl | rfl <;> simp [Stmt.killVars])) hn
   | sub hw _ ho ih =>

@@ -810,7 +810,9 @@ EOF3
 "$C" verify "$CC/cond.cert" --formal "$ROOT/formal" --rebuild --nurlc "$NURLC" --stdlib "$ROOT" > "$CC/reb.out" 2>&1; rrc=$?
 if [ "$crc" = 0 ] && [ "$vrc" = 0 ] && [ "$rrc" = 0 ] \
     && grep -q "M.safe assumed" "$CC/cert.out" && grep -q "M.leak assumed" "$CC/cert.out" \
-    && [ ! -e "$CC/cond.cert/Elab.lean" ] \
+    && grep -q "term: Cert.elab" "$CC/cert.out" \
+    && [ -e "$CC/cond.cert/Elab.lean" ] \
+    && grep -q "C.Elab.elabIRCond ir assumed" "$CC/cond.cert/Elab.lean" \
     && grep -q "^def assumed : List Nat := \[" "$CC/cond.cert/Program.lean" \
     && grep -q "C.certOK2BA P assumed entry 1" "$CC/cond.cert/Claims.lean" \
     && python3 - "$CC/cond.cert/manifest.json" <<'EOF3'
@@ -821,15 +823,18 @@ cl = {c["id"]: c for c in m["claims"]}
 lr = {r["id"]: r for r in m["ledger"]}
 row = lr.get("assumed-fn:log_and_grow")
 ok = (m["program"]["verdict"] == "accepted"
+      and "elab_lean" in m["hashes"]
+      and "core-ir-words" in lr and "translation" not in lr
       and cl["M.safe"]["status"] == "assumed" and cl["M.leak"]["status"] == "assumed"
       and "assumed-fn:log_and_grow" in cl["M.safe"]["premises"]
       and "assumed-fn:log_and_grow" in cl["M.leak"]["premises"]
+      and "core-ir-words" in cl["M.safe"]["premises"]
       and row is not None and "callees [helper]" in row["what"] and "hasThru true" in row["what"]
       and st.get("log_and_grow") == "unsupported"
       and st.get("helper") == "proved" and st.get("main") == "proved")
 sys.exit(0 if ok else 1)
 EOF3
-then ok "conditional certificate: accepted with assumed claims, stub callees/hasThru, verifies (+ --rebuild)"
+then ok "conditional certificate: accepted with assumed claims, Cert.elab, stub callees/hasThru, verifies (+ --rebuild)"
 else bad "conditional certificate: accepted and verifies (crc=$crc vrc=$vrc rrc=$rrc)"; cat "$CC/cert.out" "$CC/ver.out" "$CC/reb.out" | head -40; fi
 
 # Conditional refusal: an assumed function beside a buggy non-assumed function
@@ -961,6 +966,9 @@ EOF3
 "$C" verify "$CC/tcond.cert" --formal "$ROOT/formal" --rebuild --nurlc "$NURLC" --stdlib "$ROOT" > "$CC/treb.out" 2>&1; rrc=$?
 if [ "$crc" = 0 ] && [ "$vrc" = 0 ] && [ "$rrc" = 0 ] \
     && grep -q "M.safe assumed" "$CC/tcert.out" && grep -q "M.leak assumed" "$CC/tcert.out" && grep -q "M.race assumed" "$CC/tcert.out" \
+    && grep -q "term: Cert.elab" "$CC/tcert.out" \
+    && [ -e "$CC/tcond.cert/Elab.lean" ] \
+    && grep -q "C.Elab.elabIR3Cond ir assumed" "$CC/tcond.cert/Elab.lean" \
     && grep -q "^def spawns : List Nat := \[" "$CC/tcond.cert/Program.lean" \
     && grep -q "^def assumed : List Nat := \[" "$CC/tcond.cert/Program.lean" \
     && grep -q "C.certOK3BA P spawns assumed entry 1" "$CC/tcond.cert/Claims.lean" \
@@ -971,13 +979,15 @@ cl = {c["id"]: c for c in m["claims"]}
 lr = {r["id"]: r for r in m["ledger"]}
 row = lr.get("assumed-fn:log_msg")
 ok = (m["program"]["verdict"] == "accepted"
+      and "elab_lean" in m["hashes"]
+      and "core-ir-words" in lr and "translation" not in lr
       and cl["M.safe"]["status"] == "assumed" and cl["M.leak"]["status"] == "assumed" and cl["M.race"]["status"] == "assumed"
       and all("assumed-fn:log_msg" in cl[k]["premises"] for k in ("M.safe", "M.leak", "M.race"))
       and row is not None and "globsAt" in row["what"] and set(row["claims"]) == {"M.safe", "M.leak", "M.race", "N.cap"}
       and cl["N.cap"]["status"] == "assumed" and "assumed-fn:log_msg" in cl["N.cap"]["premises"])
 sys.exit(0 if ok else 1)
 EOF3
-then ok "A3 conditional certificate: M.safe/M.leak/M.race assumed, verifies (+ --rebuild)"
+then ok "A3 conditional certificate: M.safe/M.leak/M.race assumed, Cert.elab, verifies (+ --rebuild)"
 else bad "A3 conditional certificate: accepted and verifies (crc=$crc vrc=$vrc rrc=$rrc)"; cat "$CC/tcert.out" "$CC/tver.out" "$CC/treb.out" | head -40; fi
 
 cat > "$CC/tcond_refused.nu" <<'EOF3'

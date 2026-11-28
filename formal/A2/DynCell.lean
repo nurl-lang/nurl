@@ -286,7 +286,7 @@ theorem pick_ok : FnOK P pick := by
     · exact ⟨⟨by decide, Or.inr ⟨_, rfl⟩⟩, rfl⟩
   · intro jk hjk
     simp only [pick, List.append_nil, List.mem_cons, List.mem_nil_iff, or_false] at hjk
-    rcases hjk with rfl | rfl <;> intro b t h
+    rcases hjk with rfl | rfl <;> refine ⟨fun b t h => ?_, rfl⟩
     · simp [pick] at h
     · simp only [pick] at h
       simp only [List.getElem?_cons_zero, Option.some.injEq, Prod.mk.injEq] at h
@@ -377,7 +377,7 @@ theorem K4_noRootb : NoRootb K4 :=
 
 theorem callRes_eq : callRes K4 pick [1, 2, 3] = Ex := by
   simp [callRes, pick, argDeps, argE, K4, A2.setE, upd, derive, Mode.isRoot, Ecl, Enew, intE, rootKind,
-    heldOfArgs, argMem, compAll, comp, memDeps, argNames, nameDeps, Entry.vdeps, Mode.ownSlot, opt, str,
+    heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll, comp, memDeps, argNames, nameDeps, Entry.vdeps, Mode.ownSlot, opt, str,
     ownHeld, resMode, Ex]
 
 theorem callPost_eq : callPost K4 pick [1, 2, 3] = K4 := by

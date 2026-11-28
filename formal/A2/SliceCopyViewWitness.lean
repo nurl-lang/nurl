@@ -106,12 +106,12 @@ theorem copy_typed {F : List Var} {E : Entry} {Γ' : Ctx} (h : CallT P Kt F 0 [1
 
 /-- It holds a view of `a`: what its argument held. -/
 theorem copy_holds_a : (⟨0, .view⟩ : Dep) ∈ Eb.vdeps := by
-  simp [Eb, callRes, heldOfArgs, argMem, compAll, comp, memDeps, argE, argNames, ownHeld, Entry.vdeps,
+  simp [Eb, callRes, heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll, comp, memDeps, argE, argNames, ownHeld, Entry.vdeps,
     Mode.ownSlot, resMode, Kt, Et, dupFn, vsv, sv, Ty.holdsView, Kind.isName]
 
 /-- ... and nothing rooted at the temporary. -/
 theorem copy_free_of_temp : ∀ d ∈ Eb.vdeps, d.root ≠ 1 := by
-  simp [Eb, callRes, heldOfArgs, argMem, compAll, comp, memDeps, argE, argNames, nameDeps, ownHeld, Entry.vdeps,
+  simp [Eb, callRes, heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll, comp, memDeps, argE, argNames, nameDeps, ownHeld, Entry.vdeps,
     Mode.ownSlot, resMode, Kt, Et, dupFn, vsv, sv, Ty.holdsView, Kind.isName]
 
 /-- `b` as nurlc read it before AGORA-935: a value depending on the temporary. -/
@@ -138,7 +138,7 @@ theorem dep_on_temp_dies : kill .drop false 1 K0 2 = some { Eb0 with live := fal
 /-- **Replacing `a` ends the copy**: it holds a view of `a`. -/
 theorem copy_dead_after_replace : kill .replace false 0 K 2 = some { Eb with live := false } := by
   have hh : hits .replace false 0 Eb = true := by
-    simp [hits, Eb, callRes, heldOfArgs, argMem, compAll, comp, memDeps, argE, argNames, nameDeps, ownHeld,
+    simp [hits, Eb, callRes, heldOfArgs, argMem, coarseMem, Dep.coarse, Kind.coarse, compAll, comp, memDeps, argE, argNames, nameDeps, ownHeld,
       Entry.vdeps, Mode.ownSlot, resMode, Kt, Et, dupFn, vsv, sv, Ty.holdsView, Kind.isName, Eff.kills]
   simp [kill, K, killE, hh]
 

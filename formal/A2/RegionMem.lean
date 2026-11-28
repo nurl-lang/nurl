@@ -89,9 +89,10 @@ theorem ViewsOK.region_node {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : Vi
     {d : Nat} (hd : ViewAddr τ T d) : ∃ n, RegionNode m (ViewAddr τ T) n ∧ ∃ ty c es, n = .node ty c d es := by
   obtain ⟨s, o, l, hv⟩ := hd
   obtain ⟨c, es, -, ⟨n0, ⟨d0, hD, hn⟩, hl⟩, -, -⟩ := h.region_viewAt hv
-  rcases hl with ⟨h1, -⟩ | ⟨-, rfl⟩ | ⟨h1, -⟩
+  rcases hl with ⟨h1, -⟩ | ⟨-, rfl⟩ | ⟨h1, -⟩ | ⟨_, h1, -⟩
   · cases h1
   · exact ⟨_, ⟨d0, hD, hn⟩, s, c, es, rfl⟩
+  · cases h1
   · cases h1
 
 /-- The node at an address is unique (the heap invariant), so a region
@@ -390,7 +391,7 @@ theorem RegionViewAt.keep_inner {m : Mem} {o : Var} {T T' n n' : Val} (hT : m.st
     (hb : ∀ c es, Sub (.node t c d es) T → Below n (.node t c d es)) :
     RegionViewAt (m.set o ⟨true, some T'⟩) D .view d o' l t := by
   obtain ⟨c, es, hk, ⟨n0, ⟨d0, hD, hn0⟩, hl⟩, hle, hw⟩ := hv
-  rcases hl with ⟨h1, -⟩ | ⟨-, rfl⟩ | ⟨h1, -⟩
+  rcases hl with ⟨h1, -⟩ | ⟨-, rfl⟩ | ⟨h1, -⟩ | ⟨_, h1, -⟩
   · cases h1
   · -- the region's node is the view's node, at the address `d0`
     have hd0 : d0 = d := by
@@ -412,6 +413,7 @@ theorem RegionViewAt.keep_inner {m : Mem} {o : Var} {T T' n n' : Val} (hT : m.st
         simp [Mem.set, upd, hxo, hx]
     · exact ⟨c, es, hk, ⟨_, ⟨d0, hD, Or.inr ⟨k, bl, hk', hsk, t, c, es, rfl⟩⟩,
         Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hle, hw⟩
+  · cases h1
   · cases h1
 
 end A2

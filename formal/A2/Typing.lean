@@ -139,6 +139,10 @@ def comp : Kind → Kind → Kind
   | _, .name b t => .name b t
   | .share, _ => .share   -- A3.1: what is reached inside a payload stays inside it
   | _, .share => .share
+  -- AGORA-374: what is reached inside element `i` stays inside element `i`;
+  -- element `i` lies in the element buffer, as it does through the handle
+  | .innerAt i, _ => .innerAt i
+  | .view, .innerAt i => .innerAt i
   | _, _ => .inner
 
 theorem comp_self_r (a : Kind) : comp a .self = a := by cases a <;> rfl
@@ -199,6 +203,18 @@ theorem hitsMem_of_hits {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : hits e 
   rcases h with h | h
   · exact Or.inl h
   · exact Or.inr fun d hd hr => h d hd hr.1
+
+/-- AGORA-374: an entry that is live, or armed with a destructor, depends on
+    `x` with kind `k`: only for such a kind does a change of `x` owe that its
+    dependencies keep (`MInv.change`'s `hkeep`). -/
+def KindUsed (Γ : Ctx) (x : Var) (k : Kind) : Prop :=
+  ∃ v E, Γ v = some E ∧ (E.ty ≠ .int ∨ E.mode = .rootb) ∧
+    (E.live = true ∨ (E.dtor = true ∧ E.mode.ownSlot = true)) ∧ (⟨x, k⟩ : Dep) ∈ E.vdeps
+
+/-- AGORA-374: no entry that is live or armed depends on `x` inside one
+    element by its index (`Kind.innerAt`): what a reordering of `x`'s
+    elements (`MInv.perm`) needs, since it moves elements between indices. -/
+def NoIdx (Γ : Ctx) (x : Var) : Prop := ∀ k, KindUsed Γ x k → ∀ i, k ≠ .innerAt i
 
 /-- A2-drop.2: effect `e` on `x` ends no view a binding that may run a
     destructor holds, live or not. A rule that kills through dependencies
@@ -332,6 +348,90 @@ def Entry.fixed (E : Entry) : Prop :=
 /-- The dependencies on memory among `ds`, and those by name. -/
 def memDeps (ds : List Dep) : List Dep := ds.filter (fun d => !d.kind.isName)
 def nameDeps (ds : List Dep) : List Dep := ds.filter (fun d => d.kind.isName)
+
+/-- AGORA-374: a dependency with its index forgotten (`Kind.coarse`). -/
+def Dep.coarse (d : Dep) : Dep := ⟨d.root, d.kind.coarse⟩
+
+@[simp] theorem Dep.coarse_root (d : Dep) : d.coarse.root = d.root := rfl
+@[simp] theorem Dep.coarse_kind (d : Dep) : d.coarse.kind = d.kind.coarse := rfl
+
+/-- AGORA-374: what a list holds in memory, in the four memory ways: what a
+    call hands over of its arguments (`argMem`), which the callee and the
+    caller's frame speak of without element indices. -/
+def coarseMem (ds : List Dep) : List Dep := (memDeps ds).map Dep.coarse
+
+theorem mem_coarseMem {ds : List Dep} {d : Dep} : d ∈ coarseMem ds ↔ ∃ d0 ∈ memDeps ds, d = d0.coarse := by
+  unfold coarseMem; simp only [List.mem_map]; constructor
+  · rintro ⟨d0, h, rfl⟩; exact ⟨d0, h, rfl⟩
+  · rintro ⟨d0, h, rfl⟩; exact ⟨d0, h, rfl⟩
+
+theorem coarseMem_notName {ds : List Dep} {d : Dep} (h : d ∈ coarseMem ds) : d.kind.isName = false := by
+  obtain ⟨d0, h0, rfl⟩ := mem_coarseMem.mp h
+  simpa using (List.mem_filter.mp h0).2
+
+theorem coarseMem_notIdx {ds : List Dep} {d : Dep} (h : d ∈ coarseMem ds) : d.kind.isIdx = false := by
+  obtain ⟨d0, _, rfl⟩ := mem_coarseMem.mp h; simp
+
+theorem coarseMem_root {ds : List Dep} {d : Dep} (h : d ∈ coarseMem ds) : ∃ d0 ∈ ds, d0.root = d.root ∧
+    d0.kind.isName = false := by
+  obtain ⟨d0, h0, rfl⟩ := mem_coarseMem.mp h
+  obtain ⟨h1, h2⟩ := List.mem_filter.mp h0
+  exact ⟨d0, h1, rfl, by simpa using h2⟩
+
+theorem coarseMem_roots {ds : List Dep} {d : Dep} (h : d ∈ coarseMem ds) : d.root ∈ roots (memDeps ds) := by
+  obtain ⟨d0, h0, rfl⟩ := mem_coarseMem.mp h
+  show d0.root ∈ (memDeps ds).map (·.root)
+  exact List.mem_map_of_mem h0
+
+@[simp] theorem memDeps_map_coarse (L : List Dep) : memDeps (L.map Dep.coarse) = coarseMem L := by
+  induction L with
+  | nil => rfl
+  | cons d L ih =>
+    simp only [List.map_cons, memDeps, coarseMem, List.filter_cons, Dep.coarse_kind, Kind.coarse_isName] at ih ⊢
+    split <;> simp_all
+
+@[simp] theorem nameDeps_map_coarse (L : List Dep) : nameDeps (L.map Dep.coarse) = nameDeps L := by
+  induction L with
+  | nil => rfl
+  | cons d L ih =>
+    simp only [List.map_cons, nameDeps, List.filter_cons, Dep.coarse_kind, Kind.coarse_isName] at ih ⊢
+    split
+    · rename_i hn; rw [ih]; congr 1; obtain ⟨r, k⟩ := d; cases k <;> simp_all [Dep.coarse, Kind.coarse, Kind.isName]
+    · exact ih
+
+@[simp] theorem roots_map_coarse (L : List Dep) : roots (L.map Dep.coarse) = roots L := by
+  simp [roots, Function.comp_def]
+
+/-- AGORA-374: where nothing names an index, forgetting indices changes nothing. -/
+theorem coarseMem_eq {L : List Dep} (h : ∀ e ∈ memDeps L, e.kind.isIdx = false) : coarseMem L = memDeps L := by
+  unfold coarseMem
+  conv => rhs; rw [← List.map_id (memDeps L)]
+  apply List.map_congr_left
+  intro e he; obtain ⟨r, k⟩ := e
+  simp [Dep.coarse, Kind.coarse_of_not_idx (h _ he)]
+
+theorem Kind.notIdx_of_name {k : Kind} (h : k.isName = true) : k.isIdx = false := by
+  cases k <;> simp_all [Kind.isName, Kind.isIdx]
+
+@[simp] theorem Kind.coarse_bound (k : Kind) : k.coarse.bound = k.bound := by cases k <;> rfl
+
+theorem Dep.coarse_eq {d : Dep} (h : d.kind.isIdx = false) : d.coarse = d := by
+  cases d; simp [Dep.coarse, Kind.coarse_of_not_idx h]
+
+/-- A name is its own coarse image. -/
+theorem Dep.eq_of_coarse_name {d d0 : Dep} (h : d = d0.coarse) (hn : d.kind.isName = true) : d = d0 := by
+  subst h; obtain ⟨r, k⟩ := d0; cases k <;> simp_all [Dep.coarse, Kind.coarse, Kind.isName]
+
+theorem coarseMem_mono {a b : List Dep} (h : a ⊆ b) : coarseMem a ⊆ coarseMem b := fun d hd => by
+  obtain ⟨d0, h0, rfl⟩ := mem_coarseMem.mp hd
+  exact mem_coarseMem.mpr ⟨d0, List.mem_filter.mpr ⟨h (List.mem_filter.mp h0).1, (List.mem_filter.mp h0).2⟩, rfl⟩
+
+theorem mem_roots_of_map_coarse {L : List Dep} {d : Dep} (h : d ∈ L.map Dep.coarse) : d.root ∈ roots L := by
+  rw [← roots_map_coarse]; exact List.mem_map_of_mem h
+
+theorem coarseMem_of_notIdx {ds : List Dep} {d : Dep} (h : d ∈ memDeps ds) (hi : d.kind.isIdx = false) :
+    d ∈ coarseMem ds :=
+  mem_coarseMem.mpr ⟨d, h, by cases d; simp [Dep.coarse, Kind.coarse_of_not_idx hi]⟩
 
 /-- `E'` says no more than `E`: it may be dead where `E` is live, and depend
     on more.  A fixed entry stays as it is; an owner's `path` says nothing
@@ -601,6 +701,13 @@ def DepsNamed (Γ : Ctx) (D : List Dep) : Prop :=
       (b = .none ∨ b ≠ .replace ∧ canDo Er.mode b) ∧ t.holdsView = false
 
 def NameOK (Γ : Ctx) (E : Entry) : Prop := DepsNamed Γ E.vdeps
+
+/-- AGORA-374: forgetting indices keeps every name. -/
+theorem DepsNamed.map_coarse {Γ : Ctx} {D : List Dep} (h : DepsNamed Γ D) : DepsNamed Γ (D.map Dep.coarse) := by
+  intro d hd b t hk
+  obtain ⟨d0, h0, rfl⟩ := List.mem_map.mp hd
+  have : d0.kind = .name b t := by obtain ⟨r, k⟩ := d0; cases k <;> simp_all [Dep.coarse, Kind.coarse]
+  exact h d0 h0 b t this
 
 def NameWF (Γ : Ctx) : Prop :=
   ∀ v E, Γ v = some E → E.live = true → (E.ty ≠ .int ∨ E.mode = .rootb) → NameOK Γ E
@@ -1250,10 +1357,12 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | take => exact ⟨Or.inl rfl, rfl⟩
 
 /-- What the summary pair `(j, k)` means at this call.  An integer argument
-    lends nothing. -/
+    lends nothing.  (AGORA-374: a call speaks of what it lends in the four
+    memory ways, as the callee sees its arguments: an index is forgotten,
+    `Dep.coarse`.) -/
 def argDeps (Γ : Ctx) (args : List Var) (jk : Nat × Kind) : List Dep :=
   if (argE Γ (args.getD jk.1 0)).ty = .int then []
-  else derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2
+  else (derive (args.getD jk.1 0) (argE Γ (args.getD jk.1 0)) jk.2).map Dep.coarse
 
 /-- Every dependency of every kind on the given roots. -/
 def allKinds (rs : List Var) : List Dep :=
@@ -1406,10 +1515,10 @@ theorem roots_compAll {D : List Dep} {r : Var} (hr : r ∈ roots (compAll D)) : 
 
 /-- What the arguments hold in memory, each of their own dependencies. -/
 def argMem (Γ : Ctx) (args : List Var) : List Dep :=
-  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else memDeps (argE Γ a).held)
+  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else coarseMem (argE Γ a).held)
 
 theorem mem_argMem {Γ : Ctx} {args : List Var} {d : Dep} :
-    d ∈ argMem Γ args ↔ ∃ a ∈ args, (argE Γ a).ty ≠ .int ∧ d ∈ memDeps (argE Γ a).held := by
+    d ∈ argMem Γ args ↔ ∃ a ∈ args, (argE Γ a).ty ≠ .int ∧ d ∈ coarseMem (argE Γ a).held := by
   unfold argMem; simp only [List.mem_flatMap]
   constructor
   · rintro ⟨a, ha, hd⟩; split at hd
@@ -1422,7 +1531,7 @@ theorem compAll_argMem_notName {Γ : Ctx} {args : List Var} {d : Dep} (hd : d �
     d.kind.isName = false := by
   obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_compAll.mp hd
   obtain ⟨_, _, _, hm⟩ := mem_argMem.mp hd0
-  have hn : d0.kind.isName = false := by simpa using (List.mem_filter.mp hm).2
+  have hn : d0.kind.isName = false := coarseMem_notName hm
   obtain ⟨r, a⟩ := d0
   simp only at hn ⊢
   rcases hk with rfl | rfl | rfl | rfl <;> cases a <;> simp_all [comp, Kind.isName]
@@ -2564,7 +2673,10 @@ theorem paramOK_inout {b : Eff} {t : Ty} {E : Entry} (h : paramOK (.inout b) t E
     a closure: its value is inline) depends on it inside, never on a handle
     (`derive` makes a `.self` dependency on such a root a view). -/
 def kindFits (fn : Fn) (j : Nat) (k : Kind) : Prop :=
-  ∀ b t, fn.params[j]? = some (.inout b, t) → rootKind t k = k
+  (∀ b t, fn.params[j]? = some (.inout b, t) → rootKind t k = k) ∧
+  -- AGORA-374: a summary names no element index (a parameter is no owned
+  -- root, which is what such a dependency is on)
+  k.isIdx = false
 
 /-- Every variable a statement names (binders included). -/
 def Expr.vars : Expr → List Var

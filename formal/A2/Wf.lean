@@ -816,13 +816,13 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
     rw [hae] at hr
     split at hr
     · simp [roots] at hr
-    · rename_i hn; exact derive_roots h hEa hl (Or.inl hn) _ r hr
+    · rename_i hn; rw [roots_map_coarse] at hr; exact derive_roots h hEa hl (Or.inl hn) _ r hr
   have hheld : ∀ r ∈ roots (heldOfArgs Γ args), ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true := by
     intro r hr
     simp only [heldOfArgs, roots, List.map_append, List.mem_append] at hr
     rcases hr with hr | hr
     · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp (roots_compAll hr)
-      simp only [argMem, List.mem_flatMap] at hd
+      simp only [argMem, coarseMem, List.mem_flatMap] at hd
       obtain ⟨a, ha, hda⟩ := hd
       obtain ⟨i, hi, rfl⟩ := mem_args ha
       obtain ⟨Ea, hEa, hl⟩ := hent i (hlen ▸ hi)
@@ -833,7 +833,8 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
       · rename_i hn
         exact h _ Ea hEa hl (Or.inl hn) d.root (by
           simp only [roots, Entry.vdeps, List.map_append, List.mem_append]
-          exact Or.inr (List.mem_map_of_mem (List.mem_filter.mp hda).1))
+          obtain ⟨d0, hd0, hr0, _⟩ := coarseMem_root hda
+          exact Or.inr (hr0 ▸ List.mem_map_of_mem hd0))
     · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
       simp only [argNames, List.mem_flatMap] at hd
       obtain ⟨a, ha, hda⟩ := hd
@@ -1119,7 +1120,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E0 _ hx hxF _ _ _ _ _ hrh _ _ _ _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E0 _ hx hxF _ _ _ _ _ hrh _ _ _ _ _ _ ihs ihp =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := hrh.domMode.get (show A2.kill .replace false y Γ r =
@@ -1184,7 +1185,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E1, h1, hm1⟩ := (hpa.domMode hy).get h
     exact ⟨killE .realloc t.holdsView x E1, by simp [A2.setE, upd_ne _ _ hrx, A2.kill, h1],
       by rw [killE_mode, hm1]⟩
-  | insert _ _ _ ih => exact ih
+  | insert _ _ _ _ ih => exact ih
   | @free _ Γ F x E0 t _ _ _ _ hxF _ =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
@@ -1299,7 +1300,7 @@ theorem StmtT.keepKV {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r (fun h' => hr (by simp [Stmt.killVars, h'])) E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E0 _ hx hxF _ _ _ _ _ hrh _ _ _ _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E0 _ hx hxF _ _ _ _ _ hrh _ _ _ _ _ _ ihs ihp =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hr (by simp [Stmt.killVars, e])
     obtain ⟨E1, h1, hm1⟩ := hrh.domMode.get (show A2.kill .replace false y Γ r =
@@ -1366,7 +1367,7 @@ theorem StmtT.keepKV {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E1, h1, hm1⟩ := (hpa.domMode hy).get h
     exact ⟨killE .realloc t.holdsView x E1, by simp [A2.setE, upd_ne _ _ hrx, A2.kill, h1],
       by rw [killE_mode, hm1]⟩
-  | insert _ _ _ ih => exact fun r hr => ih r (fun h' => hr (by
+  | insert _ _ _ _ ih => exact fun r hr => ih r (fun h' => hr (by
       simp only [Stmt.killVars, List.mem_cons, List.not_mem_nil, or_false] at h'
       rcases h' with rfl | rfl <;> simp [Stmt.killVars]))
   | @free _ Γ F x E0 t _ _ _ _ hxF _ =>
@@ -1567,7 +1568,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       x hpx.2.2
   | scope _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
   | scopeL _ _ _ hpx _ _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E _ hx _ _ _ _ _ _ hr _ _ hpx _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E _ hx _ _ _ _ _ _ hr _ _ _ hpx _ _ ihs ihp =>
     intro h
     obtain ⟨hw1, hdom, _, hE⟩ := hr.wf (h.kill .replace false y)
     have hx1 : Γ1 x = none := by
@@ -1732,7 +1733,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
           · simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append]; exact hdb hd h'
         obtain ⟨Er, hEr, hro⟩ := hw1.dtor x Ex1 hx1 hd hos (Or.inl hnint) d hdd1 hnm
         exact kill_root hEr hro
-  | insert _ _ _ ih => exact ih
+  | insert _ _ _ _ ih => exact ih
   | @free _ Γ F x E t hx hl hm hty hxF _ =>
     intro h
     exact h.moveOut hx .replace false

@@ -192,7 +192,7 @@ theorem noRootb_empty : NoRootb (fun _ => none) := fun _ _ h => by cases h
 theorem K1_noRootb : NoRootb K1 := noRootb_empty.setE (by simp [Ew])
 
 theorem callRes_eq : callRes K1 g [0] = intE := by
-  simp [callRes, g, argE, K1, A2.setE, upd, heldOfArgs, argMem, compAll, comp, memDeps, argNames,
+  simp [callRes, g, argE, K1, A2.setE, upd, heldOfArgs, argMem, coarseMem, compAll, comp, memDeps, argNames,
     nameDeps, Entry.vdeps, Mode.ownSlot, ownHeld, resMode, intE, Ew, str]
 
 theorem callPost_eq : callPost K1 g [0] = K1 := by

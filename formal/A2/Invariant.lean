@@ -391,6 +391,15 @@ inductive Child : Val → Val → Prop
 /-- `n` lies strictly inside `t`. -/
 def Below (n t : Val) : Prop := ∃ e, Child e t ∧ Sub n e
 
+/-- AGORA-374: `n` lies inside element `i` of the `Vec` node `t`. -/
+def BelowAt (i : Nat) (n t : Val) : Prop :=
+  ∃ ty c d es e, t = .node ty c d es ∧ es[i]? = some e ∧ Sub n e
+
+/-- …which is inside `t`. -/
+theorem BelowAt.below {i : Nat} {n t : Val} (h : BelowAt i n t) : Below n t := by
+  obtain ⟨ty, c, d, es, e, rfl, he, hs⟩ := h
+  exact ⟨e, .elem (List.mem_of_getElem? he), hs⟩
+
 /-- `n` is `v` or one of its parts through struct fields and enum payloads
     (never through a `Vec`'s elements): what a binding holds directly. -/
 inductive Top : Val → Val → Prop
@@ -438,7 +447,8 @@ def RootMem (m : Mem) (r : Var) : Prop :=
 /-- Where a value reached through a dependency of a given kind lies: the
     root's node itself, or strictly inside it. -/
 def Lands (k : Kind) (n n0 : Val) : Prop :=
-  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0
+  k = .self ∧ n = n0 ∨ k = .view ∧ n = n0 ∨ k = .inner ∧ Below n n0 ∨
+    (∃ i, k = .innerAt i ∧ BelowAt i n n0)
 
 /-- A3.1: a value inside a live block's payload. -/
 def InPay (m : Mem) (n : Val) : Prop := ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd
@@ -483,12 +493,12 @@ theorem CellLanded.landed {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep 
 
 theorem CellLanded.bound {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) : dep.kind.bound = .none := by
   obtain ⟨_, _, hk⟩ := h
-  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hk, _⟩ <;> rw [hk] <;> rfl
 
 theorem CellLanded.notName {m : Mem} {dep : Dep} {k : Nat} (h : CellLanded m dep k) :
     dep.kind.isName = false := by
   obtain ⟨_, _, hk⟩ := h
-  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ <;> rw [hk] <;> rfl
+  rcases hk with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hk, _⟩ <;> rw [hk] <;> rfl
 
 /-- A cell share that lands off a payload lands where its root's node puts it. -/
 theorem CellLanded.of_landed {m : Mem} {dep : Dep} {k : Nat} (h : Landed m dep (.cell k))
@@ -1570,6 +1580,16 @@ def CleanDeps (Γ : Ctx) (D : List Dep) : Prop := ∀ d ∈ memDeps D, ShareOK �
 theorem CleanDeps.mono {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {D : List Dep}
     (hc : CleanDeps Γ' D) : CleanDeps Γ D := fun d hd => ⟨(hc d hd).1.mono h, h.clean _ (hc d hd).2⟩
 
+/-- AGORA-374: what is clean reads roots and shares, which forgetting an index keeps. -/
+theorem CleanDeps.of_map_coarse {Γ : Ctx} {D : List Dep} (h : CleanDeps Γ (D.map Dep.coarse)) : CleanDeps Γ D := by
+  intro d hd
+  obtain ⟨hs, hc⟩ := h d.coarse (List.mem_filter.mpr ⟨List.mem_map_of_mem (List.mem_filter.mp hd).1,
+    by simpa using (List.mem_filter.mp hd).2⟩)
+  refine ⟨?_, hc⟩
+  rcases hs with hs | hs
+  · exact Or.inl fun e => hs (by simp [e, Kind.coarse])
+  · exact Or.inr hs
+
 theorem CleanDeps.sub {Γ : Ctx} {D D' : List Dep} (hs : D ⊆ D') (hc : CleanDeps Γ D') : CleanDeps Γ D :=
   fun d hd => hc d (List.mem_filter.mpr ⟨hs (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
 
@@ -2546,7 +2566,12 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       `vec_push x y` is.  It is the give-back of an element handed over
       (`withElem`). -/
   | insert {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} :
-      ExprT Γ i → x ∉ F → StmtT P .none Γ F (.push x y) Δ → StmtT P ξ Γ F (.insert x i y) Δ
+      ExprT Γ i → x ∉ F → StmtT P .none Γ F (.push x y) Δ →
+      -- (AGORA-374: what the push leaves depends on `x` inside no element by
+      -- index, `NoIdx`: moving the pushed element to index `i` moves every
+      -- element after it up one, and the push's `.realloc` ends such a
+      -- dependency, which a weakening could not bring back)
+      NoIdx Δ x → StmtT P ξ Γ F (.insert x i y) Δ
   /-- A2-elem (Agora #391): element `i` of `v` handed over, as a call hands
       an element to a parameter it changes (`( f ( vec_at v i ) )`, read as
       `withElem v i x (call f x)`).  Element `i` moves out to `x`, which
@@ -2570,7 +2595,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       s.src = true → Γ x = none → x ∉ F → Γ v = some Ev → Ev.mode = .own → ExprT Γ i →
       NoPin Γ v → DtorSafe Γ .replace false v →
       RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P .none (setE Γ1 x E) F s Δ1 →
-      StmtT P .none Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
+      StmtT P .none Δ1 F (.push v x) Δ →
+      -- (AGORA-374: the give-back is an `insert`, which asks it, `NoIdx`)
+      NoIdx Δ v → EndOK Δ x → v ∉ s.vars →
       -- (A2-drop.3b: the element checked out owns no destructor value: its
       -- binding is no `letd`'s)
       E.ty.dtorFree = true →

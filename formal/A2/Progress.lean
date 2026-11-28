@@ -828,7 +828,7 @@ theorem progress {P : Prog}
     obtain ⟨v, m1, htk, hst, hal⟩ := htake
     exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
       (by rw [hal]; exact had)⟩
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey' E _ hx _ _ _ he _ _ hr _ _ _ _ _ _ _ =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey' E _ hx _ _ _ he _ _ hr _ _ _ _ _ _ _ _ =>
     -- `y` owns a `Vec`: element `i` moves out, or the index is out of range
     intro m hcd hi
     have hmx : m.st x = none := by
@@ -859,7 +859,7 @@ theorem progress {P : Prog}
     by_cases hlt : n < es.length
     · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.withElem hlt hT hac had hn hmx⟩
     · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.withElemOOB hT hac hn (by omega)⟩
-  | @insert _ Γ Δ F x y i he _ _ ih =>
+  | @insert _ Γ Δ F x y i he _ _ _ ih =>
     -- the push it is typed as has a step, so it has one
     intro m hcd hi
     have hi0 : Inv m Γ F (.push x y) :=

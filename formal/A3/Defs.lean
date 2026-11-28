@@ -419,7 +419,7 @@ theorem dup_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : Va
       intro d hd; simp [hn d hd]
   have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
   have hheld : heldOfArgs Γ [x] = [] := by
-    simp only [heldOfArgs, argMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
+    simp only [heldOfArgs, argMem, coarseMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
     split <;> simp [memDeps, compAll]
   refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, CallDtorSafe.of_inp (by simp [hps]) hmut, ?_, ?_, ?_⟩
   · intro i hi
@@ -757,7 +757,7 @@ theorem apply_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t R : Ty} {x 
     split <;> rfl
   have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
   have hheld : heldOfArgs Γ [x] = [] := by
-    simp only [heldOfArgs, argMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, lockE_held]
+    simp only [heldOfArgs, argMem, coarseMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, lockE_held]
     split <;> simp [memDeps, compAll]
   refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, ⟨fun i hi => ⟨fun hs => ?_, fun b' hb' => ?_⟩, ?_, ?_⟩, ?_, ?_, ?_⟩
   · intro i hi
@@ -1085,7 +1085,7 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
       (elemLockE t Ev)) x (lockE t)) F s Δs)
     (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hes : e ∉ s.vars) (hvs : v ∉ s.vars)
     (hvx : v ≠ x) (hve : v ≠ e)
-    (hpush : StmtT P .none (exitScope x Δs) F (.push v e) Δ) (hende : EndOK Δ e)
+    (hpush : StmtT P .none (exitScope x Δs) F (.push v e) Δ) (hnix : NoIdx Δ v) (hende : EndOK Δ e)
     (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P ξ Γ F (Stmt.withLockElem v i e x s) (exitScope e Δ) := by
   have hkv : A2.kill .replace false v Γ v = some Ev := by simp [A2.kill, hv, killE_nohit hvv]
@@ -1094,7 +1094,7 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
   rw [hpe] at hpop
   have hex : A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e (elemLockE t Ev) x = none := by
     simp [A2.setE, A2.kill, upd_ne _ _ hxe, hx]
-  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hende ?_ rfl
+  refine StmtT.withElem (by simp [Stmt.src, hs]) he heF hv hmv hi hpin hds hpop ?_ hpush hnix hende ?_ rfl
   · exact StmtT.withLock hs hex hxF (upd_same _ _ _) rfl (Or.inl rfl) hb hend rfl hes hlive hna
   · simp [Stmt.vars, hvs, hvx, hve]
 
@@ -1154,7 +1154,7 @@ theorem lock_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : V
       intro d hd; simp [hn d hd]
   have hmut : mutNames Γ [x] = [] := by simp [mutNames, hnm]
   have hheld : heldOfArgs Γ [x] = [] := by
-    simp only [heldOfArgs, argMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
+    simp only [heldOfArgs, argMem, coarseMem, hnm, List.append_nil, List.flatMap_cons, List.flatMap_nil, hargE, hh]
     split <;> simp [memDeps, compAll]
   refine ⟨fn, hf, fn, hf, by simp [hps], ?_, ?_, CallDtorSafe.of_inp (by simp [hps]) hmut, ?_, ?_, ?_⟩
   · intro i hi
@@ -2735,7 +2735,7 @@ theorem accMain_typed : ∃ Δ, StmtT accP ξ (fun _ => none) [] accMain Δ := b
         accCloE, accTy, Ty.holdsView, Ty.elem, Entry.vdeps, Mode.ownSlot]
     rw [h, hp4.kill]
   have hcr : callRes accMainCtx accSig [3] = intE := by
-    simp [callRes, accSig, heldOfArgs, argMem, compAll, argNames, nameDeps, memDeps, argE, accMainCtx, setE,
+    simp [callRes, accSig, heldOfArgs, argMem, coarseMem, compAll, argNames, nameDeps, memDeps, argE, accMainCtx, setE,
       accCloE, accTy, Entry.vdeps, Mode.ownSlot, ownHeld, resMode, intE]
   have hpc : PlainCtx (setE (setE accMainCtx 3 accCloE) 4 intE) := (hp4.setE hcE).setE (x := 4) intE_plain
   have hΔc : A2.kill .replace false 3 (setE (callPost (A2.kill .replace false 3 accMainCtx) accSig [3]) 4

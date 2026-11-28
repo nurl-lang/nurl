@@ -474,12 +474,15 @@ theorem argDeps_name {Γ : Ctx} {args : List Var} {jk : Nat × Kind} (hk : jk.2.
   unfold argDeps at hd
   split at hd
   · cases hd
-  unfold derive at hd
-  split at hd
-  · simp only [List.mem_singleton] at hd; subst hd
-    simp only [rootKind_isName] at hn; rw [hk] at hn; cases hn
+  obtain ⟨d1, hd1, rfl⟩ := List.mem_map.mp hd
+  have hn1 : d1.kind.isName = true := by simpa using hn
+  show d1.root ∈ _
+  unfold derive at hd1
+  split at hd1
+  · simp only [List.mem_singleton] at hd1; subst hd1
+    simp only [rootKind_isName] at hn1; rw [hk] at hn1; cases hn1
   · rename_i hr
-    obtain ⟨d', hd', rfl⟩ := List.mem_map.mp hd
+    obtain ⟨d', hd', rfl⟩ := List.mem_map.mp hd1
     have ho : (argE Γ (args.getD jk.1 0)).mode.ownSlot = false := by
       cases h : (argE Γ (args.getD jk.1 0)).mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
     exact List.mem_map_of_mem (f := Dep.root) (a := d')
@@ -624,7 +627,7 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
     unfold argDeps
     split
     · exact DepsNamed.nil _
-    · rename_i hni; exact derive_named (hargN jk.1 hj hni) hk
+    · rename_i hni; exact (derive_named (hargN jk.1 hj hni) hk).map_coarse
   have hheld : DepsNamed Γ (heldOfArgs Γ args) := by
     unfold heldOfArgs
     have hc : DepsNamed Γ (compAll (argMem Γ args)) := fun d hd b t hk => by
@@ -873,7 +876,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ _ ihs ihp =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hr.names (hn.kill .replace false y)
     have hx1 : Γ1 x = none := by
@@ -1028,7 +1031,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       rcases hd' with hd' | hd'
       · exact hN d hd' b t' hk'
       · have := memDeps_noName d hd'; rw [hk'] at this; cases this
-  | insert _ _ _ ih => exact fun _ hn => ih rfl hn
+  | insert _ _ _ _ ih => exact fun _ hn => ih rfl hn
   | @free _ Γ F x E t hx _ _ _ _ _ =>
     intro _ hn
     exact hn.moved hx

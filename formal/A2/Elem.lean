@@ -47,7 +47,7 @@ theorem elem_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
     simp [m1]
   have hst1 : ∀ o, o ≠ v → m1.st o = m.st o := fun o ho => by simp [m1, upd_ne _ _ ho]
   have hpm : RhsPost m m1 (kill .replace false v Γ) (kill .replace false v Γ) F :=
-    ⟨hk.inv.perm hanch1 hvF hT hp, rfl, Nat.le_refl _,
+    ⟨hk.inv.perm hanch1 hvF hT hp (NoIdx.of_kill (fun _ => rfl) (fun _ => rfl) hds), rfl, Nat.le_refl _,
       fun o => by
         by_cases ho : o = v
         · subst ho; rw [hT1, hT]; rfl

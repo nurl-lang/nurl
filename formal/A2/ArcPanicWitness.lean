@@ -674,7 +674,7 @@ theorem main2_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main2 Δ := by
   have hpost : callPost (fun _ => none) rfn [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, rfn, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) rfn [] = intE := by
-    simp [callRes, rfn, resMode, intE, heldOfArgs, ownHeld, argNames, argMem, compAll]
+    simp [callRes, rfn, resMode, intE, heldOfArgs, ownHeld, argNames, argMem, coarseMem, compAll]
   have hc : CallT P (fun _ => none) [] 2 [] intE (fun _ => none) := by
     refine ⟨rfn, rfl, rfl, fun i hi => by simp [rfn] at hi, ?_, CallDtorSafe.of_none (fun _ _ h => by cases h) _ _,
       hres.symm, hpost.symm, fun _ => by simp [callR]⟩
@@ -744,7 +744,7 @@ theorem main3_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main3 Δ := by
   have hpost : callPost (fun _ => none) rfn3 [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, rfn3, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) rfn3 [] = intE := by
-    simp [callRes, rfn3, resMode, intE, heldOfArgs, ownHeld, argNames, argMem, compAll]
+    simp [callRes, rfn3, resMode, intE, heldOfArgs, ownHeld, argNames, argMem, coarseMem, compAll]
   have hc : CallT P (fun _ => none) [] 3 [] intE (fun _ => none) := by
     refine ⟨rfn3, rfl, rfl, fun i hi => by simp [rfn3] at hi, ?_,
       CallDtorSafe.of_none (fun _ _ h => by cases h) _ _, hres.symm, hpost.symm, fun _ => by simp [callR]⟩

@@ -476,10 +476,14 @@ open A2 C
     `a claim means what these definitions say; formal/CLAIM.md is their review document`
     `formal/CLAIM.md, formal/A2/Semantics.lean` `the NURL formal model (claude-formal)` mc ) )
     ? elab {
-        // (a program that spawns: Cert.elab is about C.Elab.elabIR3, which
-        // builds the spawn wrappers too)
+        // (a program that spawns: Cert.elab is about C.Elab.elabIR3 / elabIR3Cond;
+        // a conditional program: C.Elab.elabIRCond / elabIR3Cond)
+        : b has_a > ( vec_len [AssumedRow] assumed_rows ) 0
         : String what ( string_from `the core IR and its words, the part of the translation the kernel does not check: nurlc --emit-core, and the core IR as words (packages/nurl-cert/src/words.nu); the term is checked by the kernel (Elab.lean, theorem Cert.elab: ` )
-        ( string_push_str what ? threads `C.Elab.elabIR3 builds P, its spawn wrappers (spawns) and entry` `C.Elab.elabIR builds P and entry` )
+        ( string_push_str what ? & threads has_a `C.Elab.elabIR3Cond builds P (with stubs at assumed), its spawn wrappers (spawns) and entry`
+        ? threads `C.Elab.elabIR3 builds P, its spawn wrappers (spawns) and entry`
+        ? has_a `C.Elab.elabIRCond builds P (with stubs at assumed) and entry`
+        `C.Elab.elabIR builds P and entry` )
         ( string_push_str what ` from the words)` )
         ( json_arr_push L ( mj_row `core-ir-words` ( string_data what )
         `nothing proves that the core IR is the source's; verify makes Elab.lean, words and all, again from Program.core and compares it byte for byte`
@@ -842,8 +846,8 @@ open A2 C
         // core IR that is not UTF-8 has no words. Conditional bundles (with
         // stubs) get no Elab.lean in this step (AGORA-1033).
         : ~ b try_elab F
-        ? & ! cond ( cert_elab_candidate ( string_data . tr lean ) ) {
-            ?? ( cert_elab_lean . r1 out threads ) {
+        ? ( cert_elab_candidate ( string_data . tr lean ) ) {
+            ?? ( cert_elab_lean . r1 out threads cond ) {
                 T el → { = try_elab ( nc_write ( string_data elab_path ) ( string_data el ) ) }
                 F → {}
             }
