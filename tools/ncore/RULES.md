@@ -310,36 +310,45 @@ The walk's ownership refusals go through one door (`own_die`,
 `bck_emit_error`, `g_walk_owns` in compiler/nurlc.nu) that `--emit-core`
 passes, so the program reaches the checker whole.
 
-## One IR shape, two answers in nurlc
+## D4: one answer per IR shape
 
-The probes below have the IR of a refused probe and are accepted by nurlc
-today, or the reverse: the walk's answer depends on a spelling the IR does
-not have. The engine gives one answer. Which one is PROPOSAL_CORE_IR D4
-(the owner's and claude-formal's): the checker takes the answer formal/A2
-gives and lists the other side here.
+PROPOSAL_CORE_IR D4 (AGORA-441's D4 post, the owner's decision #4173)
+settled the shapes nurlc used to answer differently by spelling: one IR,
+one answer, the one formal/A2 gives. nurlc, the ownership engine and this
+checker give it. Each rule names the probes that hold all three to it.
 
-| shape | refused when | accepted when | the checker |
-|---|---|---|---|
-| `= o ( pick o other k )`, `o` an option owner, `pick` may hand back either argument | in every spelling: `pick` defined above the call (`option_owner_given_a_call_that_may_lend_itself_or_another_argument`, agora #412), defined below it, a generic instance or a `dyn` method (`option_owner_given_back_by_a_callee_below`, `…_by_a_generic`, `…_by_a_dyn_method`), judged on the callee's final summary at module end (AGORA-966, D4a) | never; a nested call that lends only out of `o`, `( tail o )`, is `o`'s own (`part_of_owner_behind_a_box_handed_back_by_a_pick_defined_below_runs_clean`, AGORA-907) | refuses all (A2 refuses the form) |
+1. **D4a. `= o ( pick o other k )` is refused in every spelling.** Here `o`
+   is an option owner and `pick` may hand back either argument. That holds
+   for `pick` defined above the call or below it, for a generic instance,
+   and for a `dyn` method, each judged on the callee's final summary at
+   module end (AGORA-966). A2 refuses the form.
+   - Refused: `option_owner_given_a_call_that_may_lend_itself_or_another_argument` (agora #412), `option_owner_given_back_by_a_callee_below`, `…_by_a_generic`, `…_by_a_dyn_method`.
+   - A nested call that lends only out of `o`, `( tail o )`, is `o`'s own, and is accepted: `part_of_owner_behind_a_box_handed_back_by_a_pick_defined_below_runs_clean` (AGORA-907).
+2. **D4b. `^ ( id x )` of an owned raw string of this frame is copied at
+   the return,** wherever `id` is defined: definition order plays no part.
+   A callee compiled later answers at module end (`__nurl_ownstr_if`,
+   AGORA-867, github#2284). Probes: `raw_string_handed_back_by_a_generic_callee_above_runs_clean`, `…_below_runs_clean`, `raw_string_pick_of_a_local_or_a_parameter_below_runs_clean`, `raw_string_maker_below_hands_back_fresh_text_runs_clean` and the other AGORA-867 probes.
+3. **D4c. A function that hands back an `in` parameter, or a part of one,
+   lends it, in every spelling.** The caller's argument stays the
+   caller's, and the result borrows it, which is A2's `lends` summary. The
+   "taken" (sink/keeps), "kept" (stores) and "copy" answers are gone.
 
-### One operation, three answers by spelling
+   | written | the answer | since |
+   |---|---|---|
+   | `^ p`, `^ . p f`, `?? p { V x → { ^ x } }`, `^ ?? e { V x → x … }` over an enum of the program's, `^ @ ?T { T p }` | lent (`retpart`, `ret_borrow`; per call where another path is fresh) | before D4 |
+   | `^ ?? o { T x → x F → … }`, and `: r ?? o {…}  ^ r`, with `o` an option or a result | lent, per call | AGORA-995 (github#2298) |
+   | `^ @ K { p }`, `^ @ E { V p }`, `^ @ ?K { T @ K { p } }`, `^ @ KK { @ K { p } }` | lent (`retlend`, `ret_borrow`, lend kind 1) | AGORA-995 (github#2280) |
+   | `: K k @ K { p }  ^ k`, where `k` is named nowhere else, `p` nowhere after the binding, no closure follows, and `K` has no `% Drop` of the program's | lent: each `^ k` hands back the literal as written (`__blit_ok`) | AGORA-1008 (github#2382) |
 
-Not the same IR, but the same thing done: a function hands back a value
-that is, or is built around, an `in` parameter or a part of one. nurlc's
-answer (its `sum` line) follows how it is written. The checker copies
-each, so that the probes agree; an engine that decides the drops itself
-(stage S3) can give one answer for all of them, and which is D4 too.
-The owner's D4c (#4173) is "lent" in every spelling: the literal
-spellings and the `??` payload of an option are lent since AGORA-995, in
-nurlc and in the checker; the bound literal (`: K k @ K { p }  ^ k`) since
-AGORA-1008, where it is bound only to be handed back.
+   Probes: `in_param_lent_back_by_a_returned_literal_read_after_runs_clean` and the other AGORA-995 probes, and `in_param_lent_back_by_a_bound_literal_*` (AGORA-1008).
 
-| written | nurlc's answer | the caller's argument |
-|---|---|---|
-| `^ p`, `^ . p f`, `?? p { V x → { ^ x } }`, `^ ?? e { V x → x … }` over an enum of the program's, `^ @ ?T { T p }`; `^ ?? o { T x → x F → … }` and `: r ?? o {…}  ^ r`, `o` an option or a result, D4c since AGORA-995 | lent (`retpart`, `ret_borrow`, per call where another path is fresh) | stays the caller's; the result borrows it |
-| `^ @ K { p }`, `^ @ E { V p }`, `^ @ ?K { T @ K { p } }`, `^ @ KK { @ K { p } }` | lent (`retlend`, `ret_borrow`, lend kind 1), D4c since AGORA-995; kept (`keeps`) where the literal holds a value of its own beside `p` | stays the caller's; moved into the call beside an own field |
-| `: K k @ K { p }` then `^ k`, `k` named nowhere else and `p` nowhere after the binding, no closure there, `K` with no `% Drop` of the program's | lent, as `^ @ K { p }`: each `^ k` hands back the literal as written (AGORA-1008, __blit_ok in nurlc; the checker reads nurlc's IR, which is the direct spelling's) | stays the caller's; the result borrows it |
-| that binding read, changed or handed on before `^ k`, or `p` named again after it; `( vec_push out @ K { p } )`; `= . o f @ K { p }` | a copy of `p` is made | stays the caller's |
+   Where the literal holds a value of its own beside `p`, it takes `p`
+   over (`keeps`). The struct is dropped whole, so the result owns all of
+   it, and an inferred `sink` there is the function's own (AGORA-995). A
+   copy is still made where `p` is not handed back as it is:
+   - `( vec_push out @ K { p } )` and `= . o f @ K { p }`: the literal is stored, not returned;
+   - a bound literal read, changed or handed on before `^ k`, or `p` named again after the binding: what `^ k` hands back is then not the literal as written.
+4. **The `? c x l` fall-off shape keeps the checker's answer, the move.**
 
 ## Declared summaries
 
