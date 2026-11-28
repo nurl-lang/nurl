@@ -627,7 +627,7 @@ def tyFuel : Nat := 32
     a `Vec` of raw text; a `Slice` of numbers; an option of such a type
     (`.sum .int T`); a struct of such fields (`.prod`, nested to the right;
     one field: its type). As the translator: a struct holding raw text (a
-    field `i8*`), a struct of no fields, a struct inside itself (`exp`, the
+    field `i8*`), an option of raw text (`{ i1, i8* }`), a struct of no fields, a struct inside itself (`exp`, the
     structs being expanded) and a closure inside a value (`__no_clo`) are
     refused. Stricter: a struct whose fields' names are not distinct (the
     translator reads a field by its first name in one place and its last in
@@ -646,7 +646,12 @@ def tyR (tyls : List (List W)) (dts : List (W × Option Nat)) : Nat → List W �
       if prefixN vecTyB cs then (elemTy (cs.drop 6)).map .vec
       else if prefixN sliceTyB cs && intTyB (cs.drop 8) then some (.slice .int)
       else match cs with
-        | 123 :: _ => if optB cs then (tyR tyls dts f exp (encB (optInner cs))).map (.sum .int) else none
+        | 123 :: _ =>
+          -- (an option of raw text is refused, as the translator refuses it:
+          -- raw text held in a value is a view, AGORA-1045)
+          if optB cs && encB (optInner cs) != kI8p then
+            (tyR tyls dts f exp (encB (optInner cs))).map (.sum .int)
+          else none
         | 37 :: _ =>
           if !structNameB cs || exp.contains t || dts.any (·.1 == t) then none
           else match fieldsOf tyls t with
