@@ -39,6 +39,7 @@ $ `stdlib/std/channel.nu`
     String lean
     String binary
     String stdlib
+    String root
 }
 
 // ── The translation (one interface) ──────────────────────────────────
@@ -729,13 +730,17 @@ open A2 C
     ?? ( file_delete ( string_data ( nc_join out `Caps.lean` ) ) ) { T _ → {} F _ → {} }
     ?? ( file_delete ( string_data ( nc_join out `caps.tsv` ) ) ) { T _ → {} F _ → {} }
 
-    // nurlc runs from the standard library's root: the core IR then names
-    // the library's files `stdlib/…`, which is how the translation tells
-    // the library from the program (the source path is absolute).
+    // nurlc runs where the build runs it, from the root (--root, else the
+    // working directory), so it resolves every import as the build does: a
+    // package's `deps/<name>/…` from its root, the library from
+    // $NURL_STDLIB, which is set to --stdlib for it. The core IR names a
+    // file of the library `stdlib/…` from any directory, which is how the
+    // translation tells the library from the program (AGORA-1032).
     : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
-    ?? ( env_chdir ( string_data . o stdlib ) ) {
+    ? ! ( cert_nurlc_env ( string_data . o stdlib ) ) { ^ ( __ct_fail `cannot set NURL_STDLIB for nurlc` ) } {}
+    ?? ( env_chdir ( string_data . o root ) ) {
         T _ → {}
-        F _ → { ^ ( __ct_fail `cannot enter the standard library's root (--stdlib / $NURL_STDLIB)` ) }
+        F _ → { ^ ( __ct_fail `cannot enter the root (--root)` ) }
     }
 
     // 1. nurlc: the core IR and the files it read.
@@ -773,8 +778,8 @@ open A2 C
     // 2. nurlc: the LLVM IR and the unsafe report, and nurlc's version. They
     // go only into the manifest, so they run on a thread while the
     // translation and Lean run (`__ct_compile2`), and are read after Lean.
-    // The thread starts them here, with the standard library's root the
-    // working directory, which no step changes until they are read
+    // The thread starts them here, with the root the working directory,
+    // which no step changes until they are read
     // (Lean's run sets its toolchain in the environment, `cert_lean_env`).
     : ( Vec String ) a2 ( vec_new [String] )
     ( vec_push [String] a2 ( string_from `--unsafe-report` ) )
@@ -1008,6 +1013,7 @@ open A2 C
     ( mj_str m `profile` prof )
     : Json pg ( json_obj_new )
     ( mj_str pg `source` src )
+    ( mj_str pg `root` ( string_data . o root ) )
     ( mj_str pg `verdict` ( string_data verdict ) )
     ( mj_str pg `reason` ( string_data reason ) )
     ( mj_int pg `slots` nv )

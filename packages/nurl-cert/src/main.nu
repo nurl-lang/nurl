@@ -53,6 +53,8 @@ $ `coverage.nu`
     ( nurl_print `  --nurlc PATH     the compiler (default $NURLC, else nurlc)\n` )
     ( nurl_print `  --lean PATH      Lean (default $LEAN, else lean: elan's picks formal/'s toolchain)\n` )
     ( nurl_print `  --stdlib DIR     the standard library's root (default $NURL_STDLIB, else <formal>/..)\n` )
+    ( nurl_print `  --root DIR       certify: the directory the build compiles from, where nurlc\n` )
+    ( nurl_print `                   runs and a package's deps/ lie (default the working directory)\n` )
     ( nurl_print `  --version        print the version and exit\n` )
 }
 
@@ -68,6 +70,7 @@ $ `coverage.nu`
     ( args_opt p `nurlc` 0 `PATH` `the compiler` )
     ( args_opt p `lean` 0 `PATH` `Lean` )
     ( args_opt p `stdlib` 0 `DIR` `the standard library's root` )
+    ( args_opt p `root` 0 `DIR` `certify: the directory the build compiles from` )
     ^ p
 }
 
@@ -127,7 +130,11 @@ $ `coverage.nu`
     : String binary ( __opt_abs p `binary` `` `` )
     : String sl_dflt ( nc_join ( string_data formal ) `..` )
     : String stdlib ( __opt_abs p `stdlib` `NURL_STDLIB` ( string_data sl_dflt ) )
-    : CertOpts o @ CertOpts { src out prof nurlc formal lean binary stdlib }
+    // nurlc runs where the build runs it: a package's `deps/<name>/…`
+    // imports resolve from its root, the working directory (AGORA-1032)
+    : String cwd ?? ( env_cwd ) { T c → c F _ → ( string_from `.` ) }
+    : String root ( __opt_abs p `root` `` ( string_data cwd ) )
+    : CertOpts o @ CertOpts { src out prof nurlc formal lean binary stdlib root }
     ^ ( cert_certify o )
 }
 

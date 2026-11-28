@@ -46,6 +46,12 @@
 #     not translated yet, fail closed (unsupported, N.cap open);
 #     and verify fails on each of: the list, the capability table, a class,
 #     a sentence or the status edited.
+#  3f. A package with dependencies (AGORA-1032): certified from its root,
+#     whose deps/ holds its dependency and which has no stdlib/, it gets a
+#     bundle that verifies, with --rebuild from another directory too; the
+#     dependency's function is the program's own, the library's are left
+#     out; and the core IR of a program is the same bytes from two working
+#     directories, the library's files named stdlib/… in both.
 # ============================================================
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -1336,10 +1342,11 @@ else bad "a def fn<k> with a huge index: refused at once, the capabilities not m
 kfresh
 python3 - "$NC/k/Program.lean" <<'EOF3'
 import re, sys
-p = sys.argv[1]; t = open(p).read()
+p = sys.argv[1]; t = open(p, encoding="utf-8", newline="").read()
 k = len(re.findall(r"^def fn\d+ : Fn :=", t, re.M))
 t = t.replace("def P : Prog", "def fn%d : Fn :=\n  .letcall 0 999 [] .skip\n\ndef P : Prog" % k, 1)
-open(p, "w").write(t)
+# (newline="": the file's own LF ends, which Windows' text mode would make CRLF)
+open(p, "w", encoding="utf-8", newline="").write(t)
 EOF3
 krehash program_lean "$NC/k/Program.lean"
 kexpect "an unreached definition naming an undeclared function: refused" "the capabilities can be made again from the bundle: .*names one it does not declare"
@@ -1380,9 +1387,58 @@ then ok "C.Caps not loadable: the M claims stand, N.cap is open"
 else bad "C.Caps not loadable: the M claims stand, N.cap is open"; tail -8 "$NC/noimp.out"; fi
 rm -rf "$F2"
 
+echo "== 3f. a package with dependencies, certified from its root (AGORA-1032)"
+# A package's root holds deps/<name>/, as an installed package's does, and no
+# stdlib/: certify compiles from the root, where the build compiles, so the
+# dependency resolves there and the library from $NURL_STDLIB.
+PK="$TMP/pkg"; mkdir -p "$PK/src" "$PK/deps/greet/src"
+cat > "$PK/deps/greet/src/greet.nu" <<'EOF3'
+$ `stdlib/core/string.nu`
+@ greet_len s who → i { ^ + ( nurl_str_len who ) 1 }
+EOF3
+cat > "$PK/src/main.nu" <<'EOF3'
+$ `stdlib/core/string.nu`
+$ `deps/greet/src/greet.nu`
+@ main → i { ^ - ( greet_len `abc` ) 4 }
+EOF3
+( cd "$PK" && "$C" certify src/main.nu "${CA[@]}" --out "$PK/main.cert" ) > "$PK/out" 2>&1; prc=$?
+if [ "$prc" = 0 ] && [ -f "$PK/main.cert/manifest.json" ]; then ok "a package with a deps/ import certifies from its root"
+else bad "a package with a deps/ import certifies from its root (rc $prc)"; tail -5 "$PK/out"; fi
+# The dependency's function is the program's own (its file is deps/…), and no
+# function of the library is: each is named stdlib/… and left out.
+if python3 - "$PK/main.cert/manifest.json" "$PK/main.cert/Program.core" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+rows = {r["name"]: r["file"] for r in m["coverage"]["functions"]}
+files = {l.split("\t")[5] for l in open(sys.argv[2], encoding="utf-8") if l.startswith("fn\t")}
+lib = {f for f in files if f.startswith("stdlib/")}
+ok = (rows.get("greet_len") == "deps/greet/src/greet.nu" and "main" in rows
+      and not any(f.startswith("stdlib/") or "/stdlib/" in f.replace("\\", "/") for f in rows.values())
+      and "stdlib/core/string.nu" in lib
+      and not any("/stdlib/" in f.replace("\\", "/") for f in files)
+      and m["program"]["root"].replace("\\", "/").rstrip("/").endswith("/pkg"))
+sys.exit(0 if ok else 1)
+EOF3
+then ok "the dependency's function is the program's; the library's are named stdlib/… and left out; the root is recorded"
+else bad "the dependency's function is the program's; the library's are named stdlib/… and left out; the root is recorded"; fi
+"$C" verify "$PK/main.cert" --formal "$ROOT/formal" > "$PK/vout" 2>&1 \
+    && ok "the package's bundle verifies" || { bad "the package's bundle verifies"; grep -v '^  ok' "$PK/vout" | head -5; }
+# --rebuild compiles from the recorded root, wherever verify runs from.
+( cd "$TMP" && "$C" verify "$PK/main.cert" --rebuild --nurlc "$NURLC" --formal "$ROOT/formal" ) > "$PK/rout" 2>&1 \
+    && ok "the package's bundle verifies with --rebuild, run from another directory" \
+    || { bad "the package's bundle verifies with --rebuild, run from another directory"; grep -v '^  ok' "$PK/rout" | head -5; }
+# The core IR of one program is the same bytes from the stdlib's root and
+# from a directory with no stdlib/ (the library then found by $NURL_STDLIB).
+CP="$ROOT/tools/ncore/certify/cursor_over_a_vec.nu"
+"$NURLC" --emit-core "$CP" > "$PK/a.core" 2> /dev/null
+( cd "$TMP" && "$NURLC" --emit-core "$CP" ) > "$PK/b.core" 2> /dev/null
+if [ -s "$PK/a.core" ] && cmp -s "$PK/a.core" "$PK/b.core" && grep -q $'^fn\t.*\tstdlib/core/vec.nu\t' "$PK/a.core"; then
+    ok "the core IR names the library's files stdlib/… from any working directory"
+else bad "the core IR names the library's files stdlib/… from any working directory"; diff "$PK/a.core" "$PK/b.core" | head -4; fi
+
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then
-    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$CC/cond.cert/manifest.json" "$CC/cond_refused.cert/manifest.json" "$CC/tcond.cert/manifest.json" "$CC/tcond_refused.cert/manifest.json" "$TMP"/ncap/*.cert/manifest.json <<'EOF2'
+    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$CC/cond.cert/manifest.json" "$CC/cond_refused.cert/manifest.json" "$CC/tcond.cert/manifest.json" "$CC/tcond_refused.cert/manifest.json" "$TMP"/ncap/*.cert/manifest.json "$TMP/pkg/main.cert/manifest.json" <<'EOF2'
 import json, sys, jsonschema
 schema = json.load(open(sys.argv[1]))
 bad = 0

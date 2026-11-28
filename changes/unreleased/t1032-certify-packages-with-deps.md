@@ -1,0 +1,8 @@
+### Fixed
+
+- **`nurl-cert certify` certifies a package that has dependencies** (AGORA-1032). certify ran nurlc from the standard library's root, which kept the library's files named `stdlib/…` in the core IR. But from there a package's `deps/<name>/…` imports never resolved, so 21 of the 49 `packages/*/src/main.nu` got no bundle: agora, nurllama, psql, redis, registry, onnx and the others with dependencies. certify now runs nurlc where the build runs it: from the directory nurl-cert is started in, or from the new `--root DIR`. The library comes from `--stdlib`, given to nurlc as `$NURL_STDLIB`. `verify --rebuild` compiles from the same root.
+
+### Changed
+
+- **`nurlc --emit-core` names a library file `stdlib/…` from any working directory** (AGORA-1032). The `fn` lines' file column was the path an import resolved to. That was `stdlib/core/vec.nu` from the stdlib's root, and `<prefix>/stdlib/core/vec.nu` or an importer-relative spelling anywhere else. A file inside the stdlib tree (the trust test the compiler already makes, `bck_trusted_file`) is now `stdlib/` plus its path in that tree, with `/` as the separator on every host. Any other file keeps its path. So the core IR of a program is the same bytes from any working directory, and the `stdlib/` prefix by which the translator, `nurl-cert words` and `C.Elab.elabIR` tell the library from the program holds wherever nurlc runs. Compiles without `--emit-core` are unchanged.
+- **Certificate manifests record `program.root`** (AGORA-1032), the directory nurlc ran from. It is required by the `nurl-cert/2` schema, which no release has shipped yet. Migration: certify again any bundle made from main since the `nurl-cert/2` bump. verify refuses a manifest without the member.

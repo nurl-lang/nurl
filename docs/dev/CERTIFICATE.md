@@ -459,7 +459,7 @@ translation, and the link to the binary on LLVM and the linker.
 schema      "nurl-cert/2"
 tool        { name, version }
 profile     "kernel" | "fast"
-program     { source, verdict: accepted | refused | unsupported | error, reason, slots }
+program     { source, root, verdict: accepted | refused | unsupported | error, reason, slots }
 claims      [ { id, lean, status, sentence { en, fi }, reason, axioms [..], premises [ledger ids] } ]
             M.safe, M.leak, (a threaded program) M.race, M.unsafe, then N.cap, in this order
 coverage    { functions: [ { name, file, line, status, reason } ], <status>: count }
@@ -480,6 +480,15 @@ ledger      [ { id, what, why, where, vouches, claims [..] } ]
   (`C.certOK2B P entry 1 = false`, or A3's, by `decide +kernel`). The
   reason then reads `… is false, proved by the kernel`, and without that
   proof the verdict is `error` (AGORA-1034).
+- `program.root`: the directory nurlc ran from, `--root` or the working
+  directory nurl-cert was started in. certify compiles from there, where
+  the build compiles, so a package's `deps/<name>/…` imports resolve from
+  its root and every import resolves as the build resolves it. The library
+  comes from `--stdlib`, given to nurlc as `$NURL_STDLIB`. The core IR
+  names a file of the library `stdlib/…` from any directory, and that
+  prefix is how the translator, `nurl-cert words` and `C.Elab.elabIR` tell
+  the library's functions from the program's (AGORA-1032).
+  `verify --rebuild` compiles from the same root.
 - `hashes.sources`: every file the compile read, hashed as the bytes
   nurlc compiled. `nurlc --list-sources=TAG` prints each snapshot it
   reads on stderr: a line `source:TAG <length> <real path>`, then the
@@ -640,7 +649,7 @@ hash updated: the translation is a ledger row. With Elab.lean it can, for
 the step from Program.core on: the kernel refuses any term but the one
 `C.Elab.elabIR` builds from Program.core's words. `verify --rebuild` checks
 the whole step where nurlc and the translator are at hand: it runs
-`nurlc --emit-core` on the recorded sources and the translator on
+`nurlc --emit-core` on the recorded sources, from `program.root`, and the translator on
 Program.core again, and compares both byte for byte. The selftest swaps
 another program's term into a bundle without Elab.lean: plain verify
 passes it, and `--rebuild` refuses it. Signing a bundle (an in-toto statement) is out of

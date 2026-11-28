@@ -381,6 +381,14 @@ $ `stdlib/ext/json.nu`
     ^ set
 }
 
+// nurlc's environment: $NURL_STDLIB is the standard library's root
+// (--stdlib), where a compile from the program's root finds the library
+// when the root holds no `stdlib/` of its own (AGORA-1032). Set before
+// any nurlc runs, and before a thread starts one.
+@ cert_nurlc_env s stdlib → b {
+    ^ ( __lt_setenv `NURL_STDLIB` stdlib )
+}
+
 // Set `name` to `v` unless it holds `v` already.
 @ __lt_setenv s name s v → b {
     : b same ?? ( env_get name ) { T x → ( nc_is_s ( string_data x ) v ) F → F }
