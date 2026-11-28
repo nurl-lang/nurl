@@ -771,7 +771,7 @@ open A2 C
     // translation and Lean run (`__ct_compile2`), and are read after Lean.
     // The thread starts them here, with the standard library's root the
     // working directory, which no step changes until they are read
-    // (Lean's run sets its toolchain in the environment, `__lt_env`).
+    // (Lean's run sets its toolchain in the environment, `cert_lean_env`).
     : ( Vec String ) a2 ( vec_new [String] )
     ( vec_push [String] a2 ( string_from `--unsafe-report` ) )
     : String tag2 ( rand_hex_str 16 )
@@ -779,8 +779,8 @@ open A2 C
     ( string_push_str tag2_arg ( string_data tag2 ) )
     ( vec_push [String] a2 tag2_arg )
     ( vec_push [String] a2 ( string_from src ) )
-    // (Lean's environment is set before the thread starts: `__lt_env`)
-    ? ! ( __lt_env ( string_data . o formal ) ) { ^ ( __ct_fail `cannot set LEAN_PATH for Lean` ) } {}
+    // (Lean's environment is set before the thread starts: `cert_lean_env`)
+    ? ! ( cert_lean_env ( string_data . o formal ) ) { ^ ( __ct_fail `cannot set LEAN_PATH for Lean` ) } {}
     : Compile2 c2 ( __ct_compile2 ( string_clone . o nurlc ) a2 )
 
     // 3. The translation, held to the program grammar.

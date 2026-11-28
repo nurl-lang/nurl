@@ -354,6 +354,17 @@ $ `coreir.nu`
 // closure, from the entry statement, of the names each function's
 // definition holds; sorted. None when the term has no entry, declares its
 // functions out of order (fn0, fn1, …) or names one it does not declare.
+@ __cp_all_below ( Vec i ) v i n → b {
+    : i m ( vec_len [i] v )
+    : ~ i j 0
+    ~ < j m {
+        : i x ( vec_at [i] v j )
+        ? | < x 0 >= x n { ^ F } {}
+        = j + j 1
+    }
+    ^ T
+}
+
 @ cert_runs String lean → ?( Vec i ) {
     : ( Vec ( Vec i ) ) names ( vec_new [( Vec i )] )
     : ( Vec i ) entry ( vec_new [i] )
@@ -402,9 +413,16 @@ $ `coreir.nu`
         = q + q 1
     }
     ? ! has_entry { ^ @ ?( Vec i ) { F } } {}
-    // the closure, from the entry's names; a name no declaration has is not
-    // a function of the term (the translator writes none)
+    // every name, in every definition and the entry, is a declared function
+    // (the translator writes no other)
     : i nf ( vec_len [( Vec i )] names )
+    ? ! ( __cp_all_below entry nf ) { ^ @ ?( Vec i ) { F } } {}
+    : ~ i d 0
+    ~ < d nf {
+        ? ! ( __cp_all_below ( vec_at [( Vec i )] names d ) nf ) { ^ @ ?( Vec i ) { F } } {}
+        = d + d 1
+    }
+    // the closure, from the entry's names
     : ( Vec b ) seen ( vec_new [b] )
     : ~ i z 0
     ~ < z nf { ( vec_push [b] seen F ) = z + z 1 }
@@ -581,6 +599,10 @@ $ `coreir.nu`
     ^ out
 }
 
+// A line break as the core IR's reader takes it (coreir.nu's __cr_is_nl:
+// \n, \r, \v, \f, \x1c–\x1e).
+@ __cp_is_nl i c → b { ^ | | | == c 10 == c 13 | == c 11 == c 12 & >= c 28 <= c 30 }
+
 @ __cp_scan s text → CapIR {
     : ( Vec String ) names ( vec_new [String] )
     : ( Vec String ) files ( vec_new [String] )
@@ -599,7 +621,7 @@ $ `coreir.nu`
     : ~ i a 0
     ~ < a n {
         : ~ i z a
-        ~ & < z n & != ( slice_byte t z ) 10 != ( slice_byte t z ) 13 { = z + z 1 }
+        ~ & < z n ! ( __cp_is_nl ( slice_byte t z ) ) { = z + z 1 }
         : ~ i sa a
         ~ & < sa z ( core_is_ws ( slice_byte t sa ) ) { = sa + sa 1 }
         ? < sa z {
@@ -644,24 +666,28 @@ $ `coreir.nu`
                     } {
                         // (a variable's `v` line names no callee)
                         ? & in_fn ! & == c0 118 & < + sa 1 z == ( slice_byte t + sa 1 ) 9 {
-                            ? & & == c0 108 < + sa 4 z & & == ( slice_byte t + sa 1 ) 105 == ( slice_byte t + sa 2 ) 110 & == ( slice_byte t + sa 3 ) 101 == ( slice_byte t + sa 4 ) 32 {
+                            ? & & == c0 108 < + sa 4 z & & == ( slice_byte t + sa 1 ) 105 == ( slice_byte t + sa 2 ) 110 & == ( slice_byte t + sa 3 ) 101 ( core_is_ws ( slice_byte t + sa 4 ) ) {
                                 // `line N`
-                                = cur_line ( __cp_int t + sa 5 z )
+                                : ~ i ls + sa 5
+                                ~ & < ls z ( core_is_ws ( slice_byte t ls ) ) { = ls + ls 1 }
+                                = cur_line ( __cp_int t ls z )
                             } {
-                                // a statement: every `call X` / `closure X`
+                                // a statement: every `call X` / `closure X`, its
+                                // words split as the core IR's reader splits them
+                                // (core_is_ws)
                                 : ~ i k sa
                                 ~ < k z {
-                                    ~ & < k z == ( slice_byte t k ) 32 { = k + k 1 }
+                                    ~ & < k z ( core_is_ws ( slice_byte t k ) ) { = k + k 1 }
                                     : ~ i e k
-                                    ~ & < e z != ( slice_byte t e ) 32 { = e + e 1 }
+                                    ~ & < e z ! ( core_is_ws ( slice_byte t e ) ) { = e + e 1 }
                                     : i wl - e k
                                     : b is_call & == wl 4 ( __cp_at t k `call` )
                                     : b is_clo & == wl 7 ( __cp_at t k `closure` )
                                     ? | is_call is_clo {
                                         : ~ i b2 e
-                                        ~ & < b2 z == ( slice_byte t b2 ) 32 { = b2 + b2 1 }
+                                        ~ & < b2 z ( core_is_ws ( slice_byte t b2 ) ) { = b2 + b2 1 }
                                         : ~ i e2 b2
-                                        ~ & < e2 z != ( slice_byte t e2 ) 32 { = e2 + e2 1 }
+                                        ~ & < e2 z ! ( core_is_ws ( slice_byte t e2 ) ) { = e2 + e2 1 }
                                         ? > e2 b2 {
                                             : String w ( string_new )
                                             ( string_push_window w t b2 - e2 b2 )
@@ -727,6 +753,10 @@ $ `coreir.nu`
 @ cert_caps_fns String text ( Vec CapRow ) tab ( Vec i ) runs → !CapsRes String {
     : CapIR ir ( __cp_scan ( string_data text ) )
     : i nf ( vec_len [String] . ir names )
+    // every `fn` closed by its `endfn`, or the core IR is refused
+    ? | != ( vec_len [( Vec String )] . ir callees ) nf != ( vec_len [( Vec i )] . ir clines ) nf {
+        ^ @ !CapsRes String { F ( string_from `the core IR has a fn with no endfn` ) }
+    } {}
     // names → indices, once
     : ( HashMap String i ) fidx ( map_new [String i] )
     : ~ i k 0

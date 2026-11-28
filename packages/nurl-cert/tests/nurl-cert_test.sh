@@ -1176,6 +1176,19 @@ out="$(timeout 60 "$C" verify "$NC/k" --formal "$ROOT/formal" 2>&1)"; rc=$?
 if [ "$rc" != 0 ] && [ "$rc" != 124 ] && printf '%s\n' "$out" | grep -q "FAIL  the capabilities can be made again from the bundle: .*out of order"; then
     ok "a def fn<k> with a huge index: refused at once, the capabilities not made"
 else bad "a def fn<k> with a huge index: refused at once, the capabilities not made (rc $rc)"; printf '%s\n' "$out" | grep -v "^  ok" | head -5; fi
+# (i2) a definition no run reaches that names a function the term does not
+# declare: refused too (every definition's names are checked, not only
+# those the closure walks).
+kfresh
+python3 - "$NC/k/Program.lean" <<'EOF3'
+import re, sys
+p = sys.argv[1]; t = open(p).read()
+k = len(re.findall(r"^def fn\d+ : Fn :=", t, re.M))
+t = t.replace("def P : Prog", "def fn%d : Fn :=\n  .letcall 0 999 [] .skip\n\ndef P : Prog" % k, 1)
+open(p, "w").write(t)
+EOF3
+krehash program_lean "$NC/k/Program.lean"
+kexpect "an unreached definition naming an undeclared function: refused" "the capabilities can be made again from the bundle: .*names one it does not declare"
 # (j) a runtime function the table does not class (ffi.unknown): the
 # sentence says no "never", only that its effects outside its memory are not
 # bounded. (A standard library root whose caps.tsv has no nurl_println row.)

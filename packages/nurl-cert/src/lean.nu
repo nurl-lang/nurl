@@ -313,7 +313,7 @@ $ `stdlib/ext/json.nu`
 // starts where it was started (AGORA-1013). An `ELAN_TOOLCHAIN` the caller
 // set stands, as it did inside formal/ (so does one this function set
 // earlier). F when `LEAN_PATH` cannot be set.
-@ __lt_env s formal → b {
+@ cert_lean_env s formal → b {
     : String lp ( string_from formal )
     ( string_push_str lp `/.lake/build/lib/lean` )
     : b set ( __lt_setenv `LEAN_PATH` ( string_data lp ) )
@@ -425,8 +425,8 @@ $ `stdlib/ext/json.nu`
         ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
     } {}
     : ( Vec String ) a1 ( vec_new [String] )
-    // (Lean's environment: `__lt_env`)
-    ? ! ( __lt_env formal ) {
+    // (Lean's environment: `cert_lean_env`)
+    ? ! ( cert_lean_env formal ) {
         ( string_push_str log `cannot set LEAN_PATH for Lean` )
         ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
     } {}
@@ -597,7 +597,7 @@ theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
     }
     : String file ( nc_join work `Refute.lean` )
     ? ! ( nc_write ( string_data file ) ( string_data o ) ) { ^ F } {}
-    : b set ( __lt_env formal )
+    : b set ( cert_lean_env formal )
     : ( Vec String ) a ( vec_new [String] )
     ( vec_push [String] a ( string_from `--json` ) )
     ( vec_push [String] a ( string_clone file ) )
