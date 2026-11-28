@@ -78,6 +78,12 @@ expect_unsupported "an opaque rvalue" "$TMP/d.core" "main: rvalue opaque"
 awk '/^fn\tmain\t/{m=1} m && /^scope$/ && !d {print; print "eval call no_such_function 0"; d=1; next} {print}' \
     "$TMP/a.core" > "$TMP/e.core"
 expect_unsupported "a call of a function not in the program" "$TMP/e.core" "call of no_such_function, not in the program"
+# A result whose payload is raw text (`!s E`): a raw string held in a value
+# is a view, not owned text, so it is refused, as a struct field's is
+# (AGORA-1044; the result itself is `sum E T`).
+printf '$ `stdlib/core/errors.nu`\n\n@ g !s IoErr r → i {\n    ?? r {\n        T _ → { ^ 0 }\n        F _ → { ^ 1 }\n    }\n}\n\n@ main → i {\n    ^ 0\n}\n' > "$TMP/rs.nu"
+"$NURLC" --emit-core "$TMP/rs.nu" > "$TMP/rs.core" 2> /dev/null || bad "rs: nurlc --emit-core"
+expect_unsupported "a raw string held in a result" "$TMP/rs.core" "a raw string held in a result"
 
 # No entry.
 sed 's/^fn\tmain\t/fn\tnot_main\t/' "$TMP/a.core" > "$TMP/f.core"

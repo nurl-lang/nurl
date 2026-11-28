@@ -833,6 +833,11 @@ $ `coreir.nu`
             : String e ( __from ( string_data inner ) + cm 2 )
             \ ( __no_clo ( string_data a ) )
             \ ( __no_clo ( string_data e ) )
+            // (a raw string held in a value is a view, MEMORY.md §2.13, not
+            // translated yet, as a struct field's)
+            ? | ( __eq ( string_data a ) `i8*` ) ( __eq ( string_data e ) `i8*` ) {
+                ^ @ !String String { F ( __f1 `type %: a raw string held in a result` ty ) }
+            } {}
             : String le \ ( __lean_ty m t ( string_data e ) )
             : String la \ ( __lean_ty m t ( string_data a ) )
             ^ @ !String String { T ( __f2 `(.sum % %)` ( string_data le ) ( string_data la ) ) }
