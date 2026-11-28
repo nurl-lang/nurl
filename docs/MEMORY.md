@@ -848,13 +848,21 @@ element, a `??` payload of a nested lend, a local bound to one, or a
 generic function's closure parameter — ends, at its own call, the
 caller's views into that element.
 
-What such a call changes is inside that element: the container's own
-block keeps its address and its length. So a view of the block — a
-`Slice` of the `Vec` — stays, read after the call, in a loop that grows
-each element in turn, or past a forwarder that grows one (AGORA-374). A
-view of any element ends, the grown one's and its siblings' alike: which
-element a borrow reaches is not tracked, as the formal rules do not track
-it either (formal/A2/DropInWitness.lean).
+What such a call moves is that element's buffer, and nothing else of the
+container. A view of the container's own block — a `Slice` of the `Vec`
+— stays, and so does a view of another element named by a number literal,
+of a `Vec` of Strings or `Vec`s that a local binding of the function owns:
+`: s d1 ( string_data ( vec_at vs 1 ) )` outlives `( string_push_str (
+vec_at vs 0 ) … )`. Out of a parameter, or out of a `Vec` of structs, the
+view of another element ends as the grown element's does: that is the
+shape the formal model types (`RhsT.atIdx`, AGORA-1037). An index that is not a literal, or two different
+literals for one container on one line, names no element the checker can
+tell apart, and that view ends. Any change that may reorder the
+container, or what an index of it names, between the view and the call
+ends the "that element alone" knowledge: a `vec_swap`, a closure that
+runs, a call of a function that may change it, or such a change on one
+path of a join or in an earlier round of a loop. The view of the grown
+element itself always ends (AGORA-374).
 
 A function of your own that hands back a value it read out of its
 parameter lends it, however the value was reached on the way out: an
