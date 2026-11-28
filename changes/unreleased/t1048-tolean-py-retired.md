@@ -10,5 +10,7 @@
   `Cert.elab` in every bundle). translate_test's fail-closed cases already
   held tolean_selftest's one case. `tools/ncore/certify.sh` now runs
   `nurl-cert translate` (`NURL_CERT`). A certificate's `translation`
-  ledger row no longer names the parity script. This follows the owner's rule
+  ledger row no longer names the parity script. **Break:** `verify` compares the
+  ledger exactly, so a bundle certified before this change no longer verifies.
+  **Migration:** certify it again (nurl-cert 0.4.0, unreleased, already asks that). This follows the owner's rule
   that no Python mirrors a NURL component (agora note python-dev-only).
