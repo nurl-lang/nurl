@@ -397,7 +397,8 @@ prog.cert/
     proof in formal/ is checked once, when formal/ builds. The claims
     are the module's private declarations, so `#print axioms` names
     `Cert.m_safe` `_private.All.0.Cert.m_safe`, and certify reads either
-    name. A Lean check of a certificate takes about 40 % less memory.
+    name. Over the 62 certify programs, certify's peak memory fell by
+    38.5 % (a program's median 649 → 386 MB) and its time by 3.6 %.
 
   Lean runs it with `--json`, so every message, `#print axioms` output
   included, comes with its file and line. A message is placed by its own
