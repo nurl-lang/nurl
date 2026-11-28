@@ -147,10 +147,16 @@ if not defined NURL_VER set "NURL_VER=v0.0.0"
 echo [info] version: !NURL_VER!
 
 REM ── runtime ──────────────────────────────────────────────────
+REM -O2, as build.sh and the MinGW object below build it. This line had
+REM no -O flag (so -O0), and every runtime C function on the clang link
+REM path ran unoptimized: float_exp at 21 ns a call against 3.8, nurlc's
+REM self-compile 16 % slower (AGORA-1039). No -flto here, unlike build.sh:
+REM every clang link of runtime.o (nurl.bat, run_tests.ps1, bench.ps1)
+REM goes through link.exe, which takes no LLVM bitcode.
 set "LABEL=runtime"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" -c stdlib/runtime.c !ZLIB_CFLAGS! -o stdlib/runtime.o
-"%CLANG%" -c stdlib/runtime.c !ZLIB_CFLAGS! -o stdlib/runtime.o >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 -c stdlib/runtime.c !ZLIB_CFLAGS! -o stdlib/runtime.o
+"%CLANG%" -O2 -c stdlib/runtime.c !ZLIB_CFLAGS! -o stdlib/runtime.o >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
 REM ── A second runtime, for the MinGW ABI ──────────────────────
