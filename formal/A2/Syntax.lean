@@ -898,7 +898,7 @@ def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
   | .dropIn, .view => hv
   | .dropInAt _, .self => hv
   | .dropInAt _, .view => hv
-  | .dropInAt i, .innerAt j => i == j
+  | .dropInAt i, .innerAt j => hv || i == j   -- AGORA-1037: where elements hold views, as `.dropIn`
   | .drop, .self => hv
   | .replace, _ => true
   | _, .name _ _ => false

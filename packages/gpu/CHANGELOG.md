@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.17.9] — 2026-11-28
+
+### Fixed
+
+- **A double kernel on the CPU backend gives the same bits on every host**
+  (AGORA-568). 0.17.8 did this for the float functions; a kernel's `exp`,
+  `log`, `pow`, `sin`, `cos`, `tanh`, `erf`, `erfc`, `expm1` and `log1p`
+  of a double still came from the host's libm. They now come from
+  `stdlib/nurl_detmath.h`, which `cpu_detmath` carries as text
+  (`tools/gen_detmath.py` copies it; CI checks the copy): musl's
+  table-driven `exp`, `log` and `pow` on their paths without fma, and
+  fdlibm's others, using IEEE + − × ÷ only. tanh is fdlibm's above 0.55
+  with its division compensated, and its Taylor series below, where
+  fdlibm's form was up to 2 ulp off. Against a 64-bit-mantissa reference
+  over 8 million samples each, the largest errors are exp 0.507, log
+  0.517, pow 0.509, sin 0.768, cos 0.783, tanh 0.816, erf 0.994, expm1
+  0.819 and log1p 0.863 ulp, and erfc 2.89 ulp near 2 (glibc's is 3.46).
+  The NURL runtime's `float_exp` and `float_log` run the same code, so a
+  CPU-backend kernel equals `grad`'s CPU tape bit for bit on every host,
+  and the tape and the fused kernels of `grad`'s gpfuse test now give the
+  same digest on Linux and on Windows (they differed). `expm1f` and `erfcf`
+  join the float set as the double function rounded once. In
+  C (the static backend), `exp`, `log`, … of a float are the float
+  functions, as in CUDA and in the C++ backend, through `_Generic`; the
+  static file also turns fma contraction off for GCC and clang, as the
+  JIT backend's -ffp-contract=off does.
+  Kernel time on 4M elements, 16 threads (best of 9, median of three
+  alternated rounds), main → this: an exp/log kernel (gpfuse's ops)
+  12.8 → 10.2 ms on Linux (g++, glibc) and 11.6 → 9.8 ms on Windows
+  (clang++, UCRT); sin + cos 5.3 → 5.7 ms and 6.8–8.1 → 7.5–7.8 ms;
+  pow + tanh + erf 8.1 → 8.9 ms and 8.6–9.3 → 10.1–11.1 ms (glibc's and
+  UCRT's use fma, which these cannot without giving other bits on a host
+  that lacks it). A kernel that calls them compiles 20–90 ms slower the
+  first time (they are inlined where libm was called); the object is
+  cached after that.
+  Rare paths (log near 1, exp's overflow and underflow, the Payne–Hanek
+  reduction) are functions of their own, so a loop that inlines log is not
+  turned into straight-line code that runs both paths.
+
 ## [0.17.8] — 2026-11-11
 
 Requires NURL 0.91.0 (stdlib/std/sysinfo.nu's `sys_os` and host memory;

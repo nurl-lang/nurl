@@ -5,6 +5,9 @@
 *.sh      text eol=lf
 Dockerfile text eol=lf
 *.nu      text eol=lf
+# tools/gen_detmath.py copies this header's text into packages/gpu/src/cpu.nu
+# (LF) and --check compares the two: a CRLF checkout would read as stale.
+stdlib/nurl_detmath.h text eol=lf
 
 # A package's files are packed into its registry tarball as the working
 # copy holds them (`nurlpkg publish`): with core.autocrlf=true a Windows

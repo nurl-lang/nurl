@@ -130,6 +130,8 @@ nurl_count_byte	compute	computes on its arguments and memory the program owns; n
 nurl_cpu_count	sys.info	reads facts about the host, the user or other processes
 nurl_cpu_x86_v3	compute	computes on its arguments and memory the program owns; no effect outside the process
 nurl_cpu_x86_v4	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_det_exp	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_det_log	compute	computes on its arguments and memory the program owns; no effect outside the process
 nurl_dir_list_close	fs.meta	reads names and metadata of files and directories, or watches them
 nurl_dir_list_next	fs.meta	reads names and metadata of files and directories, or watches them
 nurl_dir_list_open	fs.meta	reads names and metadata of files and directories, or watches them

@@ -292,6 +292,12 @@ jobs:
         run: python3 tools/fuzz/holes/open_list.py --known-issues > /dev/null
       - name: formal/BLUEPRINT.md's counts, module DAG and index are the sources'
         run: node webdocs/scripts/gen-formal-data.mjs --check
+      # The gpu package's CPU kernels carry stdlib/nurl_detmath.h as text, so
+      # a CPU-backend kernel and the runtime's float_exp / float_log run the
+      # same code (AGORA-568). A header edit without the copy would let the
+      # two drift apart bit by bit.
+      - name: packages/gpu/src/cpu.nu carries the current stdlib/nurl_detmath.h
+        run: python3 tools/gen_detmath.py --check
 
   # A pull request must not undo a commit that is already on main without
   # saying so (Agora #652). github#1746, a proof-only change, reverted
