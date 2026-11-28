@@ -292,7 +292,9 @@ def Stmt.fnsIn (A : Nat → Prop) : Stmt → Prop
   | .block s => s.fnsIn A
   | .loop s => s.fnsIn A
   | .takeB _ _ _ s => s.fnsIn A
-  | _ => True
+  -- (each constructor written out: a wildcard's equation lemma negates all
+  -- the others, and every certificate that imports this module loads it)
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => True
 
 /-- A function names only functions in `A`: its body, and the destructor of
     its result type (its call's result frame, `resFrame`). -/

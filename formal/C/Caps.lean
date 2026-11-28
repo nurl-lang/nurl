@@ -51,7 +51,7 @@ def tyDtors : Ty → List Nat
   | .cell t => tyDtors t
   | .dtor f t => f :: tyDtors t
   | .rguard u => tyDtors u
-  | _ => []
+  | .int | .fn _ _ => []
 
 theorem tyDtors_nest (n f : Nat) (u : Ty) : f ∈ tyDtors (Ty.nest n (.dtor f u)) := by
   induction n with
@@ -103,7 +103,9 @@ def stmtNames : Stmt → List Nat
   | .block s => stmtNames s
   | .loop s => stmtNames s
   | .takeB _ _ _ s => stmtNames s
-  | _ => []
+  -- (each constructor written out, as `A2.Stmt.fnsIn`: no wildcard's
+  -- equation lemma for every certificate to load)
+  | .skip | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ | .exit _ => []
 
 /-- The functions a function names: its body's, and its result type's
     destructor. -/

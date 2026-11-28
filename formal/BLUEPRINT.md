@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **37 modules**, **19,671 lines of Lean 4**, **954 theorems**, **1133 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **95 modules**, **89,428 lines of Lean 4**, **3989 theorems**, **5069 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **95 modules**, **89,430 lines of Lean 4**, **3989 theorems**, **5069 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -201,7 +201,7 @@ flowchart BT
   PopWitness["PopWitness<br/>(262L, 13 thms)"]
   Preservation["Preservation<br/>(5439L, 124 thms)"]
   Progress["Progress<br/>(953L, 14 thms)"]
-  Reach["Reach<br/>(955L, 53 thms)"]
+  Reach["Reach<br/>(957L, 53 thms)"]
   Region["Region<br/>(35L, 1 thms)"]
   RegionChangeWitness["RegionChangeWitness<br/>(86L, 5 thms)"]
   RegionMem["RegionMem<br/>(420L, 22 thms)"]
@@ -430,7 +430,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/KillVarsStep.lean`](A2/KillVarsStep.lean) | 281 | 11 | 4 |  |
 | 3. Proof Infrastructure | [`A2/NoRootb.lean`](A2/NoRootb.lean) | 53 | 6 | 1 |  |
 | 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 457 | 21 | 6 |  |
-| 3. Proof Infrastructure | [`A2/Reach.lean`](A2/Reach.lean) | 955 | 53 | 9 |  |
+| 3. Proof Infrastructure | [`A2/Reach.lean`](A2/Reach.lean) | 957 | 53 | 9 |  |
 | 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 35 | 1 | 0 |  |
 | 3. Proof Infrastructure | [`A2/RegionChangeWitness.lean`](A2/RegionChangeWitness.lean) | 86 | 5 | 3 |  |
 | 3. Proof Infrastructure | [`A2/RegionMem.lean`](A2/RegionMem.lean) | 420 | 22 | 6 |  |
