@@ -286,7 +286,12 @@ def lean_ty(t):
         return f"(.sum {le} {la})"
     if t.startswith("{ i1, ") and t.endswith(" }"):
         # an option: `sum int t`, None the first variant (formal/A2/Syntax.lean)
-        return f"(.sum .int {lean_ty(no_clo(t[len('{ i1, '):-2]))})"
+        inner = no_clo(t[len('{ i1, '):-2])
+        if inner == "i8*":
+            # a raw string held in a value is a view (MEMORY.md §2.13), not
+            # translated yet, as a struct field's (AGORA-1045)
+            raise Unsupported(f"type {t}: a raw string held in an option")
+        return f"(.sum .int {lean_ty(inner)})"
     if not t.startswith("%"):
         t = "%" + t   # a type argument's name, inside another (`%Vec__String`)
     if t in SCALAR_ENUMS and t not in DTOR_TYS:

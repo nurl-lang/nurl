@@ -848,6 +848,11 @@ $ `coreir.nu`
         // an option: `sum int t`, None the first variant
         : String inner ( __sl ty 6 -2 )
         \ ( __no_clo ( string_data inner ) )
+        // (a raw string held in a value is a view, MEMORY.md §2.13, not
+        // translated yet, as a struct field's; AGORA-1045)
+        ? ( __eq ( string_data inner ) `i8*` ) {
+            ^ @ !String String { F ( __f1 `type %: a raw string held in an option` ty ) }
+        } {}
         : String x \ ( __lean_ty m t ( string_data inner ) )
         ^ @ !String String { T ( __f1 `(.sum .int %)` ( string_data x ) ) }
     } {}
