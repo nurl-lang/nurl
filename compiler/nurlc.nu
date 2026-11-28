@@ -62725,9 +62725,10 @@ unsafe @ bck_join_state s a s b → s {
 // every pass of its fixpoint, and a keyed lookup built and hashed the key
 // each time.
 // Row `idx` as it is stored, a view (read through the table, as __sym_view
-// reads an interned value): a row is written once (bck_record2) and
-// released only with the whole table at the end of the function's analysis
-// (bck_rows_release), so the view is good for the walk that reads it. The
+// reads an interned value): a row is written once (bck_record2), and the
+// table is freed only by bck_explode, when it splits the next function's
+// rows, so a view is good until then — the walk that reads it. (A parked
+// function's deferred walk explodes its own rows first, __bck_walk_one.) The
 // walk reads rows through this: a copy per visit (bck_rec) was a strdup
 // and a free for every row, every round (AGORA-1047). (A name of its own:
 // the compilers that build this one held bck_rec's, a copy's, as owned.)
