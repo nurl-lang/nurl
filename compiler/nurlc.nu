@@ -4418,9 +4418,16 @@ unsafe @ note_unsafe_item s pos s what → v {
 // …and whether the function walked has a pending row named by a source
 // expression (`@sx`, set as its rows are translated, bck_xlate_row): only
 // through such a row is a lent element's buffer what moves, so only then
-// are the views of a block alone told apart (`vbk_`). Off, the walk ends
-// them as before: more refusals, never fewer.
+// are the views of a block alone told apart (`vbk_`, `vex_`). Off, the walk
+// ends them as before: more refusals, never fewer.
 : ~ i g_bck_sxl_on 0
+// …and once a view of one element of a binding, by a number literal, was
+// (`vex_`, `R:K`; the ids in `vexids`), and once an `elix` row was walked
+// (`elx_`). The index the sx sweep's element is (bck_sx_row_sweep), -1
+// none known. AGORA-374.
+: ~ i g_bck_vex_any 0
+: ~ i g_bck_elx_any 0
+: ~ i g_bck_sx_elix -1
 // What the borrow a borrow row begins is a copy of (bck_byte_root), handed
 // to bck_borrow_begin; -1 for none known.
 : ~ i g_bck_br_next -1
@@ -37523,6 +37530,15 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // the binding the first argument is.
     : ~ s call_sx ``
     : ~ s __sx_arg0 ``
+    // (A `( vec_at v K )` with v a binding and K a number literal: the
+    // element it lends is v's K-th, an `elix` row says — bck_note_elix,
+    // AGORA-374.)
+    : ~ s __vat_nm ``
+    : ~ s __vat_k ``
+    // (Only a `vec_at` of a Vec of Strings or Vecs can lend at its index,
+    // __vat_idx_ok — told first by the call's name, which carries the
+    // element type: most `vec_at`s copy nothing here.)
+    : b __vat_on & & & != 0 g_borrowck != 0 ( nurl_str_starts call_name `vec_at__` ) | != 0 ( nurl_str_starts call_name `vec_at__String` ) != 0 ( nurl_str_starts call_name `vec_at__Vec__` ) ( seq ( bck_generic_base call_name ) `vec_at` )
     // (The owner an inout argument names, at any position — where a
     // keeping callee may store the views it was handed beside it — and
     // where this call's pending `vpass` rows begin.)
@@ -38511,6 +38527,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             : b __sx_cand | | | == __sx_c0 4 & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) ( __thr_is_detach fname_bare ) & ! is_inout_arg != 0 ( nurl_str_len callee_inout )
             ? & ! is_inout_arg | __sx_need & __sx_cand >= __sx_c0 2 { = arg_sx ? == __sx_c0 1 ( nurl_str_cat `-` `` ) ( __sx_operand_c syms bck_arg_tt bck_arg_val __sx_c0 ( __sx_froot syms bck_arg_tt at ) __sx_n0 ) } {}
             ? __sx_need { = call_sx ? == arg_idx 0 ( nurl_str_cat arg_sx `` ) ( nurl_str_cat3 call_sx `|` arg_sx ) } {}
+            ? __vat_on {
+                ? & == arg_idx 0 ( is_ident_tok bck_arg_tt ) { = __vat_nm ( nurl_str_cat bck_arg_val `` ) } {}
+                ? == arg_idx 1 { = __vat_k ? == bck_arg_tt TT_INT ( nurl_str_cat bck_arg_val `` ) ( nurl_str_cat `?` `` ) } {}
+            } {}
             // (…and an owner that is no binding but a value lent out of one:
             // `( vec_at vv 0 )` grown beside a view of it is the element its
             // `:`-bound twin is, bck_sx_mut_storage — agora #349.)
@@ -41342,6 +41362,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     ? != 0 __sx_me {
         : b __sx_sum ( __summarised_callee syms fname call_name )
         ( __sx_publish __sx_me ? __callee_shadowed ( __clo_call_sx syms fname call_sx ) ? & __sx_sum __sx_need ( nurl_str_cat4 call_name `(` call_sx `)` ) `-` )
+        ? & & & __vat_on ! __callee_shadowed != 0 ( nurl_str_len __vat_nm ) ( __vat_idx_ok syms __vat_nm ) { ( bck_note_elix __vat_nm ? == 0 ( nurl_str_len __vat_k ) `?` __vat_k __call_line ) } {}
         // A closure that runs here — one handed to the call, or the closure
         // value called — changing what another argument reaches: decided at
         // the walk, with the summaries of what its body passes its captures
@@ -57689,6 +57710,46 @@ unsafe @ bck_add_cap_name s name → v {
     ( bck_put `reads` rd0 )
 }
 
+// Codegen's `( vec_at name K )` on `line` (AGORA-374): an `elix` row,
+// `elix K name` — K the index literal, `?` for any other index — that
+// reads the binding (translated to its id). The walk keeps, per line and
+// binding, the one index every such call on the line used so far
+// (`elx_`, __bck_elx_note): a value lent out of that binding by a call
+// whose source expression is `vec_at…(id|-)` there is its K-th element.
+@ bck_note_elix s name s k i line → v {
+    : s rd0 ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` )
+    ( bck_put `reads` name )
+    ( bck_record2 `elix` k line `` `` )
+    ( bck_put `reads` rd0 )
+}
+
+// AGORA-1037: an element is lent at its index (an `elix` row, so a view
+// of it is one element alone, `vex_`) only where formal A2 types that,
+// `RhsT.atIdx`: `name` is a local owner of the function — no parameter,
+// capture by reference, global or borrow — of a Vec whose elements are
+// Strings or Vecs. Elsewhere a grown element ends every view of the Vec's
+// elements, as before.
+@ __vat_idx_ok i syms s name → b {
+    : s ty0 ( nurl_sym_get syms name )
+    ? == 0 ( nurl_str_starts ty0 `%Vec__` ) { ^ F } {}
+    ? | | | != 0 ( nurl_sym_len2 syms name `__param` ) != 0 ( nurl_sym_len2 syms name `__inout` ) != 0 ( nurl_sym_len2 syms name `__sinkp` ) ( nurl_sym_has_word syms `__fn_param_names__` name ) { ^ F } {}
+    ? | | != 0 ( nurl_sym_len2 syms name `__captured_byref` ) != 0 ( nurl_sym_len2 syms name `__global` ) != 0 ( nurl_sym_len2 syms name `__borrow` ) { ^ F } {}
+    : s ty ( nurl_sym_get syms name )
+    ? == 0 ( nurl_str_starts ty `%Vec__` ) { ^ F } {}
+    : s el ( __vec_elem_llvm ty )
+    ? ! | ( seq el `%String` ) != 0 ( nurl_str_starts el `%Vec__` ) { ^ F } {}
+    ^ ( __vat_elem_no_view el )
+}
+
+// Does a value of LLVM type `el` hold no view (A2's `holdsView = false`): a
+// String, a number, or a Vec of those? Where elements hold views, a change
+// inside one ends every element's (`Eff.kills (.dropInAt i)`'s `hv`).
+@ __vat_elem_no_view s el → b {
+    ? ( seq el `%String` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts el `%Vec__` ) { ^ ( __vat_elem_no_view ( __vec_elem_llvm el ) ) } {}
+    ^ ( str_contains_word `i64 i32 i16 i8 i1 double float` el )
+}
+
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -62637,7 +62698,7 @@ unsafe @ bck_kc i idx → i {
     : s k ? < tab 0 ( nurl_str_cat row `` ) ( nurl_str_slice row 0 tab )
     // (Its first letter narrows it to a few: one compare each, not a chain.)
     : i c ( nurl_str_get k 0 )
-    ? == c 101 { ^ ? ( seq k `expr` ) 1 ? ( seq k `endblock` ) 24 ? ( seq k `endcond` ) 26 ? ( seq k `endmatch` ) 28 ? ( seq k `endmatch-arm-edge` ) 30 0 } {}
+    ? == c 101 { ^ ? ( seq k `expr` ) 1 ? ( seq k `endblock` ) 24 ? ( seq k `endcond` ) 26 ? ( seq k `endmatch` ) 28 ? ( seq k `endmatch-arm-edge` ) 30 ? ( seq k `elix` ) 51 0 } {}
     ? == c 108 { ^ ? ( seq k `let` ) 2 0 } {}
     ? == c 97 { ^ ? ( seq k `assign` ) 3 ? ( seq k `arcx` ) 33 0 } {}
     ? == c 109 { ^ ? ( seq k `move` ) 4 ? ( seq k `maybemove` ) 5 ? ( seq k `maybealias` ) 6 ? ( seq k `match` ) 27 ? ( seq k `match-arm-edge` ) 29 0 } {}
@@ -65644,7 +65705,12 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         // (A borrow / cdep / cmove row carries its sources or a closure's
         // captures in this field: not reads — the statement's own row read
         // them already.)
-        ? ! | | == kc 7 == kc 17 == kc 18 {
+        // (An `elix` row: what index a `vec_at` call lends at — its read
+        // is the call's own row's. And a row that may reorder a container
+        // ends every view's "one element of it" fact, `vex_`: AGORA-374.)
+        ? == kc 51 { ( __bck_elx_note rec ) } {}
+        ? != 0 g_bck_vex_any { ? ! ( __bck_vex_keeps rec kc ) { ( __bck_vex_kill ) } {} } {}
+        ? ! | | | == kc 7 == kc 17 == kc 18 == kc 51 {
             ( bck_check_moved_reads ( bck_field rec 2 )
             ( bck_field_int rec 3 ) st )
         } {}
@@ -66081,6 +66147,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     ( bck_put_bf `fb_` ( bck_field rec 1 ) `` )
                     ( bck_put_bf `fp_` ( bck_field rec 1 ) `` )
                     ? != 0 g_bck_vbk_any { ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vbk_` ( bck_field rec 1 ) ) ) { ( bck_put_bf `vbk_` ( bck_field rec 1 ) `` ) } {} } {}
+                    ? != 0 g_bck_vex_any { ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vex_` ( bck_field rec 1 ) ) ) { ( bck_put_bf `vex_` ( bck_field rec 1 ) `` ) } {} } {}
                 } {}
                 ( bck_br_event ( bck_field_int rec 1 ) )
                 // A join or a block (`n` with no call of its own): its source
@@ -67578,6 +67645,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     // (A borrow begun: what it views is not known to be a block alone,
     // until bck_view_bind says so again — AGORA-374.)
     ? != 0 g_bck_vbk_any { ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vbk_` bids ) ) { ( bck_put_bf `vbk_` bids `` ) } {} } {}
+    ? != 0 g_bck_vex_any { ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vex_` bids ) ) { ( bck_put_bf `vex_` bids `` ) } {} } {}
     = g_bck_has_borrow 1
     : ~ s set ``
     // (A borrow of a borrow of an Arc's payload is one too, §6.5 — and a
@@ -70439,6 +70507,16 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
         ? & isv != 0 g_bck_sxl_on {
             : s blk ( __src_block_only srcs )
             ? != 0 ( nurl_str_len blk ) { ( bck_put_bf `vbk_` ( nurl_str_int wid ) blk ) = g_bck_vbk_any 1 } {}
+            // (…and the one element of a binding it alone views, by a
+            // number literal: `vex_`.)
+            ? != 0 g_bck_elx_any {
+                : s vx ( __bck_vex_of srcs ( bck_field rec 8 ) ( bck_field rec 3 ) )
+                ? != 0 ( nurl_str_len vx ) {
+                    ( bck_put_bf `vex_` ( nurl_str_int wid ) vx )
+                    = g_bck_vex_any 1
+                    ( bck_add_word_once `vexids` ( nurl_str_int wid ) )
+                } {}
+            } {}
         } {}
         ^ vst
     } {}
@@ -74367,6 +74445,196 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ^ out
 }
 
+// An `elix` row (bck_note_elix): on its line, the binding it reads was
+// lent out of by a `vec_at` at index field 1 (`?` none known). Kept per
+// line and binding, `elx_`: the one index every such row there gave, `?`
+// once two differ (AGORA-374).
+@ __bck_elx_note s rec → v {
+    : s id ( str_first_word ( bck_field rec 2 ) )
+    ? == 0 ( nurl_str_len id ) { ^ v } {}
+    : s k ( bck_bkey `elx_` ( nurl_str_cat3 ( bck_field rec 3 ) `#` id ) )
+    : s cur ( nurl_sym_get g_bck k )
+    : s kv ( bck_field rec 1 )
+    ? == 0 ( nurl_str_len cur ) { ( bck_put k kv ) } { ? ! ( seq cur kv ) { ( bck_put k `?` ) } {} }
+    = g_bck_elx_any 1
+}
+
+// …the index read back: a number literal's digits, or `` (none, or two).
+@ __bck_elx_get s line s id → s {
+    : s v ( nurl_sym_get g_bck ( bck_bkey `elx_` ( nurl_str_cat3 line `#` id ) ) )
+    ? | == 0 ( nurl_str_len v ) ( seq v `?` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ v
+}
+
+// Is `sx` exactly one `vec_at` lend out of binding `id`, `vec_at…(id|-)`?
+@ __sx_is_vec_at_of s sx s id → b {
+    ? == 0 ( nurl_str_starts sx `vec_at__` ) { ^ F } {}
+    : s tail ( nurl_str_cat3 `(` id `|-)` )
+    ? == 0 ( nurl_str_ends sx tail ) { ^ F } {}
+    // (…the callee's name, then that: no `(` before it.)
+    ^ == ( nurl_str_find sx `(` ) - ( nurl_str_len sx ) ( nurl_str_len tail )
+}
+
+// Is the callee whose argument list starts at byte `p` of source
+// expression `sx` a `vec_at` (`vec_at__` and a mangled type, which holds
+// no delimiter)? Read by the last `vec_at__` before `p`.
+@ __sx_callee_at_is_vec_at s sx i p → b {
+    : ~ s rest ( nurl_str_slice sx 0 p )
+    : ~ i base 0
+    : ~ i q -1
+    : ~ b more T
+    ~ more {
+        : i f ( nurl_str_find rest `vec_at__` )
+        ? < f 0 { = more F } {
+            = q + base f
+            = base + q 8
+            = rest ( nurl_str_slice sx base - p base )
+        }
+    }
+    ? < q 0 { ^ F } {}
+    ? & > q 0 ! ( __sx_delim ( nurl_str_get sx - q 1 ) ) { ^ F } {}
+    : s mid ( nurl_str_slice sx + q 8 - p + q 8 )
+    ^ & & & & & < ( nurl_str_find mid `(` ) 0 < ( nurl_str_find mid `)` ) 0 < ( nurl_str_find mid `|` ) 0 < ( nurl_str_find mid `{` ) 0 < ( nurl_str_find mid `}` ) 0 < ( nurl_str_find mid `;` ) 0
+}
+
+// A view bound from source expression `sx` on `line`, whose only source is
+// an element of one binding, `^R` (`srcs`): `R:K` when the only way `sx`
+// reaches R is one `vec_at…(R|-)` whose index on that line is the number
+// K (__bck_elx_get) — it views R's K-th element alone; `` otherwise.
+// (A borrow of an element of R as R's sources are followed — `w`, an
+// element of R: `vec_at…(w|-)` — names no R in `sx`: none.) AGORA-374.
+@ __bck_vex_of s srcs s sx s line → s {
+    ? | | == 0 ( nurl_str_len srcs ) != 94 ( nurl_str_get srcs 0 ) != 0 ( nurl_str_len ( str_skip_word srcs ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s r ( nurl_str_slice srcs 1 - ( nurl_str_len srcs ) 1 )
+    : s pat ( nurl_str_cat3 `(` r `|-)` )
+    : i at ( nurl_str_find sx pat )
+    ? < at 0 { ^ ( nurl_str_cat `` `` ) } {}
+    // (…the callee before it a `vec_at`, and R named nowhere else in it.)
+    ? ! ( __sx_callee_at_is_vec_at sx at ) { ^ ( nurl_str_cat `` `` ) } {}
+    : i pl ( nurl_str_len pat )
+    : s sx2 ( nurl_str_cat3 ( nurl_str_slice sx 0 at ) `(-|-)` ( nurl_str_slice sx + at pl - - ( nurl_str_len sx ) at pl ) )
+    // (…and nothing else in it but the views A2 types as views of what
+    // they are given (`RhsT.view`: `string_data`, `string_bytes`,
+    // `slice_from_vec`, the library's): no other binding, which might reach
+    // R too — `( sel ( vec_at R 0 ) a1 )`, `a1` a view of R's element 1, is
+    // element 1 when `sel` lends its second argument (CodeRabbit on
+    // github#2370) — and no other call: A2's call boundary keeps no index
+    // (`Kind.coarse`), so a view a function hands back of an element is one
+    // of R's elements, any of them. AGORA-1037.)
+    ? | != 0 ( nurl_str_len ( __sx_leaf_names sx2 ) ) ! ( __sx_callees_in sx2 `vec_at string_data string_bytes slice_from_vec` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s k ( __bck_elx_get line r )
+    ? == 0 ( nurl_str_len k ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat3 r `:` k )
+}
+
+// Is every callee of source expression `sx` (a word followed by `(`) one
+// of the standard library's functions named in `ok` (a generic one by its
+// base name)? Read piece by piece, each up to the next `(`: the word that
+// ends a piece is a callee. (A leaf in a piece is read as one too, and
+// fails: the caller refuses a leaf anyway.)
+@ __sx_callees_in s sx s ok → b {
+    : ~ s rest ( nurl_str_cat sx `` )
+    : ~ b go T
+    ~ go {
+        : i f ( nurl_str_find rest `(` )
+        ? < f 0 { = go F } {
+            : ~ s ws ( __sx_leaf_names ( nurl_str_slice rest 0 f ) )
+            ~ != 0 ( nurl_str_len ws ) {
+                : s w ( str_first_word ws ) = ws ( str_skip_word ws )
+                ? ! ( __vex_std_callee w ok ) { ^ F } {}
+            }
+            = rest ( nurl_str_slice rest + f 1 - - ( nurl_str_len rest ) f 1 )
+        }
+    }
+    ^ T
+}
+
+// Is callee `cal` the standard library's function of one of the names in
+// `ok` (a generic one by its base name), not a program's own of the name?
+@ __vex_std_callee s cal s ok → b {
+    ? ! ( str_contains_word ok ( bck_generic_base cal ) ) { ^ F } {}
+    ^ | ( __fn_from_stdlib cal ) ( __fn_from_stdlib ( __callee_decl_name cal ) )
+}
+
+// Does view `bs` view, of `sids`, one element alone that is not element
+// `k` (`vex_`)? Then a change to element k's buffer leaves it be.
+@ __bck_vex_other s bs s sids i k → b {
+    : s vx ( nurl_sym_get g_bck ( bck_bkey `vex_` bs ) )
+    ? == 0 ( nurl_str_len vx ) { ^ F } {}
+    : s pre ( nurl_str_cat sids `:` )
+    : ~ s rest ( nurl_str_cat vx `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_str_starts w pre ) { ^ != k ( nurl_str_to_int ( nurl_str_slice w ( nurl_str_len pre ) - ( nurl_str_len w ) ( nurl_str_len pre ) ) ) } {}
+    }
+    ^ F
+}
+
+// Can row `rec` (kind `kc`) change the order of a container's elements, or
+// what an index of one names? Then no view's `vex_` fact holds past it
+// (__bck_vex_kill). Every row may, but those that only read, bind, borrow,
+// branch or leave; a call row (a pending call, keep, read or lend) of a
+// compiled callee whose summaries change nothing of that argument; and a
+// String lent out of a Vec by `vec_at`, which holds no container whose
+// order a change to it could reach, or a Vec lent out of a Vec of Vecs.
+// AGORA-374, AGORA-1037.
+@ __bck_vex_keeps s rec i kc → b {
+    ? | | | | | | | | | | | == kc 1 == kc 2 == kc 3 == kc 4 == kc 5 == kc 6 == kc 7 == kc 19 == kc 20 == kc 21 == kc 22 == kc 51 { ^ T } {}
+    ? | | | | | | | | | | == kc 23 == kc 24 == kc 25 == kc 26 == kc 27 == kc 28 == kc 29 == kc 30 == kc 31 == kc 39 == kc 45 { ^ T } {}
+    ? | | | == kc 9 == kc 10 == kc 12 == kc 40 { ^ ( __bck_callee_keeps_order ( bck_field rec 5 ) ( bck_field rec 6 ) ) } {}
+    ? & == kc 32 ! ( bck_field_is rec 0 `pendeff` ) {
+        ? ( __bck_callee_keeps_order ( bck_field rec 5 ) ( bck_field rec 6 ) ) { ^ T } {}
+        : s w1 ( bck_field rec 1 )
+        ? == 0 ( nurl_str_ends w1 `|-)` ) { ^ F } {}
+        ? != 0 ( nurl_str_starts w1 `@vec_at__String(` ) { ^ == ( nurl_str_find w1 `(` ) 15 } {}
+        // (…and a Vec lent out of a Vec of Vecs, `( vec_at vv K )`, the one
+        // call (CodeRabbit on github#2370): a change inside element K
+        // reorders nothing of vv, and that element is no named owner with
+        // facts of its own — they are made of a local owner alone,
+        // __vat_idx_ok. What it ends is element K's views, told apart by
+        // index where its buffer moves, __bck_vex_other; formal A2 types
+        // it as `.dropInAt K`, A2/ElemIdxWitness.lean.)
+        ? == 0 ( nurl_str_starts w1 `@vec_at__Vec__` ) { ^ F } {}
+        : i lp ( nurl_str_find w1 `(` )
+        ^ < ( nurl_str_find ( nurl_str_slice w1 + lp 1 - - ( nurl_str_len w1 ) lp 1 ) `(` ) 0
+    } {}
+    ^ F
+}
+
+// …a callee that changes nothing of argument `aix`: compiled (its
+// summaries are final), no closure, and no summary changing it.
+@ __bck_callee_keeps_order s cal s aix → b {
+    ? | == 0 ( nurl_str_len cal ) == ( nurl_str_get cal 0 ) 64 { ^ F } {}
+    ? == 0 ( nurl_sym_len g_fn_compiled cal ) { ^ F } {}
+    : s cb ( bck_generic_base cal )
+    ? | | ( nurl_sym_has_word g_fn_mutates cal aix ) ( nurl_sym_has_word g_fn_mutates cb aix ) ( nurl_sym_has_word g_fn_reallocs cal aix ) { ^ F } {}
+    ? | | ( nurl_sym_has_word g_fn_ireallocs cal aix ) ( nurl_sym_has_word g_fn_sink cal aix ) ( bck_callee_drops_elems cal aix ) { ^ F } {}
+    ^ == 0 ( nurl_str_len ( __repl_of cal aix ) )
+}
+
+// Every view's "one element alone" fact ends (__bck_vex_keeps).
+@ __bck_vex_kill → v {
+    : ~ s rest ( nurl_sym_get g_bck `vexids` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s id ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vex_` id ) ) { ( bck_put_bf `vex_` id `` ) } {}
+    }
+}
+
+// The `vex_` facts past a join of two paths (`a` / `b`, borrowing `ba` /
+// `bb`): a view of R's K-th element alone stays one where every path that
+// borrows from R says so.
+@ __vex_join s a s ba s b s bb → s {
+    : ~ s out ``
+    : ~ s rest ( __word_union a b )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s r ( nurl_str_slice w 0 ( nurl_str_find w `:` ) )
+        ? & | ( str_contains_word a w ) ! ( str_contains_word ba r ) | ( str_contains_word b w ) ! ( str_contains_word bb r ) { = out ( __word_union out w ) } {}
+    }
+    ^ out
+}
+
 // bck_view_end, where what moved is the buffer of an element of `sid`
 // (`elem`): a view of `sid`'s own block alone (`vbk_`, bck_view_bind) does
 // not point into it and stays; every other view ends, as there.
@@ -74688,12 +74956,29 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         = g_bck_sx_part == ( nurl_str_get r0 0 ) 94
         = g_bck_sx_elem g_bck_sx_part
         = g_bck_sx_wid ( nurl_str_to_int ? g_bck_sx_part ( nurl_str_slice r0 1 - ( nurl_str_len r0 ) 1 ) r0 )
+        // (…the element a `vec_at…(R|-)` lends, by its index literal on
+        // this line, of an R that owns its value: a view of another
+        // element alone stays, bck_view_end_ind — AGORA-374.)
+        = g_bck_sx_elix -1
+        ? & & != 0 g_bck_vex_any g_bck_sx_part == BCK_OWNED ( bck_st_get out g_bck_sx_wid ) {
+            : s rs ( nurl_str_int g_bck_sx_wid )
+            // (…changed by the library's own change of a Vec or String,
+            // which A2 types as a change through the borrow, inside that
+            // element (`StmtT.editB`, `Eff.dropInAt`). A function of the
+            // program's is a call, whose boundary keeps no index
+            // (`Kind.coarse`): its change is one to any of R's elements.)
+            ? & ( __sx_is_vec_at_of ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 ) rs ) ( __vex_std_callee cal `string_push_str string_push_bytes string_push_char string_push_int string_push_float vec_push vec_set vec_put vec_truncate vec_clear` ) {
+                : s ek ( __bck_elx_get ( bck_field rec 3 ) rs )
+                ? != 0 ( nurl_str_len ek ) { = g_bck_sx_elix ( nurl_str_to_int ek ) } {}
+            } {}
+        } {}
         ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = out ( bck_cursor_follow out rec kc ) } {}
         = out ( bck_borrow_sweep ist out rec kc )
     }
     = g_bck_sx_wid -1
     = g_bck_sx_part F
     = g_bck_sx_elem F
+    = g_bck_sx_elix -1
     ^ out
 }
 
@@ -74822,7 +75107,9 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         // (…nor a cursor over an element's own buffer, `fcl_`, where what
         // moves is the owner's own buffer through a copy of its handle,
         // g_bck_end_hc: agora #580.)
-        ? & & & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vi_` bs ) ) sids ) ! ? ( __bck_fcp_is_wroot bs ) != g_bck_end_elem 2 & == g_bck_end_elem 2 != 0 ( nurl_sym_len g_bck ( bck_bkey `fcu_` bs ) ) != b g_bck_end_fcx ! & != 0 g_bck_end_hc != 0 ( nurl_sym_len g_bck ( bck_bkey `fcl_` bs ) ) {
+        // (…nor a view of one other element of it alone, where what moved
+        // is a known element's buffer: g_bck_sx_elix, `vex_` — AGORA-374.)
+        ? & & & & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vi_` bs ) ) sids ) ! ? ( __bck_fcp_is_wroot bs ) != g_bck_end_elem 2 & == g_bck_end_elem 2 != 0 ( nurl_sym_len g_bck ( bck_bkey `fcu_` bs ) ) != b g_bck_end_fcx ! & != 0 g_bck_end_hc != 0 ( nurl_sym_len g_bck ( bck_bkey `fcl_` bs ) ) ! & >= g_bck_sx_elix 0 ( __bck_vex_other bs sids g_bck_sx_elix ) {
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) 1 )
@@ -77644,7 +77931,9 @@ unsafe @ bck_loop_mask s pre s post → s {
         // (…and, after a second tab, the ones whose block alone it views,
         // `vbk_`: AGORA-374.)
         : s vbl ? != 0 g_bck_vbk_any ( nurl_sym_get g_bck ( bck_bkey `vbk_` id ) ) ``
-        : s vil2 ? == 0 ( nurl_str_len vbl ) vil ( nurl_str_cat3 vil `\t` vbl )
+        // (…and, after a third, its `vex_`.)
+        : s vxl ? != 0 g_bck_vex_any ( nurl_sym_get g_bck ( bck_bkey `vex_` id ) ) ``
+        : s vil2 ? == 0 ( nurl_str_len vxl ) ? == 0 ( nurl_str_len vbl ) vil ( nurl_str_cat3 vil `\t` vbl ) ( nurl_str_cat4 vil `\t` vbl ( nurl_str_cat `\t` vxl ) )
         : s line ? == 0 ( nurl_str_len vil2 ) ( nurl_str_cat3 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) ) ( nurl_str_cat4 id `:` ( nurl_sym_get g_bck ( bck_bkey `bs_` id ) ) ( nurl_str_cat `\t` vil2 ) )
         = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat line `` ) ( nurl_str_cat3 out `\n` line )
     }
@@ -77838,6 +78127,17 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ^ ( __word_union ( __word_union both ( __word_drop_all v1 b2 ) ) ( __word_drop_all v2 b1 ) )
 }
 
+// A view's "one element alone" fact (`vex_`) past a join: __vex_join of
+// the live paths' (a dead one, gone by `break`, `continue` or `^`, is no
+// path into what follows). AGORA-374.
+@ __vex_combine s k s v1 s v2 s s1 s s2 s j1 s j2 s s0 → s {
+    ? ( seq s1 `!` ) { ^ ( nurl_str_cat v2 `` ) } {}
+    ? ( seq s2 `!` ) { ^ ( nurl_str_cat v1 `` ) } {}
+    : i ku + ( nurl_str_find k `_` ) 1
+    : s bk ( nurl_str_cat `bs_` ( nurl_str_slice k ku - ( nurl_str_len k ) ku ) )
+    ^ ( __vex_join v1 ( __cj_arm_val j1 s0 bk ) v2 ( __cj_arm_val j2 s0 bk ) )
+}
+
 // What fact `k` holds at the end of the arm whose log is `jx`: its value
 // there if the arm changed it, else its value before the join (`s0`, the
 // facts either arm changed, or the table's).
@@ -77857,7 +78157,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
         : s k ( str_first_word rest ) = rest ( str_skip_word rest )
         : s v1 ? ( __cj_has j1 k ) ( __cj_get j1 k ) ( __cj_get s0 k )
         : s v2 ? ( __cj_has j2 k ) ( __cj_get j2 k ) ( __cj_get s0 k )
-        : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & == 118 ( nurl_str_get k 0 ) == 105 ( nurl_str_get k 1 ) == 95 ( nurl_str_get k 2 ) ( __vi_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & & == 118 ( nurl_str_get k 0 ) == 98 ( nurl_str_get k 1 ) == 107 ( nurl_str_get k 2 ) == 95 ( nurl_str_get k 3 ) ( __vi_combine k v1 v2 s1 s2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
+        : s jv ? & == 118 ( nurl_str_get k 0 ) == 100 ( nurl_str_get k 1 ) ( __vd_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & == 118 ( nurl_str_get k 0 ) == 105 ( nurl_str_get k 1 ) == 95 ( nurl_str_get k 2 ) ( __vi_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & & == 118 ( nurl_str_get k 0 ) == 98 ( nurl_str_get k 1 ) == 107 ( nurl_str_get k 2 ) == 95 ( nurl_str_get k 3 ) ( __vi_combine k v1 v2 s1 s2 j1 j2 s0 ) ? & & & == 118 ( nurl_str_get k 0 ) == 101 ( nurl_str_get k 1 ) == 120 ( nurl_str_get k 2 ) == 95 ( nurl_str_get k 3 ) ( __vex_combine k v1 v2 s1 s2 j1 j2 s0 ) ( __cj_combine k v1 v2 s1 s2 )
         = out ( nurl_str_cat4 out `\n` k ( nurl_str_cat `\t` jv ) )
     }
     ^ out
@@ -77957,7 +78257,10 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
             // views, `vbk_`.)
             : i tb2 ( nurl_str_find vs0 `\t` )
             : s vs ? < tb2 0 vs0 ( nurl_str_slice vs0 0 tb2 )
-            : s hb ? < tb2 0 `` ( nurl_str_slice vs0 + tb2 1 - - ( nurl_str_len vs0 ) tb2 1 )
+            : s hb0 ? < tb2 0 `` ( nurl_str_slice vs0 + tb2 1 - - ( nurl_str_len vs0 ) tb2 1 )
+            : i tb3 ( nurl_str_find hb0 `\t` )
+            : s hb ? < tb3 0 hb0 ( nurl_str_slice hb0 0 tb3 )
+            : s hx ? < tb3 0 `` ( nurl_str_slice hb0 + tb3 1 - - ( nurl_str_len hb0 ) tb3 1 )
             : s k ( bck_bkey `bs_` id )
             : s cur ( nurl_sym_get g_bck k )
             // (How: a source borrowed directly on either path is borrowed
@@ -77972,6 +78275,11 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
                 : s curbk ( nurl_sym_get g_bck ( bck_bkey `vbk_` id ) )
                 : s nbk ( __word_union ( __word_drop_all curbk ( __word_drop_all hs hb ) ) ( __word_drop_all hb cur ) )
                 ? ! ( seq nbk curbk ) { ( bck_put_bf `vbk_` id nbk ) } {}
+            } {}
+            ? != 0 g_bck_vex_any {
+                : s curvx ( nurl_sym_get g_bck ( bck_bkey `vex_` id ) )
+                : s nvx ( __vex_join curvx cur hx hs )
+                ? ! ( seq nvx curvx ) { ( bck_put_bf `vex_` id nvx ) } {}
             } {}
             : s u ( __word_union hs cur )
             ? ! ( seq u cur ) { ( bck_put_bf `bs_` id u ) } {}
@@ -78237,7 +78545,10 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_inn 0
     = g_bck_has_borrow 0
     = g_bck_vbk_any 0
+    = g_bck_vex_any 0
+    = g_bck_elx_any 0
     = g_bck_sxl_on 0
+    ? != 0 ( nurl_sym_len g_bck `vexids` ) { ( bck_put `vexids` `` ) } {}
     = g_bck_brev_id -1
     = g_bck_has_paths 0
     = g_bck_has_deps 0
