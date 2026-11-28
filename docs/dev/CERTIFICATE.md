@@ -675,15 +675,25 @@ against 80.2 s (−0.2 %). Lean is asked only for a term that can be
 `elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3 to 7 and "the words as
 numbers") has the numbers, peak memory included.
 
-N.cap costs 2.9 % of certify's time and 0.4 % of its peak memory. Over the
-62 certify programs, one at a time, best of 2 alternated runs against the
-nurl-cert of main b44ed757, both against the same `formal/` tree, certify
-takes 62.7 s against 61.0 s. The sum of the peak RSS is 41.57 GB against
-41.38 GB, and the largest peak is 2.53 GB against 2.52 GB. The time is the
-kernel's check of the list and Lean elaborating Caps.lean (about 20 ms a
-program), and certify's reading of the core IR's calls (about 7 ms). A
-single-threaded program's Caps.lean imports `C.Caps`, which loads no A3:
-with the threaded theorem in the same module, the peak RSS sum was +5.4 %.
+N.cap costs certify no time: over the 62 certify programs, one at a time,
+best of 3 alternated runs against the nurl-cert and `formal/` of main
+011e9589d (each tree a fresh copy, so neither has its build's page cache
+state), certify takes 56.4 s against 56.7 s (−0.5 %; −1.1 % without the
+joins program, which alone is a third of the corpus), the median program
+5 ms less. Lean's check of Caps.lean costs about 20 ms a program (the
+kernel's check of the list and elaborating `Cert.n_cap`); certify gets it
+back by running nurlc's second compile (the LLVM IR and the unsafe report,
+which go only into the manifest) on a thread while the translation and
+Lean run, by reading the core IR's calls in one scan, and by reading
+`formal/`'s commit from git's files instead of a `git` process. The sum of
+the peak RSS is +0.23 % (41.95 GB against 41.86 GB; the largest peak
+2.535 GB against 2.533 GB): +0.30 % over the 55 single-threaded programs,
+whose Caps.lean loads `A2.Reach` and `C.Caps` (5 MB of `formal/`'s build),
+−0.28 % over the 7 threaded ones. A certificate's imports carry no witness
+program any more (`C/ElabWitness.lean`, `A3/ClaimWitness.lean`, and the
+others the changelog names): an accepted program's Lean check loads 1.7 MB
+less of `C.Elab`, a threaded one's 17 MB less in all. A single-threaded
+program's Caps.lean loads no A3 (`C.Caps3` is apart).
 
 Without `--certify`, nothing changes:
 - `--list-sources=TAG` is off by default;
