@@ -1,4 +1,8 @@
-import A3.Thread
+module
+
+public import A3.Thread
+
+@[expose] public section
 
 /-! A3.0 — what a thread's next step touches is its own.
 

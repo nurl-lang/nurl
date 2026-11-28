@@ -1,4 +1,8 @@
-import A2.FreshWitness
+module
+
+public import A2.FreshWitness
+
+@[expose] public section
 
 /-! # Agora #909: a closure over a view, whose code changes elements through a fresh borrow
 

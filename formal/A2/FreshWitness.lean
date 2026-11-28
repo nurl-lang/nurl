@@ -1,4 +1,8 @@
-import A2.ThruDtorWitness
+module
+
+public import A2.ThruDtorWitness
+
+@[expose] public section
 
 /-! # Agora #909: through-changing code handed a value that holds views
 

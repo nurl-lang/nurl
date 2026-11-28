@@ -1,4 +1,8 @@
-import A2.Soundness
+module
+
+public import A2.Soundness
+
+@[expose] public section
 
 /-! A context with no borrowed parameter and no binding that runs a
 destructor (`NoRootb`), and what typing such a context needs no more than.

@@ -1,4 +1,8 @@
-import A2.NoRootb
+module
+
+public import A2.NoRootb
+
+@[expose] public section
 
 /-!
   A2 — a value owned or not per call, as the calculus has it

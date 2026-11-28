@@ -1,3 +1,7 @@
+module
+
+@[expose] public section
+
 /-!
 # Duplicate-free dependency lists (AGORA-988)
 

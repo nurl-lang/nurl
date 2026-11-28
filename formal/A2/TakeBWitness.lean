@@ -1,4 +1,8 @@
-import A2.PopWitness
+module
+
+public import A2.PopWitness
+
+@[expose] public section
 
 /-!
   A2 — an element that owns memory moved out through a borrow (AGORA-889).

@@ -1,4 +1,8 @@
-import A2.Panic
+module
+
+public import A2.Panic
+
+@[expose] public section
 
 /-! A2 — what a step can change in the store, read off the semantics alone:
 it binds only what the scopes it opens bind, and the scopes it leaves are

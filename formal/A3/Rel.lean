@@ -1,4 +1,8 @@
-import A3.Nid
+module
+
+public import A3.Nid
+
+@[expose] public section
 
 /-! A3.0 — the relations the frame layer is stated with.
 

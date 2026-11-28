@@ -1,5 +1,9 @@
-import A2.Closure
-import A2.Repl
+module
+
+public import A2.Closure
+public import A2.Repl
+
+@[expose] public section
 
 /-! A2 — every package names code of its signature, at every step.
 

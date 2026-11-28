@@ -1,3 +1,7 @@
+module
+
+@[expose] public section
+
 /-!
 # D2: what D0's "validated" means (AGORA-981 / AGORA-984 follow-up)
 

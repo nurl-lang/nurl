@@ -1,5 +1,9 @@
-import A2.Closure
-import A2.ThruLiftKinds
+module
+
+public import A2.Closure
+public import A2.ThruLiftKinds
+
+@[expose] public section
 
 /-! A2 — AGORA-937 stage 3a: what a through-changing call that passes views
 of real memory ends before its body runs.

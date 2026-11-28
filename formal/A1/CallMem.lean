@@ -1,4 +1,8 @@
-import A1.Bind
+module
+
+public import A1.Bind
+
+@[expose] public section
 
 /-! A1 — the memory side of the call step: the store after binding the
 parameters satisfies the invariant in the context the call sets up. -/

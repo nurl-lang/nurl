@@ -1,4 +1,8 @@
-import B.Vec
+module
+
+public import B.Vec
+
+@[expose] public section
 
 /-!
 # B4: the raw core of `HashMap` (AGORA-970)

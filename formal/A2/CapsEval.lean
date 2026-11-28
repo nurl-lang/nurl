@@ -1,5 +1,9 @@
-import A2.TakeB
-import A2.CapsStore
+module
+
+public import A2.TakeB
+public import A2.CapsStore
+
+@[expose] public section
 
 /-! A2 — AGORA-963 step 3: **what a right-hand side yields keeps the
 closure-capture clause.** A step's value is, or is made from, what the store

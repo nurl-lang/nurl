@@ -1,4 +1,8 @@
-import A1.Call
+module
+
+public import A1.Call
+
+@[expose] public section
 
 /-! A1 — the memory a call's parameter binding produces. -/
 

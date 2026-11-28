@@ -1,4 +1,8 @@
-import A3.Assemble
+module
+
+public import A3.Assemble
+
+@[expose] public section
 
 /-! A3.0 — a spawn keeps the configuration invariant.
 

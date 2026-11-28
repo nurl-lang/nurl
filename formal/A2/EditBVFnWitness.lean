@@ -1,4 +1,8 @@
-import A2.TakeBVWitness
+module
+
+public import A2.TakeBVWitness
+
+@[expose] public section
 
 /-!
   A2 — a store through a borrow of an element that holds views and a

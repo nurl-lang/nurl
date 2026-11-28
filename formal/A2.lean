@@ -1,85 +1,87 @@
-import A2.Syntax
-import A2.Semantics
-import A2.Typing
-import A2.Invariant
-import A2.Basic
-import A2.Ctx
-import A2.Stability
-import A2.Repl
-import A2.Heap
-import A2.Sweep
-import A2.SweepD
-import A2.Values
-import A2.Frame
-import A2.Rhs
-import A2.Steps
-import A2.Leak
-import A2.Panic
-import A2.StepFrame
-import A2.TypingFacts
-import A2.EditB
-import A2.EditBV
-import A2.Elem
-import A2.TakeB
-import A2.Preservation
-import A2.Progress
-import A2.Wf
-import A2.Rename
-import A2.Call
-import A2.SrcKeep
-import A2.Bind
-import A2.CallMem
-import A2.CallInv
-import A2.Closure
-import A2.Codes
-import A2.EnvHand
-import A2.Soundness
-import A2.Settle
-import A2.NoRootb
-import A2.DynCell
-import A2.TakeWitness
-import A2.PopWitness
-import A2.RemoveLoopWitness
-import A2.TakeBWitness
-import A2.TakeBVWitness
-import A2.EditBVFnWitness
-import A2.TakeBDWitness
-import A2.HandOver
-import A2.ExitWitness
-import A2.Layout
-import A2.Dtor
-import A2.DtorWitness
-import A2.DropCode
-import A2.ClosureDropWitness
-import A2.ThruClosureWitness
-import A2.ThruDtorWitness
-import A2.ThruGlueWitness
-import A2.ArcDtorWitness
-import A2.ArcPanicWitness
-import A2.FreshWitness
-import A2.Unfresh
-import A2.UnheldFresh
-import A2.StoreViewWitness
-import A2.ParamViewWitness
-import A2.ClosureParamViewWitness
-import A2.InoutViewArgWitness
-import A2.FreshProjWitness
-import A2.FreshNestWitness
-import A2.FreshSatWitness
-import A2.ThruPre
-import A2.RegionMem
-import A2.HeldViewThruWitness
-import A2.DropInWitness
-import A2.ElemIdxWitness
-import A2.RegionChangeWitness
-import A2.SubDcKill
-import A2.SliceCopyViewWitness
-import A2.ThruLiftKinds
-import A2.Region
-import A2.FreshClosureWitness
-import A2.SelfViewCall
-import A2.RegionThruWitness
-import A2.RegionResWitness
-import A2.CapsStore
-import A2.CapsLive
-import A2.Reach
+module
+
+public import A2.Syntax
+public import A2.Semantics
+public import A2.Typing
+public import A2.Invariant
+public import A2.Basic
+public import A2.Ctx
+public import A2.Stability
+public import A2.Repl
+public import A2.Heap
+public import A2.Sweep
+public import A2.SweepD
+public import A2.Values
+public import A2.Frame
+public import A2.Rhs
+public import A2.Steps
+public import A2.Leak
+public import A2.Panic
+public import A2.StepFrame
+public import A2.TypingFacts
+public import A2.EditB
+public import A2.EditBV
+public import A2.Elem
+public import A2.TakeB
+public import A2.Preservation
+public import A2.Progress
+public import A2.Wf
+public import A2.Rename
+public import A2.Call
+public import A2.SrcKeep
+public import A2.Bind
+public import A2.CallMem
+public import A2.CallInv
+public import A2.Closure
+public import A2.Codes
+public import A2.EnvHand
+public import A2.Soundness
+public import A2.Settle
+public import A2.NoRootb
+public import A2.DynCell
+public import A2.TakeWitness
+public import A2.PopWitness
+public import A2.RemoveLoopWitness
+public import A2.TakeBWitness
+public import A2.TakeBVWitness
+public import A2.EditBVFnWitness
+public import A2.TakeBDWitness
+public import A2.HandOver
+public import A2.ExitWitness
+public import A2.Layout
+public import A2.Dtor
+public import A2.DtorWitness
+public import A2.DropCode
+public import A2.ClosureDropWitness
+public import A2.ThruClosureWitness
+public import A2.ThruDtorWitness
+public import A2.ThruGlueWitness
+public import A2.ArcDtorWitness
+public import A2.ArcPanicWitness
+public import A2.FreshWitness
+public import A2.Unfresh
+public import A2.UnheldFresh
+public import A2.StoreViewWitness
+public import A2.ParamViewWitness
+public import A2.ClosureParamViewWitness
+public import A2.InoutViewArgWitness
+public import A2.FreshProjWitness
+public import A2.FreshNestWitness
+public import A2.FreshSatWitness
+public import A2.ThruPre
+public import A2.RegionMem
+public import A2.HeldViewThruWitness
+public import A2.DropInWitness
+public import A2.ElemIdxWitness
+public import A2.RegionChangeWitness
+public import A2.SubDcKill
+public import A2.SliceCopyViewWitness
+public import A2.ThruLiftKinds
+public import A2.Region
+public import A2.FreshClosureWitness
+public import A2.SelfViewCall
+public import A2.RegionThruWitness
+public import A2.RegionResWitness
+public import A2.CapsStore
+public import A2.CapsLive
+public import A2.Reach

@@ -1,4 +1,8 @@
-import A2.Rhs
+module
+
+public import A2.Rhs
+
+@[expose] public section
 
 /-! A2 — Agora #610: the marking sweep (`Mem.sweepD`) keeps the invariant.
 

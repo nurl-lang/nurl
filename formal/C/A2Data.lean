@@ -1,4 +1,8 @@
-import C.A2Stmt
+module
+
+public import C.A2Stmt
+
+@[expose] public section
 
 /-!
 # C8: A2's struct and enum right-hand sides, decided (AGORA-970)

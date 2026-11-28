@@ -1,5 +1,9 @@
-import A3.Make
-import A3.LockGive
+module
+
+public import A3.Make
+public import A3.LockGive
+
+@[expose] public section
 
 /-! A3 — Agora #755 item 1: on A3's threads, the thread whose step drops an
 orphan's last share runs its destructor.

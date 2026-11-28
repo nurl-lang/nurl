@@ -1,4 +1,8 @@
-import A2.Wf
+module
+
+public import A2.Wf
+
+@[expose] public section
 
 /-! A2 — the rules keep what contexts hold by name valid (`NameWF`): a
 binding a live entry holds by name is still bound, with the type its closure

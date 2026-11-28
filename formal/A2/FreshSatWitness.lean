@@ -1,5 +1,9 @@
-import A2.FreshNestWitness
-import A2.UnheldFresh
+module
+
+public import A2.FreshNestWitness
+public import A2.UnheldFresh
+
+@[expose] public section
 
 /-! # AGORA-909: a push through an element read through a slice of an `inout` parameter
 

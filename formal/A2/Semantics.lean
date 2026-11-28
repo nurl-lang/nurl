@@ -1,4 +1,8 @@
-import A2.Syntax
+module
+
+public import A2.Syntax
+
+@[expose] public section
 
 /-
   A2 — operational semantics.

@@ -1,4 +1,8 @@
-import A2.TakeBWitness
+module
+
+public import A2.TakeBWitness
+
+@[expose] public section
 
 /-!
   A2 — an element that holds views moved out through a borrow (AGORA-897).

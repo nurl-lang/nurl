@@ -1,4 +1,8 @@
-import C.A2Chan
+module
+
+public import C.A2Chan
+
+@[expose] public section
 
 /-!
 # C8p: A2's closure literal and its captures by name, decided (AGORA-978)

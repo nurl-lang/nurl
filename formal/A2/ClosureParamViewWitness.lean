@@ -1,5 +1,9 @@
-import A2.ParamViewWitness
-import A2.FreshClosureWitness
+module
+
+public import A2.ParamViewWitness
+public import A2.FreshClosureWitness
+
+@[expose] public section
 
 /-! # AGORA-909: closure code that stores a view its caller lent it through a borrow of its own local
 

@@ -1,4 +1,8 @@
-import A2.StepFrame
+module
+
+public import A2.StepFrame
+
+@[expose] public section
 
 /-! A2 — facts about the typing rules themselves. -/
 

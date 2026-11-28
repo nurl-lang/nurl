@@ -1,4 +1,8 @@
-import C.Cert
+module
+
+public import C.Cert
+
+@[expose] public section
 
 /-!
 # C14: completions of a program with assumed functions (AGORA-1015)

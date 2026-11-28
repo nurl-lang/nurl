@@ -91,6 +91,15 @@ formal/
   A3/              the A3 proof (threads and data-race freedom: `A3.claim_full`, `A3.claim_made_full`; `DESIGN.md`)
 ```
 
+Every file is a Lean module (AGORA-1043): it starts `module`, imports with
+`public import`, and puts its declarations in an `@[expose] public
+section`, so a definition keeps its body for the kernel and nothing is
+hidden. A module can only import modules, so a new file starts the same
+way. A certificate's Lean check is a module too, and loads formal/'s
+definitions and theorem statements but not their proofs (each is checked
+when formal/ builds); a file that is not a module, such as `Check.lean`,
+loads everything.
+
 ### A1 — the modules
 
 | Module | Contents |

@@ -1,5 +1,9 @@
-import C.A2Exit
-import A2.Soundness
+module
+
+public import C.A2Exit
+public import A2.Soundness
+
+@[expose] public section
 
 /-!
 # C11: A2's whole programs, decided (AGORA-970)

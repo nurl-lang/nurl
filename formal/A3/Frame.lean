@@ -1,4 +1,8 @@
-import A3.Defs
+module
+
+public import A3.Defs
+
+@[expose] public section
 
 /-! A3.0 — a thread's step over its own part of the address space.
 

@@ -1,6 +1,10 @@
-import A2.Heap
-import A2.Repl
-import A2.Sweep
+module
+
+public import A2.Heap
+public import A2.Repl
+public import A2.Sweep
+
+@[expose] public section
 
 /-! A2 — the values bindings hold, and the borrows taken from them. -/
 

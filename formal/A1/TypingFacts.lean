@@ -1,4 +1,8 @@
-import A1.Steps
+module
+
+public import A1.Steps
+
+@[expose] public section
 
 /-! A1 — facts about the typing rules themselves. -/
 

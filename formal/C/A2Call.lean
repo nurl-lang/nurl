@@ -1,4 +1,8 @@
-import C.A2Pack
+module
+
+public import C.A2Pack
+
+@[expose] public section
 
 /-!
 # C9: A2's calls, decided (AGORA-970)

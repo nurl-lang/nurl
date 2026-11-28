@@ -1,3 +1,7 @@
+module
+
+@[expose] public section
+
 /-
   A1 — the core calculus of NURL's ownership model: syntax.
 

@@ -1,4 +1,8 @@
-import A1.Basic
+module
+
+public import A1.Basic
+
+@[expose] public section
 
 /-! A1 — facts about contexts and about validity. -/
 

@@ -1,5 +1,9 @@
-import A3.Pres
-import A2.Settle
+module
+
+public import A3.Pres
+public import A2.Settle
+
+@[expose] public section
 
 /-! A3 — Agora #755 item 1: the configuration's marking sweep (`Cfg.sweepD`)
 keeps the configuration's parts.

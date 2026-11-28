@@ -1,4 +1,8 @@
-import A1.CallMem
+module
+
+public import A1.CallMem
+
+@[expose] public section
 
 /-! A1 — the call step preserves the invariant and is typed: the call case
 of preservation, and the call case of progress. -/

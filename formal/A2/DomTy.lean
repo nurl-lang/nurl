@@ -1,4 +1,8 @@
-import A2.Fresh
+module
+
+public import A2.Fresh
+
+@[expose] public section
 
 /-! A2 — what keeps a context's domain, modes and types (`DomTy`): kills,
     updates, a right-hand side, a call's post-context.  Before the renaming lemma,

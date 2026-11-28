@@ -1,12 +1,16 @@
-import B.Vec
-import B.String
-import B.Rc
-import B.Map
-import B.Arc
-import B.Channel
-import B.Cycle
-import B.Size
-import B.StdRc
+module
+
+public import B.Vec
+public import B.String
+public import B.Rc
+public import B.Map
+public import B.Arc
+public import B.Channel
+public import B.Cycle
+public import B.Size
+public import B.StdRc
+
+@[expose] public section
 
 /-! Phase B: the standard library's `unsafe` base meets the semantic types
 the rules give it. B1: `Vec`'s raw core (`B/Vec.lean`). B2: `String`'s NUL

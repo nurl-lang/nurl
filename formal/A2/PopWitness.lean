@@ -1,4 +1,8 @@
-import A2.DynCell
+module
+
+public import A2.DynCell
+
+@[expose] public section
 
 /-!
   A2 — a pop and a remove through a borrow (AGORA-888).

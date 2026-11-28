@@ -1,4 +1,8 @@
-import C.A2Prog
+module
+
+public import C.A2Prog
+
+@[expose] public section
 
 /-!
 # C13: a program's certificate claims (AGORA-1019)

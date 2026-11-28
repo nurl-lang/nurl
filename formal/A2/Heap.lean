@@ -1,4 +1,8 @@
-import A2.Stability
+module
+
+public import A2.Stability
+
+@[expose] public section
 
 /-! A2 — releasing trees, and the one-owner-per-allocation invariant. -/
 

@@ -1,6 +1,10 @@
-import A2.CapClause
-import A2.Basic
-import A2.Steps
+module
+
+public import A2.CapClause
+public import A2.Basic
+public import A2.Steps
+
+@[expose] public section
 
 /-! A2 — AGORA-969 (AGORA-963 step 3, the store half): **the store part of
 the closure-capture clause, kept by the store operations a step makes.**

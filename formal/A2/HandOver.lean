@@ -1,4 +1,8 @@
-import A2.DynCell
+module
+
+public import A2.DynCell
+
+@[expose] public section
 
 /-!
   A2 — an owner's old value handed over to the binding that reads it by

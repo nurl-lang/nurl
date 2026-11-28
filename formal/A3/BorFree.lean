@@ -1,4 +1,8 @@
-import A3.Fresh
+module
+
+public import A3.Fresh
+
+@[expose] public section
 
 /-! A3.0 — a borrowed slot holds no address of its own.
 

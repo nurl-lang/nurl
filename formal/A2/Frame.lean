@@ -1,4 +1,8 @@
-import A2.Values
+module
+
+public import A2.Values
+
+@[expose] public section
 
 /-! A2 — one binding's slot changes; everything that did not depend on it in
 an ending way stays valid. -/

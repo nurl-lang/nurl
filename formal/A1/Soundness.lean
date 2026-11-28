@@ -1,4 +1,8 @@
-import A1.CallInv
+module
+
+public import A1.CallInv
+
+@[expose] public section
 
 /-! A1 — soundness: a well-typed program never reaches a configuration that
 is about to touch memory it may not.  Every step checks allocation and

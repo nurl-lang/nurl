@@ -1,4 +1,8 @@
-import A1.Heap
+module
+
+public import A1.Heap
+
+@[expose] public section
 
 /-! A1 — the values bindings hold, and the borrows taken from them. -/
 

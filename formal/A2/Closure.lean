@@ -1,4 +1,8 @@
-import A2.CallInv
+module
+
+public import A2.CallInv
+
+@[expose] public section
 
 /-! A2 — a call through a package (a closure or a trait object).
 

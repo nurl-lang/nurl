@@ -1,4 +1,8 @@
-import A3.LockDtorWitness
+module
+
+public import A3.LockDtorWitness
+
+@[expose] public section
 
 /-! A3 — Agora #804, `RwLocked D`: a reader-writer lock whose payload is a
 destructor value, read through a guard that lends its payload, and a

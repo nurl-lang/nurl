@@ -1,4 +1,8 @@
-import A2.DropInWitness
+module
+
+public import A2.DropInWitness
+
+@[expose] public section
 
 /-! AGORA-1037 (AGORA-374's example): a change inside one element of a
 `Vec` keeps a borrow of another element.

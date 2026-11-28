@@ -1,4 +1,8 @@
-import A1.Semantics
+module
+
+public import A1.Semantics
+
+@[expose] public section
 
 /-
   A1 — the ownership rules as a type system.

@@ -1,5 +1,9 @@
-import C.A2Prog
-import A2.DtorWitness
+module
+
+public import C.A2Prog
+public import A2.DtorWitness
+
+@[expose] public section
 
 /-! Body-level tests of the A2 deciders on `A2.DtorWitness`'s program: every
 function there has a hand-written typing proof, and `fnOK2B` accepts each

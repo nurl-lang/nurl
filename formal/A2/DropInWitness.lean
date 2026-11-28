@@ -1,4 +1,8 @@
-import A2.PopWitness
+module
+
+public import A2.PopWitness
+
+@[expose] public section
 
 /-! AGORA-937: a change strictly inside the elements of a `Vec` root keeps
 the root's own views (`Eff.dropIn`).

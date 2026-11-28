@@ -1,5 +1,9 @@
-import A2.Basic
-import A2.FreshBase
+module
+
+public import A2.Basic
+public import A2.FreshBase
+
+@[expose] public section
 
 /-! A2 — facts about contexts and about validity. -/
 

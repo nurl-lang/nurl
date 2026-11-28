@@ -1,4 +1,8 @@
-import A2.Leak
+module
+
+public import A2.Leak
+
+@[expose] public section
 
 /-! A2 — a panic unwinds: each scope it leaves drops what it owns, so the
 store it leaves has exactly the bindings outside the frames it crossed, one

@@ -1,4 +1,8 @@
-import A2.Closure
+module
+
+public import A2.Closure
+
+@[expose] public section
 
 /-! AGORA-937 (turn-on 3) in A2: a function whose result holds views of its
 `sink` parameter's region.

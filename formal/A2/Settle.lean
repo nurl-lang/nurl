@@ -1,4 +1,8 @@
-import A2.Soundness
+module
+
+public import A2.Soundness
+
+@[expose] public section
 
 /-! A2 — Agora #610: the reaps that end a step always can be taken, and
 end.

@@ -1,4 +1,8 @@
-import B.Vec
+module
+
+public import B.Vec
+
+@[expose] public section
 
 /-!
 # B2: the raw core of `String` (AGORA-970)

@@ -1,4 +1,8 @@
-import B.Vec
+module
+
+public import B.Vec
+
+@[expose] public section
 
 /-!
 # B9: `std/rc.nu`'s `Rc`, `Weak` and the check-out (AGORA-970)

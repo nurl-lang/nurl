@@ -1,5 +1,9 @@
-import A3.Reap
-import A3.LockDtorWitness
+module
+
+public import A3.Reap
+public import A3.LockDtorWitness
+
+@[expose] public section
 
 /-! `A3.TStep.last_drop_reaps` at the witnesses of a share of a destructor
 value (Agora #755): `Arc D`, `Arc (Vec D)`, `Locked D`, `Locked (Vec D)`.

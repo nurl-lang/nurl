@@ -1,4 +1,8 @@
-import C.Join
+module
+
+public import C.Join
+
+@[expose] public section
 
 /-!
 # C3: calls, decided (AGORA-970)

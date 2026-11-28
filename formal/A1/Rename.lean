@@ -1,4 +1,8 @@
-import A1.Wf
+module
+
+public import A1.Wf
+
+@[expose] public section
 
 /-! A1 — a callee's body, checked once against its own view of its
 parameters, is well-typed where a call places it.

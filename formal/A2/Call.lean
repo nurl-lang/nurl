@@ -1,5 +1,9 @@
-import A2.Rename
-import A2.Preservation
+module
+
+public import A2.Rename
+public import A2.Preservation
+
+@[expose] public section
 
 /-! A2 — the call step.
 

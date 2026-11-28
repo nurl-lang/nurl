@@ -1,4 +1,8 @@
-import A3.LockRoot
+module
+
+public import A3.LockRoot
+
+@[expose] public section
 
 /-! A3 — Agora #818: **the claim, in full.**
 

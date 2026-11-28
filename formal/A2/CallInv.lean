@@ -1,8 +1,12 @@
-import A2.CallMem
-import A2.FrameCall
-import A2.KillVarsStep
-import A2.SrcKeep
-import A2.CapsLive
+module
+
+public import A2.CallMem
+public import A2.FrameCall
+public import A2.KillVarsStep
+public import A2.SrcKeep
+public import A2.CapsLive
+
+@[expose] public section
 
 /-! A2 — the call step preserves the invariant and is typed: the call case
 of preservation, and the call case of progress. -/

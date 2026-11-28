@@ -1,6 +1,10 @@
-import C.A2Panic
-import C.A2Weaker
-import C.Dedup
+module
+
+public import C.A2Panic
+public import C.A2Weaker
+public import C.Dedup
+
+@[expose] public section
 
 /-!
 # C7: A2's statements, decided (AGORA-970)

@@ -1,4 +1,8 @@
-import A3.Ghost
+module
+
+public import A3.Ghost
+
+@[expose] public section
 
 /-! A3.0 — A2's theorems, as facts about one thread on its own part of the
 address space (`ThreadOK`), and the algebra of the parts. -/

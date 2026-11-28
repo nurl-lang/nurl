@@ -1,4 +1,8 @@
-import C.A2Prog
+module
+
+public import C.A2Prog
+
+@[expose] public section
 
 /-!
 # The core IR as words, read in the kernel (AGORA-1029, steps 1, 2 and 4–9)

@@ -1,4 +1,8 @@
-import B.Vec
+module
+
+public import B.Vec
+
+@[expose] public section
 
 /-!
 # B3: `rcbox`, the reference-counted block behind library handles (AGORA-970)

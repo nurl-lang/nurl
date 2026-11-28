@@ -1,6 +1,10 @@
-import C.Caps
-import C.Cert3
-import A3.Reach
+module
+
+public import C.Caps
+public import C.Cert3
+public import A3.Reach
+
+@[expose] public section
 
 /-!
 # C16, threads: what a threaded program can run (AGORA-1013)

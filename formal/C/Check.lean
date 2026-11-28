@@ -1,4 +1,8 @@
-import A1.Soundness
+module
+
+public import A1.Soundness
+
+@[expose] public section
 
 /-!
 # C0: an executable checker for A1, proven sound (AGORA-970)

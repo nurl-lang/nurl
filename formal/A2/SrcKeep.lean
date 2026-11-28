@@ -1,5 +1,9 @@
-import A2.Call
-import A2.Fresh
+module
+
+public import A2.Call
+public import A2.Fresh
+
+@[expose] public section
 
 /-! A2 — what source typing keeps, for the frame a destructor's binding opens.
 

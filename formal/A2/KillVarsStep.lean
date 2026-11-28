@@ -1,4 +1,8 @@
-import A2.Invariant
+module
+
+public import A2.Invariant
+
+@[expose] public section
 
 namespace A2
 

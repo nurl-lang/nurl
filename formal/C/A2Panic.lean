@@ -1,5 +1,9 @@
-import C.A2Rhs
-import A2.Invariant
+module
+
+public import C.A2Rhs
+public import A2.Invariant
+
+@[expose] public section
 
 /-!
 # C10: `CtxWF` and `NameWF` decided; A2's `panic` (AGORA-970)

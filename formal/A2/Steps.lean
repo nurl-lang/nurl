@@ -1,5 +1,9 @@
-import A2.Rhs
-import A2.SweepD
+module
+
+public import A2.Rhs
+public import A2.SweepD
+
+@[expose] public section
 
 /-! A2 — the memory side of each step. -/
 

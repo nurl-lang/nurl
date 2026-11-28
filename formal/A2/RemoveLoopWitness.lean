@@ -1,4 +1,8 @@
-import A2.PopWitness
+module
+
+public import A2.PopWitness
+
+@[expose] public section
 
 /-!
   A2 — `vec_remove b i` through a borrow at a general index, as a loop

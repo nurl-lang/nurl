@@ -1,4 +1,8 @@
-import A2.Basic
+module
+
+public import A2.Basic
+
+@[expose] public section
 
 /-! A2 — Agora #909: the context facts `FreshOK` needs, early enough for the
 invariant (`MInv.fresh`) and every rule's proof to use. -/

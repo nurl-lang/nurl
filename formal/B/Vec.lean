@@ -1,4 +1,8 @@
-import A1.Semantics
+module
+
+public import A1.Semantics
+
+@[expose] public section
 
 /-!
 # B1: the raw core of `Vec` meets A1's `Vec` (AGORA-970)

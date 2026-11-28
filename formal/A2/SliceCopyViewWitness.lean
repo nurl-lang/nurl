@@ -1,4 +1,8 @@
-import A2.Closure
+module
+
+public import A2.Closure
+
+@[expose] public section
 
 /-! AGORA-935 in A2: a copy of a slice of views holds copies of its loans.
 

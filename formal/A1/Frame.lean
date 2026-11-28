@@ -1,4 +1,8 @@
-import A1.Values
+module
+
+public import A1.Values
+
+@[expose] public section
 
 /-! A1 — one binding's slot changes; everything that did not depend on it in
 an ending way stays valid. -/

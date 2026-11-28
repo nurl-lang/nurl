@@ -1,6 +1,10 @@
-import A3.Claim
-import A2.ArcDtorWitness
-import A2.ArcPanicWitness
+module
+
+public import A3.Claim
+public import A2.ArcDtorWitness
+public import A2.ArcPanicWitness
+
+@[expose] public section
 
 /-! A3.0's claim at its witnesses: an `Arc` of a destructor value, of a `Vec`
 of them, and one whose destructor panics (Agora #610, #755, #790).  Apart

@@ -1,5 +1,9 @@
-import A3.LockGive
-import A3.ClaimWitness
+module
+
+public import A3.LockGive
+public import A3.ClaimWitness
+
+@[expose] public section
 
 /-! A3 — Agora #755, `Locked D`: a lock share whose payload is a destructor
 value, and a witness.

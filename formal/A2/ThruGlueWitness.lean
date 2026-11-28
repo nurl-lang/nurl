@@ -1,5 +1,9 @@
-import A2.DtorWitness
-import A2.ThruClosureWitness
+module
+
+public import A2.DtorWitness
+public import A2.ThruClosureWitness
+
+@[expose] public section
 
 /-! # A struct's own `% Drop` that changes elements through a borrow, run by its glue
 

@@ -1,4 +1,8 @@
-import A2.CapsEval
+module
+
+public import A2.CapsEval
+
+@[expose] public section
 
 /-! A2 — AGORA-963 step 3: **every step keeps the closure-capture clause's
 slot half at a root that is none of the running statement's killable

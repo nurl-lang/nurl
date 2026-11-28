@@ -1,4 +1,8 @@
-import A2.Typing
+module
+
+public import A2.Typing
+
+@[expose] public section
 
 /-!
 # C5: A2's expressions, decided (AGORA-970)

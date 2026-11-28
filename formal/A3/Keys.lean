@@ -1,6 +1,10 @@
-import A3.Mark
-import A3.Fresh
-import A3.SpawnOld
+module
+
+public import A3.Mark
+public import A3.Fresh
+public import A3.SpawnOld
+
+@[expose] public section
 
 /-! A3 — Agora #805: **every share names a key below `nid`**.
 

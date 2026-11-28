@@ -1,5 +1,9 @@
-import C.Check
-import C.Dedup
+module
+
+public import C.Check
+public import C.Dedup
+
+@[expose] public section
 
 /-!
 # C1: joins (`ite`, `while`) over finite contexts (AGORA-970)
