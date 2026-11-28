@@ -215,6 +215,7 @@ $ `stdlib/core/vec.nu`
 // `--engine` (in shadow); with the flag off every hook is one test of
 // g_core_on.
 : ~ i g_core_on 0  // 1: the walk builds the core IR (--emit-core)
+: ~ i g_prim_print 0  // 1 while core_print_prims prints the declared summaries (eng_prim)
 : ~ i g_core_live 0  // 1 while a function's IR is being built
 // The builder's tables, words each: one `( Vec i )` per CT_* number
 // (__ct_get / __ct_set / __ct_need reach them, AGORA-905).
@@ -23956,6 +23957,17 @@ unsafe @ eng_byte s w i k → i {
 
 // A declared summary (eng_prims).
 @ eng_prim s name s modes s res s lends s rholds s effects s stores s consumes s elems s detaches s invokes s cloargs s shares s catches → v {
+    // (`--emit-core` prints the table as it is read here, a `prim` line
+    // each, core_print_prims: tools/ncore's checker reads these, not a copy
+    // of its own — AGORA-1046.)
+    ? != 0 g_prim_print {
+        ( nurl_print `prim\t` ) ( nurl_print name ) ( nurl_print `\t` ) ( nurl_print modes ) ( nurl_print `\t` ) ( nurl_print res )
+        ( nurl_print `\t` ) ( nurl_print lends ) ( nurl_print `\t` ) ( nurl_print rholds ) ( nurl_print `\t` ) ( nurl_print effects )
+        ( nurl_print `\t` ) ( nurl_print stores ) ( nurl_print `\t` ) ( nurl_print consumes ) ( nurl_print `\t` ) ( nurl_print elems )
+        ( nurl_print `\t` ) ( nurl_print detaches ) ( nurl_print `\t` ) ( nurl_print invokes ) ( nurl_print `\t` ) ( nurl_print cloargs )
+        ( nurl_print `\t` ) ( nurl_print shares ) ( nurl_print `\t` ) ( nurl_print catches ) ( nurl_print `\n` )
+        ^ v
+    } {}
     : i r ( sx_new )
     ( im_put g_sx_ix ( __core_in name ) + r 1 )
     ( sm_put r SM_STATE 2 )
@@ -24532,7 +24544,9 @@ unsafe @ eng_byte s w i k → i {
 // What a call of a raw function of the library does, said here because
 // its body is raw memory the engine does not read (PROPOSAL_CORE_IR D2:
 // until a summary is declared beside the function it describes). Made
-// from tools/ncore/prims.py, the reference checker's table.
+// once from the reference checker's table; now the one table there is:
+// `--emit-core` prints it (core_print_prims) and tools/ncore reads it
+// (AGORA-1046).
 //   modes     how each parameter is passed
 //   lends     parameter path kind: the result is a handle of / a view into it
 //   rholds    where-in-the-result parameter path kind: the result holds it
@@ -25912,6 +25926,15 @@ unsafe @ eng_print_types → v {
     }
 }
 
+// The declared summaries, printed for `--emit-core` (eng_prim's `prim`
+// lines): the table eng_prims is, read through without registering it —
+// the engine registers it itself, once (eng_prims_once).
+@ core_print_prims → v {
+    = g_prim_print 1
+    ( eng_prims )
+    = g_prim_print 0
+}
+
 @ eng_prims_once → v {
     ? >= g_sx_ix 0 { ^ } {}
     ( sx_new )
@@ -27098,6 +27121,7 @@ unsafe @ core_flush i syms → v {
     ? == 0 g_eng_decide {
         ( core_print_types syms )
         ( core_print_virts )
+        ( core_print_prims )
         ( core_print_sums syms )
     } {}
     ? != 0 g_eng_on {

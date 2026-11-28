@@ -44,7 +44,7 @@ it) or `end` (the binding). `kills_paths` is formal/A2's `Eff.kills`
 lifted from bindings to places.
 
 A **summary** per function: `res`, `lends`, `rholds`, `effects`, `stores`,
-`consumes`, `elems` as in prims.py, and `invokes` (the closure arguments it
+`consumes`, `elems` as in nurlc's declared summaries (`prim` lines), and `invokes` (the closure arguments it
 runs), `cloargs` (what it hands them of its other arguments), `detaches`
 (closures another thread runs), `shares` (arguments several threads reach),
 `regions` (effects inside a shared payload). Program functions are
@@ -262,10 +262,10 @@ summarised by the same analysis, to a fixpoint over the program.
 | A parameter, or a part of one, handed to a callee that runs what it holds is run by this function (`invokes`), as a closure parameter called directly is | §2.11 (agora #736) | `apply_call` |
 | A call's other arguments are frozen against the closures it runs: one that reaches a shared payload such a closure changes (its `regions`, or a change under `*` of a capture that is a shared handle) is refused | §2.2, §2.4 (agora #736) | `apply_call` |
 | A closure run whose body changes, through one capture, what another of its captures views (a Vec grown, a slice of it read) is refused: the body reads that one too, in this run or the next | §2.11 | `run_closures` |
-| `signal_install` keeps its handler past the call (declared: `detaches` the closure, as `thread_spawn`) | §2.11 | prims |
+| `signal_install` keeps its handler past the call (declared: `detaches` the closure, as `thread_spawn`) | §2.11 | nurlc's `eng_prims` |
 | A raw string captured by value is a copy of its address: the closure holds a view of the binding's buffer, which stays the binding's (no move) - a closure another thread runs, or one handed back, may not hold it | §2.13, §6.5 | `make_closure` |
 | What another thread runs holds no copy of the views a parameter holds (a clone of a `( Vec s )` parameter), unless the same capture holds the parameter itself (its views go with their owner's value); and a binding read out of a library handle field, captured by it, takes the handle over: its owner is moved | §6.5 | `apply_call` (detaches) |
-| A swap or a reverse moves elements between slots and releases none: a handle of an element and a view of its buffer stay good; a loop walking the container is upset (effect `permute`) | §2.5 | `effect`, `prims.py` |
+| A swap or a reverse moves elements between slots and releases none: a handle of an element and a view of its buffer stay good; a loop walking the container is upset (effect `permute`) | §2.5 | `effect`, nurlc's `eng_prims` |
 | A parameter of a type with nothing to release (a struct of views and numbers: nurlc's `drops` answer) is copied by its words: its new holder holds the views it holds and nothing of the parameter | §2.13 | `transfer` |
 | What goes into a shared handle's payload is held by the one object every share reaches: a binding that may be another handle on it holds it too | §2.10 (agora #392) | `store_into` |
 | A view of a binding's buffer kept elsewhere follows the binding into the container, the literal or the field that takes it. Into a field, it follows once the field's old value is gone: the store ends what was lent out of the old value, not the view that moved in with the new one (`= . xx v xs`, then a slice of xs read: agora #799) | §2.10 (agora #337, #799) | `rehome_views`, `stmt_assign` |
@@ -356,5 +356,6 @@ checker give it. Each rule names the probes that hold all three to it.
 ## Declared summaries
 
 A library function whose body uses raw memory has no body the checker can
-read: `prims.py` declares its summary (proposal D2). A probe that calls one
+read: nurlc declares its summary (proposal D2; `eng_prims`, printed by
+`--emit-core` as a `prim` line each, which fromnurlc.py reads). A probe that calls one
 with none is skipped and named (`no summary for …`), never guessed.

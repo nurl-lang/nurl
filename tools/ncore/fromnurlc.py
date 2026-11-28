@@ -78,6 +78,35 @@ def emit_core(path):
     return r.stdout, gaps, r.returncode, r.stderr
 
 
+# A `prim` line's fields after the name and the result, in order, and the
+# shape of each entry: n a parameter's number, p a path (`-` the empty one,
+# its steps joined by `/`), k / e a kind or an effect (eng_prim's own).
+PRIM_FIELDS = (("lends", "npk"), ("rholds", "pnpk"), ("effects", "npe"), ("stores", "npnpk"),
+               ("consumes", "n"), ("elems", "n"), ("detaches", "n"), ("invokes", "n"),
+               ("cloargs", "nnnp"), ("shares", "n"), ("catches", "n"))
+
+
+def _prim_word(w, c):
+    if c == "n":
+        return int(w)
+    if c == "p":
+        return () if w == "-" else tuple(w.split("/"))
+    return w
+
+
+def parse_prim(f):
+    """A declared summary as nurlc's engine holds it (eng_prim, printed by
+    `--emit-core`), in the form check.py reads: modes, res, and each field a
+    list of entries, a one-word shape's entries bare."""
+    sm = {"modes": f[2].split(), "res": f[3]}
+    for (key, shape), text in zip(PRIM_FIELDS, f[4:]):
+        ws = text.split()
+        k = len(shape)
+        ents = [tuple(_prim_word(w, c) for w, c in zip(ws[i:i + k], shape)) for i in range(0, len(ws), k)]
+        sm[key] = [e[0] for e in ents] if k == 1 else ents
+    return sm
+
+
 class Reader:
     def __init__(self, text):
         self.prog = Program()
@@ -97,6 +126,7 @@ class Reader:
         self.prog.arcs = set()         # …and the ones other threads may hold a copy of
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
         self.prog.walk_sums = {}       # a function -> the answers the walk's summaries hold for it (`sum` lines)
+        self.prog.prims = {}           # a library function -> its declared summary, nurlc's own table (`prim` lines)
         self.types = {}                # type string -> TypeInfo
         self.conv_memo = {}
         self.raw_fns = []
@@ -128,6 +158,9 @@ class Reader:
             elif line.startswith("virt\t"):
                 f = line.split("\t")
                 self.prog.virt[f[1]] = f[2:]
+            elif line.startswith("prim\t"):
+                f = line.split("\t")
+                self.prog.prims[f[1]] = parse_prim(f)
             elif line.startswith("sum\t"):
                 f = line.split("\t")
                 self.prog.walk_sums[f[1]] = dict(kv.split("=", 1) for kv in f[3:])

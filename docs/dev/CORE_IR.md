@@ -258,7 +258,7 @@ before `core_fn_begin`:
 | maps, the functions kept | `im_*`; `eng_keep_fn` keeps a function's IR until the module is done; `eng_link` links its blocks |
 | types | `et_of` reads a type once from the walk's own tables; the questions the rules ask of it (`et_scalar`, `et_copyable`, `et_owning`, …) |
 | paths, places, loans, values, states | a place is a variable and an interned path; a value (AV) is four words — ownership, the loans it is, the places it names, what it holds — and a state is a vector of them |
-| summaries | `tp2`…`tp5` (tuples kept for the module), `sm_*`; `eng_prims` (the declared summaries of raw library functions, generated from `tools/ncore/prims.py`), `eng_derive` (the walk's own tables for the rest, until summaries are declared in source: decision D2) |
+| summaries | `tp2`…`tp5` (tuples kept for the module), `sm_*`; `eng_prims` (the declared summaries of raw library functions: the one table, which `--emit-core` prints as `prim` lines for tools/ncore, AGORA-1046), `eng_derive` (the walk's own tables for the rest, until summaries are declared in source: decision D2) |
 | the rules | `eng_read`, `eng_effect`, `eng_transfer`, `eng_apply_call`, `call_closure`, `eng_rvalue`, `eng_stmt` …: each the function of `check.py` it is named after |
 | the driver | `eng_select` (which functions are walked: a function of the program is walked and reported on, a library function it reaches is trusted), `eng_check_module`, `eng_main` |
 

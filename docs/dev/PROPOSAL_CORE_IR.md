@@ -51,7 +51,7 @@ What the table has shown so far for §7:
 
   | summaries used | probes that agree |
   |---|---|
-  | hand-declared for about 220 functions (`prims.py`), the walk's tables for the other raw ones | 3,182 |
+  | hand-declared for about 220 functions (then `prims.py`, now nurlc's `eng_prims`), the walk's tables for the other raw ones | 3,182 |
   | the same, but every library function whose body stays inside the raw boundary is walked, declared or not (`NCORE_WALK=1`) | 3,180 |
   | no hand-declared summary at all (`NCORE_WALK=1 NCORE_DERIVE=1`) | 2,975 |
 

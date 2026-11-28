@@ -501,7 +501,7 @@ open A2 C
     }
     ( json_arr_push L ( mj_row `library-summaries` `the standard library as the term has it: its calls are A2 primitives and declared summaries`
     `the library's unsafe base follows formal/B's models by inspection, not by proof (AGORA-1014 ties each to its theorem)`
-    `packages/nurl-cert/src/tolean.nu, tools/ncore/prims.py, formal/B` `the NURL formal model (claude-formal)` mc ) )
+    `packages/nurl-cert/src/tolean.nu, formal/B` `the NURL formal model (claude-formal)` mc ) )
     ( json_arr_push L ( mj_row `llvm` `LLVM: the IR to machine code` `the claims are about the program's model; phase D validates the drops, nothing proves codegen`
     `the LLVM IR hash in this manifest` `the LLVM project` mc ) )
     ( json_arr_push L ( mj_row `linker` `the linker` `it joins the program with the C runtime` `the build` `the toolchain's linker` mc ) )

@@ -8,8 +8,8 @@ the fused walk already holds for it (`sum` lines of `nurlc --emit-core`)
 are read into the checker's form here: the same trust the compiler places
 in that function today, in the engine's words.
 
-`prims.py` wins where it declares a function: those summaries were written
-against docs/MEMORY.md and the probes.  `compare()` says where the two
+A declared summary wins where there is one: nurlc's own table (`prim` lines,
+written against docs/MEMORY.md and the probes).  `compare()` says where the two
 disagree.
 """
 
