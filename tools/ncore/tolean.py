@@ -276,9 +276,10 @@ def lean_ty(t):
         a, e = inner[:cm], inner[cm + 2:]
         no_clo(a)
         no_clo(e)
-        if a == "i8*" or e == "i8*":
+        if "i8*" in a or "i8*" in e:
             # a raw string held in a value is a view (MEMORY.md §2.13), not
-            # translated yet (as a struct field's)
+            # translated yet (as a struct field's): also one nested in a
+            # member, an option of raw text inside a result
             raise Unsupported(f"type {t}: a raw string held in a result")
         le = lean_ty(e)
         la = lean_ty(a)

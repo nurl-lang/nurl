@@ -84,6 +84,10 @@ expect_unsupported "a call of a function not in the program" "$TMP/e.core" "call
 printf '$ `stdlib/core/errors.nu`\n\n@ g !s IoErr r → i {\n    ?? r {\n        T _ → { ^ 0 }\n        F _ → { ^ 1 }\n    }\n}\n\n@ main → i {\n    ^ 0\n}\n' > "$TMP/rs.nu"
 "$NURLC" --emit-core "$TMP/rs.nu" > "$TMP/rs.core" 2> /dev/null || bad "rs: nurlc --emit-core"
 expect_unsupported "a raw string held in a result" "$TMP/rs.core" "a raw string held in a result"
+# ... and one nested in a member: an option of raw text inside a result
+printf '$ `stdlib/core/errors.nu`\n\n@ g !?s IoErr r → i {\n    ?? r {\n        T _ → { ^ 0 }\n        F _ → { ^ 1 }\n    }\n}\n\n@ main → i {\n    ^ 0\n}\n' > "$TMP/ros.nu"
+"$NURLC" --emit-core "$TMP/ros.nu" > "$TMP/ros.core" 2> /dev/null || bad "ros: nurlc --emit-core"
+expect_unsupported "an option of raw text held in a result" "$TMP/ros.core" "a raw string held in a result"
 
 # No entry.
 sed 's/^fn\tmain\t/fn\tnot_main\t/' "$TMP/a.core" > "$TMP/f.core"

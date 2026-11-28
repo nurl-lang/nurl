@@ -834,8 +834,9 @@ $ `coreir.nu`
             \ ( __no_clo ( string_data a ) )
             \ ( __no_clo ( string_data e ) )
             // (a raw string held in a value is a view, MEMORY.md §2.13, not
-            // translated yet, as a struct field's)
-            ? | ( __eq ( string_data a ) `i8*` ) ( __eq ( string_data e ) `i8*` ) {
+            // translated yet, as a struct field's: also one nested in a
+            // member, an option of raw text inside a result)
+            ? | ( __has ( string_data a ) `i8*` ) ( __has ( string_data e ) `i8*` ) {
                 ^ @ !String String { F ( __f1 `type %: a raw string held in a result` ty ) }
             } {}
             : String le \ ( __lean_ty m t ( string_data e ) )
