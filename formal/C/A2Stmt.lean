@@ -214,11 +214,10 @@ theorem endOK2Go_sound {Γ : Ctx} {x : Var} : ∀ {D : List Var} {acc res : Bool
           · exact hall v hv' E hE
       · cases h
 
-theorem endOK_of_entry {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D)
-    (h : ∀ v ∈ D, ∀ E, Γ v = some E → endOKEntry x E = true) : EndOK Γ x := by
-  have hentry : ∀ v E, Γ v = some E → endOKEntry x E = true := fun v E hE => h v (mem_of_some2 hs hE) E hE
+theorem endOK_of_all_entry {Γ : Ctx} {x : Var}
+    (h : ∀ v E, Γ v = some E → endOKEntry x E = true) : EndOK Γ x := by
   refine ⟨fun p E hE hm d hd hb => ?_, fun v E hE hd ho => ?_, fun v E hE hd ho hk d hdd hn => ?_⟩
-  · have := hentry p E hE
+  · have := h p E hE
     simp only [endOKEntry, Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true',
       decide_eq_false_iff_not] at this
     rcases this.1.1 with h0 | h0
@@ -226,11 +225,11 @@ theorem endOK_of_entry {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D
     · have := List.all_eq_true.mp h0 d hd
       simp only [Bool.or_eq_true, decide_eq_true_eq] at this
       exact this.resolve_left hb
-  · have := hentry v E hE
+  · have := h v E hE
     simp only [endOKEntry, hd, ho, Bool.and_eq_true, Bool.not_true, Bool.false_or,
       Bool.not_eq_true'] at this
     exact this.1.2
-  · have := hentry v E hE
+  · have := h v E hE
     simp only [endOKEntry, hd, ho, Bool.and_eq_true, Bool.not_true, Bool.false_or,
       Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at this
     rcases this.2 with h0 | h0
@@ -238,6 +237,10 @@ theorem endOK_of_entry {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D
     · have := List.all_eq_true.mp h0 d hdd
       simp only [hn, Bool.false_or, decide_eq_true_eq] at this
       exact this
+
+theorem endOK_of_entry {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D)
+    (h : ∀ v ∈ D, ∀ E, Γ v = some E → endOKEntry x E = true) : EndOK Γ x :=
+  endOK_of_all_entry fun v E hE => h v (mem_of_some2 hs hE) E hE
 
 theorem exitScope_eq_upd {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D)
     (h : ∀ v ∈ D, ∀ E, Γ v = some E → hits .replace false x E = false) :
@@ -350,30 +353,6 @@ theorem endOK2TreeGo_sound {x : Var} : ∀ {T : CtxT Entry} {acc res : Bool},
               · exact hallR _ E hE
         · cases h
       · cases h
-
-theorem endOK_of_all_entry {Γ : Ctx} {x : Var}
-    (h : ∀ v E, Γ v = some E → endOKEntry x E = true) : EndOK Γ x := by
-  refine ⟨fun p E hE hm d hd hb => ?_, fun v E hE hd ho => ?_, fun v E hE hd ho hk d hdd hn => ?_⟩
-  · have := h p E hE
-    simp only [endOKEntry, Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true',
-      decide_eq_false_iff_not] at this
-    rcases this.1.1 with h0 | h0
-    · exact absurd hm h0
-    · have := List.all_eq_true.mp h0 d hd
-      simp only [Bool.or_eq_true, decide_eq_true_eq] at this
-      exact this.resolve_left hb
-  · have := h v E hE
-    simp only [endOKEntry, hd, ho, Bool.and_eq_true, Bool.not_true, Bool.false_or,
-      Bool.not_eq_true'] at this
-    exact this.1.2
-  · have := h v E hE
-    simp only [endOKEntry, hd, ho, Bool.and_eq_true, Bool.not_true, Bool.false_or,
-      Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at this
-    rcases this.2 with h0 | h0
-    · exact absurd hk h0
-    · have := List.all_eq_true.mp h0 d hdd
-      simp only [hn, Bool.false_or, decide_eq_true_eq] at this
-      exact this
 
 theorem kill_eq_self_of_noHits {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var}
     (h : ∀ v E, Γ v = some E → hits e hv x E = false) : kill e hv x Γ = Γ := by
@@ -567,9 +546,34 @@ def CallDec.OK (P : Prog) (D : List Var) (C : CallDec) : Prop :=
 theorem inferRhs2_OK (D : List Var) : RhsDec.OK D (inferRhs2 D) :=
   fun _ _ _ _ _ hs hD h => ⟨inferRhs2_sound hs h, inferRhs2_supported hs hD h⟩
 
-/-- Fast tree-preserving RHS decider for the common core forms (`expr`, `new`,
-    `var`, `slit`); other forms fall back to `R`. -/
-def rhsTree (R : RhsDec) (D : List Var) (T : CtxT Entry) (F : List Var) (r : Rhs) : Option (Entry × CtxT Entry) :=
+/-- Tree-backed RHS decider used by `checkStmt2T`. -/
+abbrev RhsTreeDec := CtxT Entry → List Var → Rhs → Option (Entry × CtxT Entry)
+
+def RhsTreeDec.OK (D : List Var) (RT : RhsTreeDec) : Prop :=
+  ∀ T F r E T1, Supported2 T.get D → (∀ v ∈ r.vars, v ∈ D) →
+    RT T F r = some (E, T1) → RhsT T.get F r E T1.get ∧ Supported2 T1.get D
+
+/-- Wrap an arbitrary `RhsDec` into a `RhsTreeDec`, always delegating to `R`. -/
+def rhsTreeOf (D : List Var) (R : RhsDec) : RhsTreeDec := fun T F r =>
+  match R T.get F r with
+  | some (E, Γ1) => some (E, tblOf D Γ1)
+  | none => none
+
+theorem rhsTreeOf_OK {D : List Var} {R : RhsDec} (hR : R.OK D) : RhsTreeDec.OK D (rhsTreeOf D R) := by
+  intro T F r E T1 hs hD h
+  unfold rhsTreeOf at h
+  split at h
+  · rename_i E0 Γ1 hr
+    simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+    obtain ⟨hrt, hs1⟩ := hR T.get F r E0 Γ1 hs hD hr
+    have hself : (tblOf D Γ1).get = Γ1 := ctxOfTbl_self hs1
+    rw [hself]
+    exact ⟨hrt, hs1⟩
+  · cases h
+
+/-- Opt-in tree-preserving RHS decider for deciders extending `inferRhs2` on
+    core forms (`expr`, `new`, `slit`, `var`); other forms delegate to `R`. -/
+def rhsTreeFast (D : List Var) (R : RhsDec) : RhsTreeDec := fun T F r =>
   match r with
   | .expr e => if checkExpr2 T.get e then some (intE, T) else none
   | .new t => if (Ty.vec t).ok then some (⟨.vec t, .own, true, [], [], false, false, false, false⟩, T) else none
@@ -591,31 +595,26 @@ def rhsTree (R : RhsDec) (D : List Var) (T : CtxT Entry) (F : List Var) (r : Rhs
       | .bor => some ({ E with dtor := false, dbind := false }, T)
       | _ => none
     | none => none
-  | _ =>
-    match R T.get F r with
-    | some (E, Γ1) => some (E, tblOf D Γ1)
-    | none => none
+  | _ => rhsTreeOf D R T F r
 
-theorem rhsTree_sound {R : RhsDec} {D : List Var} (hR : R.OK D)
-    {T T1 : CtxT Entry} {F : List Var} {r : Rhs} {E : Entry}
-    (hs : Supported2 T.get D) (hD : ∀ v ∈ r.vars, v ∈ D)
-    (h : rhsTree R D T F r = some (E, T1)) : RhsT T.get F r E T1.get ∧ Supported2 T1.get D := by
+theorem rhsTreeFast_OK {D : List Var} {R : RhsDec} (hR : R.OK D) : RhsTreeDec.OK D (rhsTreeFast D R) := by
+  intro T F r E T1 hs hD h
   cases r with
   | expr e =>
-    simp only [rhsTree] at h; split at h
+    simp only [rhsTreeFast] at h; split at h
     · rename_i he; simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
       exact ⟨.expr (checkExpr2_sound he), hs⟩
     · cases h
   | new t =>
-    simp only [rhsTree] at h; split at h
+    simp only [rhsTreeFast] at h; split at h
     · rename_i ht; simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
       exact ⟨.new ht, hs⟩
     · cases h
   | slit n =>
-    simp only [rhsTree, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+    simp only [rhsTreeFast, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
     exact ⟨.slit, hs⟩
   | var y =>
-    simp only [rhsTree] at h
+    simp only [rhsTreeFast] at h
     split at h
     · rename_i E0 hE0
       obtain ⟨hy, hl⟩ := liveE2_some hE0
@@ -653,16 +652,7 @@ theorem rhsTree_sound {R : RhsDec} {D : List Var} (hR : R.OK D)
         exact ⟨.copyBor hy hl hm, hs⟩
       · cases h
     · cases h
-  | _ =>
-    simp only [rhsTree] at h
-    split at h
-    · rename_i E0 Γ1 hr
-      simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
-      obtain ⟨hrt, hs1⟩ := hR T.get F _ E0 Γ1 hs hD hr
-      have hself : (tblOf D Γ1).get = Γ1 := ctxOfTbl_self hs1
-      rw [hself]
-      exact ⟨hrt, hs1⟩
-    · cases h
+  | _ => exact rhsTreeOf_OK hR T F _ E T1 hs hD h
 
 /-- `letcall`'s destructor premise: a call handing back an owned value of a
     destructor type binds it to a `letd` first thing, and assigns it nothing. -/
@@ -935,7 +925,7 @@ theorem stmtT_settleOut2 {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : 
     · exact .sub wΓ ht (Or.inr w)
   · rw [ctxOfTbl_self hsΔ]; exact ht
 
-def pushB (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option Ctx :=
+def pushBT (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option (CtxT Entry) :=
   match liveE2 Γ x, liveE2 Γ y with
   | some Ex, some Ey =>
     match vecElem2 Ex.ty with
@@ -947,7 +937,7 @@ def pushB (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option Ctx :=
           match liveE2 Γ1 x with
           | some Ex1 =>
             if dtorSafeB D Γ1 .realloc t.holdsView x && (!Ex1.dbind || subB2 (ownHeld true t Ds) Ex1.held) then
-              some (ctxOfTbl <| settleOutL2 D [x] Γ
+              some (settleOutL2 D [x] Γ
                 (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t Ds }))
             else none
           | none => none
@@ -956,10 +946,13 @@ def pushB (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option Ctx :=
     | none => none
   | _, _ => none
 
-theorem pushB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List Var} {x y : Var} {Δ : Ctx}
-    (hs : Supported2 Γ D) (hD : ∀ v ∈ (Stmt.push x y).vars, v ∈ D) (h : pushB D Γ F x y = some Δ) :
-    StmtT P ξ Γ F (.push x y) Δ ∧ Supported2 Δ D := by
-  simp only [pushB] at h
+def pushB (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option Ctx :=
+  (pushBT D Γ F x y).map ctxOfTbl
+
+theorem pushBT_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List Var} {x y : Var} {TΔ : CtxT Entry}
+    (hs : Supported2 Γ D) (hD : ∀ v ∈ (Stmt.push x y).vars, v ∈ D) (h : pushBT D Γ F x y = some TΔ) :
+    StmtT P ξ Γ F (.push x y) TΔ.get ∧ Supported2 TΔ.get D := by
+  simp only [pushBT] at h
   split at h
   · rename_i Ex Ey hEx hEy
     obtain ⟨hx, hxl⟩ := liveE2_some hEx
@@ -998,6 +991,16 @@ theorem pushB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List 
       · cases h
     · cases h
   · cases h
+
+theorem pushB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List Var} {x y : Var} {Δ : Ctx}
+    (hs : Supported2 Γ D) (hD : ∀ v ∈ (Stmt.push x y).vars, v ∈ D) (h : pushB D Γ F x y = some Δ) :
+    StmtT P ξ Γ F (.push x y) Δ ∧ Supported2 Δ D := by
+  unfold pushB at h
+  cases hp : pushBT D Γ F x y with
+  | none => rw [hp] at h; cases h
+  | some TΔ =>
+    rw [hp] at h; simp only [Option.map_some, Option.some.injEq] at h; subst h
+    exact pushBT_sound hs hD hp
 
 /-- The payload type of a lock or cell type. -/
 def lockPay : Ty → Option Ty
@@ -1881,18 +1884,18 @@ theorem callcEArgB_sound {Γ : Ctx} {Ec : Entry} {ms : List Nat} {q : Cross} {si
     · cases h
   · cases h
 
-def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entry → List Var → Stmt → Option (CtxT Entry)
+def checkStmt2T (P : Prog) (RT : RhsTreeDec) (C : CallDec) (D : List Var) : CtxT Entry → List Var → Stmt → Option (CtxT Entry)
   | T, _, .skip => some T
   | T, F, .seq a b =>
-    if b.src then (match checkStmt2T P R C D T F a with
-      | some T1 => checkStmt2T P R C D T1 F b
+    if b.src then (match checkStmt2T P RT C D T F a with
+      | some T1 => checkStmt2T P RT C D T1 F b
       | none => none) else none
   | T, F, .letv x r s =>
     if s.src ∧ T.get x = none ∧ x ∉ F then
-      match rhsTree R D T F r with
+      match RT T F r with
       | some (E, T1) =>
         if decide (E.mode = .own → E.ty.holdsDtor = false) then
-          match checkStmt2T P R C D (T1.set x (some E)) F s with
+          match checkStmt2T P RT C D (T1.set x (some E)) F s with
           | some TΔ => exitScopeTree TΔ x
           | none => none
         else none
@@ -1902,7 +1905,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     if s.src ∧ T.get x = none ∧ x ∉ F ∧ dtorHeadB P f x s then
       match C T.get F f args with
       | some (E, Γ1) =>
-        match checkStmt2T P R C D (settleL2 D (x :: args) (setE Γ1 x E)) F s with
+        match checkStmt2T P RT C D (settleL2 D (x :: args) (setE Γ1 x E)) F s with
         | some TΔ => exitScopeTree TΔ x
         | none => none
       | none => none
@@ -1911,7 +1914,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     match T.get x with
     | some Ex =>
       if x ∈ F then none else
-      match rhsTree R D T F r with
+      match RT T F r with
       | some (E, T1) =>
         if assignModes2 Ex E && decide (E.ty = Ex.ty) && decide (x ∉ roots E.vdeps) && (T1.get x).isSome &&
             noPinB D T.get x && !Ex.dbind && takeOKB P T.get r then
@@ -1927,7 +1930,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     | none => none
   | T, F, .ite c a b =>
     if a.src ∧ b.src ∧ checkExpr2 T.get c then
-      match checkStmt2T P R C D T F a, checkStmt2T P R C D T F b with
+      match checkStmt2T P RT C D T F a, checkStmt2T P RT C D T F b with
       | some Ta, some Tb =>
         if Ta.eq Tb then some Ta
         else if isPanic a && panicToB D T.get Tb.get then some Tb
@@ -1937,15 +1940,15 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     else none
   | T, F, .while c s =>
     if s.src ∧ checkExpr2 T.get c then
-      match checkStmt2T P R C D T F s with
+      match checkStmt2T P RT C D T F s with
       | some TΔ => if TΔ.eq T then some T else none
       | none => none
     else none
-  | T, F, .push x y => (pushB D T.get F x y).map (tblOf D)
+  | T, F, .push x y => pushBT D T.get F x y
   | T, F, .insert x i y =>
     if checkExpr2 T.get i && decide (x ∉ F) then
-      match pushB D T.get F x y with
-      | some Δ => if noIdxB D Δ x then some (tblOf D Δ) else none
+      match pushBT D T.get F x y with
+      | some TΔ => if noIdxB D TΔ.get x then some TΔ else none
       | none => none
     else none
   | T, F, .free x =>
@@ -1961,12 +1964,12 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
         else none
       | none => none
     | none => none
-  | T, F, .frozen z s => checkStmt2T P R C D T (F ++ z) s
+  | T, F, .frozen z s => checkStmt2T P RT C D T (F ++ z) s
   | T, F, .rbind p s =>
     match T.get p with
     | some E =>
       if decide (E.mode = .rootb) && E.live && anchoredB E F && decide (p ∉ F) then
-        match checkStmt2T P R C D T F s with
+        match checkStmt2T P RT C D T F s with
         | some TΔ => if rbindKeptB TΔ.get p E.vdeps then some (tblOf D (exitRoot p (E.path ++ E.held) TΔ.get)) else none
         | none => none
       else none
@@ -1976,7 +1979,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     | some E =>
       if decide (E.mode ≠ .rootb) && decide (E.ty = t) && decide (t ≠ .int → E.mode = .own) &&
           decide (x ∉ F) then
-        match checkStmt2T P R C D T F s with
+        match checkStmt2T P RT C D T F s with
         | some TΔ =>
           if liveAtB TΔ.get x && keepOutB D T.get TΔ.get s.spine && wfTree TΔ && freshOKB D TΔ.get then
             exitScopeTree TΔ x
@@ -1990,7 +1993,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
       if s.src ∧ T.get x = none ∧ x ∉ F ∧ fn.params = [] ∧ fn.resTy = .int ∧ fn.resOwn = false then
         match C T.get F f [] with
         | some (E, Γ1) =>
-          match checkStmt2T P R C D (tblOf D (setE Γ1 x E)) F s with
+          match checkStmt2T P RT C D (tblOf D (setE Γ1 x E)) F s with
           | some TΔ => exitScopeTree TΔ x
           | none => none
         | none => none
@@ -2003,7 +2006,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
       | some t =>
         if s.src ∧ T.get x = none ∧ x ∉ F ∧ Ea.live = true ∧ Ea.mode.isRoot = true ∧ a ∉ s.vars ∧
             (t.holdsDtor = true → x ∉ s.assigns) then
-          match checkStmt2T P R C D (T.set x (some (lockE t))) F s with
+          match checkStmt2T P RT C D (T.set x (some (lockE t))) F s with
           | some TΔ => if liveAtB TΔ.get x then exitScopeTree TΔ x else none
           | none => none
         else none
@@ -2014,13 +2017,13 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     | some Ev =>
       if s.src ∧ T.get x = none ∧ x ∉ F ∧ Ev.mode = .own ∧ v ∉ s.vars then
         if checkExpr2 T.get i && noPinB D T.get v && dtorSafeB D T.get .replace false v then
-          match R (kill .replace false v T.get) F (.pop v) with
-          | some (E, Γ1) =>
+          match RT (T.map (killE .replace false v)) F (.pop v) with
+          | some (E, T1) =>
             if E.ty.dtorFree then
-              match checkStmt2T P R C D (tblOf D (setE Γ1 x E)) F s with
+              match checkStmt2T P RT C D (T1.set x (some E)) F s with
               | some TΔ1 =>
-                match pushB D TΔ1.get F v x with
-                | some Δ => if noIdxB D Δ v && endOK2B D Δ x then some (tblOf D (exitScope x Δ)) else none
+                match pushBT D TΔ1.get F v x with
+                | some TΔ => if noIdxB D TΔ.get v then exitScopeTree TΔ x else none
                 | none => none
               | none => none
             else none
@@ -2030,13 +2033,13 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     | none => none
   | T, F, .letd x f r s =>
     if s.src ∧ T.get x = none ∧ x ∉ F ∧ x ∉ s.assigns then
-      match rhsTree R D T F r with
+      match RT T F r with
       | some (E, T1) =>
         match letdTys f E.ty with
         | some (t, τ) =>
           if decide (E.mode = .own) && t.isStruct && !t.hasFn &&
               letdFnB P f t E.ty x s && takeOKB P T.get r then
-            match checkStmt2T P R C D (T1.set x (some (Entry.arm { E with ty := τ, held := E.held }))) F s with
+            match checkStmt2T P RT C D (T1.set x (some (Entry.arm { E with ty := τ, held := E.held }))) F s with
             | some TΔ => exitScopeTree TΔ x
             | none => none
           else none
@@ -2050,7 +2053,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
       | some t =>
         if decide (E.mode = .own) && !E.ty.hasFn && dropFnOKB P f t &&
             t.isStruct && decide (x ∉ F) && dSelfB E x then
-          match checkStmt2T P R C D T F s with
+          match checkStmt2T P RT C D T F s with
           | some TΔ =>
             if keepOutB D T.get TΔ.get s.spine && wfTree TΔ &&
                 viewDbindB TΔ.get x && freshOKB D TΔ.get then exitScopeTree TΔ x else none
@@ -2066,7 +2069,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
         if s.src ∧ T.get y = none ∧ y ∉ F ∧ Ex.mode = .bor ∧ Ex.live = true ∧ t.holdsView = false ∧ x ∉ F ∧
             (t.holdsDtor = true → y ∈ s.movedFirst ∧ y ∉ s.assigns) then
           if checkExpr2 T.get i && thruOKRB D T.get F (.trunc i) Ex.ty Ex.path then
-            match checkStmt2T P R C D (tblOf D (setE (setE (killThru (.trunc i) Ex.ty Ex.path T.get) x Ex) y (compE Ex t))) F s with
+            match checkStmt2T P RT C D (tblOf D (setE (setE (killThru (.trunc i) Ex.ty Ex.path T.get) x Ex) y (compE Ex t))) F s with
             | some TΔ => exitScopeTree TΔ y
             | none => none
           else none
@@ -2090,7 +2093,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
             if recvApartB zs Ec then
               match C T.get F σ (c :: zs) with
               | some (E, Γ1) =>
-                match checkStmt2T P R C D (settleL2 D (x :: c :: zs) (setE Γ1 x (recvRes c Ec E))) F k with
+                match checkStmt2T P RT C D (settleL2 D (x :: c :: zs) (setE Γ1 x (recvRes c Ec E))) F k with
                 | some TΔ => exitScopeTree TΔ x
                 | none => none
               | none => none
@@ -2116,7 +2119,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
                 | some _ =>
                   match C (kill .replace false c T.get) F σ (c :: zs) with
                   | some (E, Γ1) =>
-                    match checkStmt2T P R C D (settleL2 D (x :: zs) (kill .replace false c (setE Γ1 x E))) F k with
+                    match checkStmt2T P RT C D (settleL2 D (x :: zs) (kill .replace false c (setE Γ1 x E))) F k with
                     | some TΔ => exitScopeTree TΔ x
                     | none => none
                   | none => none
@@ -2131,16 +2134,16 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
     match T.get x with
     | some E =>
       if decide (E.mode ≠ .rootb) && decide (x ∉ F) then
-        match checkStmt2T P R C D T F s with
+        match checkStmt2T P RT C D T F s with
         | some TΔ => exitScopeTree TΔ x
         | none => none
       else none
     | none => none
   | T, _, .panic => if wfTree T then some T else none
-  | T, F, .block s => checkStmt2T P R C D T F s
+  | T, F, .block s => checkStmt2T P RT C D T F s
   | T, F, .loop s =>
     if s.src then
-      match checkStmt2T P R C D T F s with
+      match checkStmt2T P RT C D T F s with
       | some TΔ => if TΔ.eq T && panicToB D T.get T.get then some T else none
       | none => none
     else none
@@ -2154,7 +2157,7 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
             noPinB D T.get y && dtorSafeB D T.get .replace false y &&
             (!a.holdsDtor || (decide (x ∈ s.movedFirst) && decide (x ∉ s.assigns))) &&
             (!b.holdsDtor || (decide (z ∈ s.movedFirst) && decide (z ∉ s.assigns))) then
-          match checkStmt2T P R C D (tblOf D (setE (setE (setE (kill .replace false y T.get) y { E with live := false, dtor := false })
+          match checkStmt2T P RT C D (tblOf D (setE (setE (setE (kill .replace false y T.get) y { E with live := false, dtor := false })
               x (compE E a)) z (compE E b))) F s with
           | some TΔ =>
             match exitScopeTree TΔ z with
@@ -2167,11 +2170,11 @@ def checkStmt2T (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : CtxT Entr
   | _, _, _ => none
 
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) : Option Ctx :=
-  (checkStmt2T P R C D (tblOf D Γ) F s).map CtxT.get
+  (checkStmt2T P (rhsTreeOf D R) C D (tblOf D Γ) F s).map CtxT.get
 
-theorem checkStmt2T_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
+theorem checkStmt2T_sound {P : Prog} {RT : RhsTreeDec} {C : CallDec} {D : List Var} (hRT : RT.OK D) (hC : C.OK P D) :
     ∀ {s : Stmt} {ξ : Exits} {T : CtxT Entry} {F : List Var} {TΔ : CtxT Entry},
-    Supported2 T.get D → (∀ v ∈ s.vars, v ∈ D) → checkStmt2T P R C D T F s = some TΔ →
+    Supported2 T.get D → (∀ v ∈ s.vars, v ∈ D) → checkStmt2T P RT C D T F s = some TΔ →
       StmtT P ξ T.get F s TΔ.get ∧ Supported2 TΔ.get D := by
   intro s
   induction s with
@@ -2200,7 +2203,7 @@ theorem checkStmt2T_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (
         · rename_i hnd
           split at h
           · rename_i T0 h0
-            obtain ⟨hrt, hs1⟩ := rhsTree_sound hR hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+            obtain ⟨hrt, hs1⟩ := hRT T F r E T1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
             have hset : (T1.set x (some E)).get = setE T1.get x E := set_get_eq_upd
             have hs2 : Supported2 (T1.set x (some E)).get D := by
               rw [hset]; exact supported2_setE hs1 (hD x (by simp [Stmt.vars])) E
@@ -2249,7 +2252,7 @@ theorem checkStmt2T_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (
           · rename_i hc
             simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc
             obtain ⟨⟨⟨⟨⟨⟨hm, hty⟩, hroot⟩, hsome⟩, hp⟩, hdb⟩, htk⟩ := hc
-            obtain ⟨hrt, hs1⟩ := rhsTree_sound hR hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+            obtain ⟨hrt, hs1⟩ := hRT T F r E T1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
             split at h
             · rename_i hg
               simp only [Option.some.injEq] at h; subst h
@@ -2345,13 +2348,7 @@ theorem checkStmt2T_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (
   | push x y =>
     intro ξ T F TΔ hs hD h
     simp only [checkStmt2T] at h
-    cases hp : pushB D T.get F x y with
-    | none => rw [hp] at h; cases h
-    | some Δ =>
-      rw [hp] at h; simp only [Option.map_some, Option.some.injEq] at h; subst h
-      obtain ⟨tp, sp⟩ := pushB_sound hs hD hp
-      have hself : (tblOf D Δ).get = Δ := ctxOfTbl_self sp
-      rw [hself]; exact ⟨tp, sp⟩
+    exact pushBT_sound hs hD h
   | insert x i y =>
     intro ξ T F TΔ hs hD h
     simp only [checkStmt2T] at h
@@ -2359,14 +2356,12 @@ theorem checkStmt2T_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (
     · rename_i hc
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
       split at h
-      · rename_i Δ0 h0
+      · rename_i T0 h0
         split at h
         · rename_i hnx
           simp only [Option.some.injEq] at h; subst h
-          obtain ⟨t0, s0⟩ := pushB_sound (P := P) (ξ := .none) hs
+          obtain ⟨t0, s0⟩ := pushBT_sound (P := P) (ξ := .none) hs
             (fun v hv => hD v (by simp [Stmt.vars] at hv ⊢; rcases hv with h | h <;> simp [h])) h0
-          have hself : (tblOf D Δ0).get = Δ0 := ctxOfTbl_self s0
-          rw [hself]
           exact ⟨.insert (checkExpr2_sound hc.1) hc.2 t0 (noIdxB_sound s0 hnx), s0⟩
         · cases h
       · cases h
@@ -2537,34 +2532,33 @@ theorem checkStmt2T_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (
           simp only [Bool.and_eq_true] at hc2
           obtain ⟨⟨hi, hnp⟩, hds⟩ := hc2
           split at h
-          · rename_i E Γ1 hpop
+          · rename_i E T1 hpop
             split at h
             · rename_i hdf
               split at h
-              · rename_i T1 h1
+              · rename_i TΔ1 h1
                 split at h
-                · rename_i Δ0 h0
+                · rename_i T0 h0
                   split at h
-                  · rename_i he
-                    simp only [Bool.and_eq_true] at he
-                    obtain ⟨hnx, he⟩ := he
-                    simp only [Option.some.injEq] at h; subst h
+                  · rename_i hnx
                     have hvD : v ∈ D := hD v (by simp [Stmt.vars])
                     have hxD : x ∈ D := hD x (by simp [Stmt.vars])
-                    obtain ⟨hrt, hs1⟩ := hR _ F (.pop v) E Γ1 (supported2_kill hs .replace false v)
+                    have hkm : (T.map (killE .replace false v)).get = kill .replace false v T.get := map_killE_get
+                    obtain ⟨hrt, hs1⟩ := hRT (T.map (killE .replace false v)) F (.pop v) E T1
+                      (by rw [hkm]; exact supported2_kill hs .replace false v)
                       (fun w hw => by simp [Rhs.vars] at hw; subst hw; exact hvD) hpop
-                    have hs2 := supported2_setE hs1 hxD E
-                    have hself1 : (tblOf D (setE Γ1 x E)).get = setE Γ1 x E := ctxOfTbl_self hs2
-                    obtain ⟨t1, s1⟩ := ih (ξ := .none) (by rwa [hself1])
+                    rw [hkm] at hrt
+                    have hset : (T1.set x (some E)).get = setE T1.get x E := set_get_eq_upd
+                    obtain ⟨t1, s1⟩ := ih (ξ := .none) (by rw [hset]; exact supported2_setE hs1 hxD E)
                       (fun w hw => hD w (by simp [Stmt.vars, hw])) h1
-                    rw [hself1] at t1
-                    obtain ⟨t2, s2⟩ := pushB_sound (P := P) (ξ := .none) s1
+                    rw [hset] at t1
+                    obtain ⟨t2, s2⟩ := pushBT_sound (P := P) (ξ := .none) s1
                       (fun w hw => by simp [Stmt.vars] at hw; rcases hw with hw | hw <;> subst hw <;> assumption) h0
-                    have sex := supported2_exitScope s2 x
-                    have hself2 : (tblOf D (exitScope x Δ0)).get = exitScope x Δ0 := ctxOfTbl_self sex
-                    rw [hself2]
+                    obtain ⟨he, hΔ⟩ := exitScopeTree_sound h
+                    rw [hΔ]
                     exact ⟨.withElem hsrc hx hF hEv hm (checkExpr2_sound hi) (noPinB_sound hs hnp)
-                      (dtorSafeB_sound hs hds) hrt t1 t2 (noIdxB_sound s2 hnx) (endOK2B_sound s2 he) hvs hdf, sex⟩
+                      (dtorSafeB_sound hs hds) hrt t1 t2 (noIdxB_sound s2 hnx) he hvs hdf,
+                      supported2_exitScope s2 x⟩
                   · cases h
                 · cases h
               · cases h
@@ -2589,7 +2583,7 @@ theorem checkStmt2T_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (
             obtain ⟨⟨⟨⟨hm, hst⟩, hfn⟩, hdt⟩, htk⟩ := hc2
             split at h
             · rename_i T0 h0
-              obtain ⟨hrt, hs1⟩ := rhsTree_sound hR hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+              obtain ⟨hrt, hs1⟩ := hRT T F r E T1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
               have hlt := letdTys_sound hty
               have hset : (T1.set x (some (Entry.arm { E with ty := τ, held := E.held }))).get =
                   setE T1.get x (Entry.arm { E with ty := τ, held := E.held }) := set_get_eq_upd
@@ -2863,12 +2857,12 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
       StmtT P ξ Γ F s Δ ∧ Supported2 Δ D := by
   intro s ξ Γ F Δ hs hD h
   unfold checkStmt2 at h
-  cases ht : checkStmt2T P R C D (tblOf D Γ) F s with
+  cases ht : checkStmt2T P (rhsTreeOf D R) C D (tblOf D Γ) F s with
   | none => rw [ht] at h; cases h
   | some TΔ =>
     rw [ht] at h; simp only [Option.map_some, Option.some.injEq] at h; subst h
     have hself : (tblOf D Γ).get = Γ := ctxOfTbl_self hs
-    obtain ⟨h1, h2⟩ := checkStmt2T_sound hR hC (by rwa [hself]) hD ht
+    obtain ⟨h1, h2⟩ := checkStmt2T_sound (rhsTreeOf_OK hR) hC (by rwa [hself]) hD ht
     rw [hself] at h1
     exact ⟨h1, h2⟩
 

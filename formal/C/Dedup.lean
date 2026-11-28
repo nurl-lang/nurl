@@ -281,8 +281,8 @@ theorem CtxT.all_sound {β : Type} {p : β → Bool} : ∀ {t : CtxT β},
 
 /-- A context over the finite domain `D`, read once into a radix tree: each
     slot of `D` with what `g` gives it. A checker builds it once and passes on
-    `ctxOfTbl` of it, so a later read takes `O(log |D|)` steps and never
-    replays how `g` was computed. -/
+    `ctxOfTbl` of it, so a later read takes `O(bit-length of key)` steps
+    (bounded by the tree depth) and never replays how `g` was computed. -/
 def tblOf {β : Type} (D : List Nat) (g : Nat → Option β) : CtxT β :=
   D.foldr (fun v t => t.set v (g v)) .empty
 

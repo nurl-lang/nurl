@@ -215,8 +215,9 @@ theorem joinCand_supported {D : List Var} {Δa Δb : Ctx} (ha : Supported2 Δa D
 def ctxOfList (T : CtxT Entry) : Ctx := T.get
 
 /-- The join candidate over `D`, as a binary radix tree: built once where the
-    join is decided, so every later read takes `O(log |D|)` steps and never
-    replays the arms the join was built from. -/
+    join is decided, so every later read takes `O(bit-length of key)` steps
+    (bounded by the tree depth) and never replays the arms the join was built
+    from. -/
 def joinTbl (D : List Var) (Δa Δb : Ctx) : CtxT Entry :=
   tblOf D (joinCand Δa Δb)
 
