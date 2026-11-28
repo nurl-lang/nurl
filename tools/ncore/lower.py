@@ -406,81 +406,6 @@ class Types:
 
 
 # ------------------------------------------------------------- lowering
-def _names_in(node, out):
-    """Every name a node reads, its `^ name` returns counted apart."""
-    if isinstance(node, tuple) and node:
-        if len(node) == 3 and node[0] == "name" and isinstance(node[2], str):
-            out.append(("n", node[2]))
-            return
-        if len(node) == 3 and node[0] == "ret" and isinstance(node[2], tuple) and node[2][:1] == ("name",):
-            out.append(("r", node[2][2]))
-            return
-        if node[0] in ("str", "named", "int", "float", "bool"):
-            return
-        for x in node[1:]:
-            if isinstance(x, str):
-                # (a name a statement binds or assigns: `= k …`, `: T p …`,
-                # `~ p xs` - nurlc's token scan meets it as it meets a read)
-                out.append(("n", x))
-            else:
-                _names_in(x, out)
-    elif isinstance(node, list):
-        for x in node:
-            if isinstance(x, str):
-                # (a match arm's payload bindings are a list of names:
-                # `?? o { T p → … }` binds `p` there, as nurlc's scan meets it)
-                out.append(("n", x))
-            else:
-                _names_in(x, out)
-
-
-def _blit_rets(node, name, lit):
-    if isinstance(node, tuple) and node:
-        if len(node) == 3 and node[0] == "ret" and isinstance(node[2], tuple) and node[2][:1] == ("name",) \
-                and node[2][2] == name:
-            return ("ret", node[1], lit)
-        return tuple(_blit_rets(x, name, lit) if i else x for i, x in enumerate(node))
-    if isinstance(node, list):
-        return [_blit_rets(x, name, lit) for x in node]
-    return node
-
-
-def blit_rewrite(node, inparams):
-    """AGORA-1008, nurlc's __blit_ok: `: K k @ K { p … }` bound only to be
-    handed back - its fields this function's `in` parameters named whole
-    (or numbers), none of them named again in the rest of the block, every
-    `k` there a `^ k` - is the literal each `^ k` hands back, as written:
-    `^ @ K { p … }`, which lends those parameters (D4c)."""
-    if isinstance(node, list):
-        return [blit_rewrite(x, inparams) for x in node]
-    if not isinstance(node, tuple) or not node:
-        return node
-    if node[0] == "block":
-        stmts = [blit_rewrite(x, inparams) for x in node[2]]
-        out = []
-        i = 0
-        while i < len(stmts):
-            st = stmts[i]
-            if (st[0] == "let" and not st[2] and st[3] is not None and st[5][0] == "agg"
-                    and st[5][2] == st[3] and st[3][:1] == ("named",) and st[3][2:3] == ((),)):
-                items = st[5][3]
-                flds = [it[2] for it in items if it[0] == "name"]
-                ok = bool(flds) and all(it[0] == "int" or (it[0] == "name" and it[2] in inparams) for it in items)
-                if ok:
-                    seen = []
-                    _names_in(stmts[i + 1:], seen)
-                    rets = sum(1 for k, w in seen if k == "r" and w == st[4])
-                    ok = rets > 0 and not any(
-                        (k == "n" and w == st[4]) or w in flds for k, w in seen)
-                if ok:
-                    stmts = stmts[:i] + _blit_rets(stmts[i + 1:], st[4], st[5])
-                    continue
-            out.append(st)
-            i += 1
-        return ("block", node[1], out)
-    return tuple(blit_rewrite(x, inparams) if j else x for j, x in enumerate(node))
-
-
 class Lowerer:
     def __init__(self, prog, fn_decl):
         self.prog = prog
@@ -490,8 +415,6 @@ class Lowerer:
             raise Unsupported("generic fn def")
         if "unsafe" in prefixes or "raw" in prefixes:
             raise Unsupported("unsafe fn")
-        inparams = {pname for conv, _pty, pname in params if conv == "in"}
-        fn_decl = fn_decl[:6] + (blit_rewrite(body, inparams),) + fn_decl[7:]
         self.decl = fn_decl
         self.fn = FnIR(name, ln)
         self.fn.ret = norm(ret)
