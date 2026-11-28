@@ -1,10 +1,11 @@
 # The certificate bundle
 
-Status: **S1 and M4 of the certified-programs work** (AGORA-1019; M4,
+Status: **S1, S3 and M4 of the certified-programs work** (AGORA-1019; M4,
 the translator in NURL and threaded programs, AGORA-1020; the term checked
 by the kernel for the subset of numbers, buffers of numbers, views,
-closures, options and structs, AGORA-1029 steps 3 to 7; part of
-AGORA-1010; spec in the agora notes `spec.program-cert`, `.2`, `.3`).
+closures, options and structs, AGORA-1029 steps 3 to 7; S3, what a program
+can do outside its memory, `N.cap`, AGORA-1013; part of AGORA-1010; spec in
+the agora notes `spec.program-cert`, `.2`, `.3`).
 Schema **`nurl-cert/2`**, described here and in
 [`certificate.schema.json`](certificate.schema.json).
 
@@ -26,7 +27,7 @@ cover the program, 3 when the checker refuses it. `nurl verify` runs
 `formal/` through `$NURL_FORMAL`, then next to `nurl.sh`. They need `lean`
 on `PATH` (elan's: run inside `formal/`, it picks `formal/`'s toolchain;
 or `--lean PATH` / `$LEAN`), and `formal/` built (`lake build C.Cert
-C.Cert3 C.Elab C.Complete`).
+C.Cert3 C.Elab C.Complete C.Caps C.Caps3`).
 
 The flag's and the subcommand's names are working names. The owner
 confirms them before 1.0.
@@ -126,6 +127,90 @@ theorem Cert.m_race : ∀ C, A3.Reach … C → ¬ A3.Race P C
   refused: `thread_spawn_owned` copies the environment, and the copy is not
   translated yet.
 
+## 1b. What it can do: N.cap
+
+`N.cap` says what the program can do outside its own memory, and what it
+never does (AGORA-1013). It has two halves, apart in the bundle as they
+are in the proof.
+
+**Which of its functions a run can enter: a theorem.** `Caps.lean`
+states a list of the program's function indices, `Cert.runs`, and proves
+two things. First, the kernel checks that the list is closed: the entry
+and every function of the list name only functions of the list
+(`C.capsOKB`, `formal/C/Caps.lean`, C16). A name is a call's callee, a
+`recover`'s, a destructor frame's (`letd`, `scopeD`, the destructor of a
+block's type), a call's result frame, or a closure literal's code. Second,
+from that check:
+
+```lean
+theorem Cert.n_cap : ∀ (P' : A2.Prog), (∀ f ∈ runs, P'[f]? = P[f]?) →
+    ∀ (nv : Nat) (r : A2.Res), A2.Steps P (A2.emptyMem nv) entry r ↔ A2.Steps P' (A2.emptyMem nv) entry r
+```
+
+Any program with the same functions at the list's indices, whatever it
+has elsewhere, has exactly this program's runs. So a function outside the
+list never runs: its code could be anything, and no run would change. A
+threaded program's `Cert.n_cap` says the same of every interleaving
+(`A3.Reach`, `C.caps3_runs`, `formal/C/Caps3.lean`). The proof is
+`formal/A2/Reach.lean` and `formal/A3/Reach.lean`: every step keeps a
+configuration naming only such a list, in what is left to run and in what
+memory holds (its packages' code, its blocks' destructors), and a step
+reads the program only at a name it holds. Both are layers over A2 and
+A3; no rule or theorem changed.
+
+certify makes the list by scanning Program.lean's term for those names
+from the entry (`cert_runs`, `packages/nurl-cert/src/caps.nu`). The scan
+is generous: every `.dtor f` counts. The kernel does not trust it. A list
+that is not closed is no claim, and `C.caps_witness_open` shows the check
+refusing one.
+
+**What each of those functions may do: the core IR and a table.** The
+term has no events. The library's calls are A2's constructs, and a write
+to standard output is no step of the model. So the classes are read off
+the core IR. For each function of the program, certify follows every call
+it makes, through the library's bodies (and a `dyn` method's impls, from
+the `virt` lines), down to the runtime's functions. Each runtime function
+is classed by the capability table `stdlib/caps.tsv`, which the bundle
+copies as `caps.tsv`. A function that may panic inline (`fn` flag bit 3)
+has `panic`. The claim's classes are the union over the list.
+
+The classes outside the process are `stdio.out`, `stdio.err`, `stdio.in`,
+`fs.read`, `fs.write`, `fs.meta`, `net.connect`, `net.listen`, `net.dns`,
+`net.io`, `fd`, `proc.exec`, `proc.signal`, `sys.info`, `env`, `args`,
+`clock`, `random`, `thread`, `device`, `exit` and `panic`, plus
+`ffi.unknown` for a runtime function the table has no row for. `compute`
+and `mem` stay inside the process. The sentence lists what it can do and
+what it never does, from fixed phrases:
+
+> Outside its own memory it can only: write to standard output. It never:
+> write to standard error; read standard input …; read files; …
+
+A program that reaches an `ffi.unknown` function gets no "never" list:
+that function could do anything, so its sentence lists what it can do and
+ends "Its effects outside its own memory are not bounded."
+
+Two halves mean two kinds of trust, and the premises name both. The list
+is a theorem. The classes rest on the table (`caps-table`: the C runtime
+and the OS do what the table says) and on the core IR's calls being what
+each function does (`caps-attribution`). Their meaning for the binary rests
+on `M.safe` (`caps-binary`: a run that broke memory could call anything),
+and on every hand-vouched place (`unsafe-<n>`: an `unsafe` function may
+call anything). Enforcing a proved absence by the platform (seccomp,
+Landlock, a wasm import list) is AGORA-1025.
+
+**A conditional bundle** (AGORA-1033) holds a stub at each assumed
+function, which names the functions the real one calls. `Cert.n_cap` is
+then about the program with its stubs, and N.cap is `assumed`, as its M
+claims are, on each assumed function's row (`assumed-fn:<name>`). The
+assumed function's own classes are read off its real calls in the core
+IR, as any other's are, so a program with a call the translation does not
+cover (a `nurl_print`, a file write) still gets the class of it.
+
+For every class, `capabilities.classes` gives one shortest chain of calls
+from a function of the list to the runtime function that has it, each
+step `name (file:line)` of its call, so a reader sees why a class is
+there.
+
 ## 2. The bundle
 
 ```
@@ -137,6 +222,10 @@ prog.cert/
   Elab.lean       Program.core as Lean data (C.Elab.IR) and the proof that Program.lean's
                   term is the one the kernel builds from it (Cert.elab); only for a
                   program in C.Elab's subset
+  Caps.lean       N.cap: the functions a run can enter (Cert.runs), the kernel's check that
+                  the list is closed, and Cert.n_cap; only when Lean proves it
+  caps.tsv        the capability table the classes were read with (stdlib/caps.tsv);
+                  beside Caps.lean
 ```
 
 - **Program.lean** is made from Program.core by nurl-cert's translator
@@ -358,10 +447,12 @@ tool        { name, version }
 profile     "kernel" | "fast"
 program     { source, verdict: accepted | refused | unsupported | error, reason, slots }
 claims      [ { id, lean, status, sentence { en, fi }, reason, axioms [..], premises [ledger ids] } ]
-            M.safe, M.leak, (a threaded program) M.race, then M.unsafe, in this order
+            M.safe, M.leak, (a threaded program) M.race, M.unsafe, then N.cap, in this order
 coverage    { functions: [ { name, file, line, status, reason } ], <status>: count }
 hashes      { sources: [ { path, sha256 } ], core_ir, llvm_ir?, program_lean?, claims_lean?,
-              elab_lean?, binary?: { path, sha256 } }
+              elab_lean?, caps_lean?, caps_tsv?, binary?: { path, sha256 } }
+capabilities? { runs [..], functions: [ { index, name, classes [..] } ],
+              classes: [ { class, chain [..] } ] }      (N.cap proved)
 versions    { nurlc, formal_tree, formal_commit, lean_toolchain }
 ledger      [ { id, what, why, where, vouches, claims [..] } ]
 ```
@@ -395,8 +486,16 @@ ledger      [ { id, what, why, where, vouches, claims [..] } ]
   (`def assumed : List Nat := […]` in `Program.lean`, `C.certOK2BA` and
   `C.Completes`/`C.AssumedOK` claims in `Claims.lean`, `assumed-fn:<name>`
   trust-ledger rows, and `assumed` status on `M.safe`/`M.leak` when any
-  function is assumed). Bundles written under `nurl-cert/1` must be
-  re-certified with `nurl-cert certify`.
+  function is assumed), and (AGORA-1013) `N.cap` after `M.unsafe`, with
+  `capabilities`, `hashes.caps_lean` and `hashes.caps_tsv`. Bundles written
+  under `nurl-cert/1` must be re-certified with `nurl-cert certify`.
+- `capabilities`, `hashes.caps_lean` and `hashes.caps_tsv` are present
+  exactly when N.cap is proved (or, in a conditional bundle, `assumed`).
+  Otherwise N.cap is `open`, its sentence says it is not claimed, and it
+  rests on `claim-definitions` alone. `capabilities.runs` is Caps.lean's
+  list; `functions` gives each of the program's functions in it with the
+  classes its calls reach; `classes` gives each class of the claim with
+  its chain.
 - `versions.formal_tree` is the sha256 of a listing with one line
   `<sha256>  <path>` per file of `formal/`, in byte order of the paths:
   every `.lean` file, plus `lakefile.toml`, `lean-toolchain` and
@@ -437,7 +536,10 @@ One row per thing the claims rest on and do not prove:
 | `llvm`, `linker`, `os`, `c-runtime` | the path from the IR to a running binary |
 | `drf-sc` | (a threaded program) the C11 / LLVM memory model's DRF-SC guarantee, for `M.race` |
 | `unsafe-report` | `M.unsafe` is what nurlc's `--unsafe-report` says |
-| `unsafe-<n>` | one row per line of that report: each `unsafe` function, `unsafe % Send` / `% Sync` assertion and foreign-declaration claim of the program |
+| `unsafe-<n>` | one row per line of that report: each `unsafe` function, `unsafe % Send` / `% Sync` assertion and foreign-declaration claim of the program; with N.cap proved, each backs N.cap too |
+| `caps-table` | (N.cap proved) the capability table, `stdlib/caps.tsv`: what each runtime function does |
+| `caps-attribution` | (N.cap proved) the core IR's calls as what a function does, through the library's bodies |
+| `caps-binary` | (N.cap proved) the binary does only what its model does, which rests on `M.safe` and the code generator |
 
 A bundle with no `unsafe-<n>` row and `M.unsafe` assumed has no
 hand-vouched code of its own. Apart from the translation (its core IR,
@@ -467,16 +569,22 @@ the library. Each claim's premises name the same rows.
 - Claims.lean against the template, byte for byte;
 - with Elab.lean: Elab.lean against the one made from Program.core
   (its words and the template), byte for byte;
+- with N.cap proved: the hashes of Caps.lean and caps.tsv; the list, the
+  classes and the chains made again from the bundle's own Program.lean,
+  Program.core and caps.tsv, against `capabilities`; Caps.lean against
+  the template over that list, byte for byte; N.cap's sentences against
+  the classes made again. Without it: no Caps.lean and no `capabilities`,
+  and N.cap open;
 - that Lean checks Program.lean and Claims.lean again, and, with
   Elab.lean, that it proves `Cert.elab` again with the standard axioms
-  only. Lean is run only when every check above passed: it runs code
+  only, and, with Caps.lean, that it proves `Cert.n_cap` again. Lean is run only when every check above passed: it runs code
   while it elaborates a file, so a file the grammar, the template or a
   hash refused is never handed to it. A run counts only when Lean exits
   0;
 - for each claim, that the manifest's status and axioms are what Lean
   reports now;
 - that `M.unsafe` is `assumed` (or `open` with no LLVM IR);
-- that nothing is claimed beyond the template's claims.
+- that N.cap follows M.unsafe, and that nothing is claimed beyond it.
 
 For a refused or unsupported program it checks instead that there is no
 Claims.lean and that no claim is above `open`. The exit code is 0 only
@@ -493,7 +601,18 @@ fails, naming the check, on each of these edits:
 - in a bundle with Elab.lean: another scalar program's Program.lean
   swapped in, with its hash updated (on `Cert.elab`); Elab.lean
   deleted with the manifest kept; its words or its theorem edited, its
-  hash updated; code put in it (Lean never runs it).
+  hash updated; code put in it (Lean never runs it);
+- in a bundle with N.cap: the list emptied in Caps.lean and the manifest;
+  caps.tsv edited (a print called pure), its hash updated or not; a class
+  dropped from `capabilities`; the sentence edited; Caps.lean removed
+  with N.cap still proved; Caps.lean's check weakened. And, outside verify,
+  the kernel itself refuses a list that leaves out a function the program
+  calls (`Cert.runs_closed`).
+
+Seeded programs get exactly the classes their reachable calls have: a
+print in `main`, behind a closure, in a destructor and in a spawned
+thread is claimed, and a print in a function nothing calls is not (the
+function is not in the list).
 
 A bundle downgraded honestly verifies: Elab.lean removed, its hash
 dropped, and `core-ir-words` and the encodings' rows the translator's
@@ -555,6 +674,31 @@ once): the other 56 are 1.55 s faster, and in all certify takes 80.0 s
 against 80.2 s (−0.2 %). Lean is asked only for a term that can be
 `elabIR`'s; `docs/dev/TRANSLATION_TRUST.md` (steps 3 to 7 and "the words as
 numbers") has the numbers, peak memory included.
+
+N.cap costs certify neither time nor memory: over the 62 certify programs,
+one at a time, best of 3 alternated runs against the nurl-cert and
+`formal/` of main 011e9589d (each tree a fresh copy, so neither has its
+build's page cache state), certify takes 64.56 s against 65.10 s (−0.8 %,
+the median program 10 ms less; a second such run, after the last formal/
+change: 58.98 s against 60.01 s, −1.7 %), and the sum of the peak RSS is
+the same within the runs' noise (about ±0.1 %): −0.04 % and +0.02 %
+(41.84 GB against 41.85 GB; the largest peak 2.532 GB against 2.532 GB),
+−0.66 % and −0.50 % over the 7 threaded programs, +0.04 % and +0.09 % over
+the 55 single-threaded ones. What N.cap adds, Lean's check of Caps.lean (about 20 ms a program,
+the kernel's check of the list and elaborating `Cert.n_cap`) and the 4.3 MB of
+`formal/`'s build its proof loads (`A2.Reach`, `C.Caps`; no wildcard case in
+the definitions they unfold, whose equation lemma would negate every other
+constructor), certify gets back:
+nurlc's second compile (the LLVM IR and the unsafe report, which go only
+into the manifest) runs on a thread while the translation and Lean run;
+Lean runs with two worker threads, not one per core (a check's parallel
+parts are few: alone, −3.0 % time and −0.34 % peak RSS); the core IR's
+calls are read in one scan, and `formal/`'s commit from git's files, not a
+`git` process; and a certificate's imports carry no witness program any
+more (`C/ElabWitness.lean`, `A3/ClaimWitness.lean` and the others the
+changelog names: an accepted program loads 1.7 MB less of `C.Elab`, a
+threaded one 17 MB less in all). A single-threaded program's Caps.lean
+loads no A3 (`C.Caps3` is apart).
 
 Without `--certify`, nothing changes:
 - `--list-sources=TAG` is off by default;

@@ -3,8 +3,8 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,449 lines of Lean 4**, **941 theorems**, **1119 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **92 modules**, **88,450 lines of Lean 4**, **3936 theorems**, **5007 total declarations**
+* **Phase A3 (Threads & Data-Race Freedom):** **37 modules**, **19,671 lines of Lean 4**, **954 theorems**, **1133 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **95 modules**, **89,430 lines of Lean 4**, **3989 theorems**, **5069 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -143,7 +143,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (92 Modules)
+## 4. Phase A2 Module Dependency DAG (95 Modules)
 
 ```mermaid
 flowchart BT
@@ -166,8 +166,9 @@ flowchart BT
   DomTy["DomTy<br/>(152L, 14 thms)"]
   DropCode["DropCode<br/>(706L, 15 thms)"]
   DropInWitness["DropInWitness<br/>(69L, 5 thms)"]
-  DtorWitness["DtorWitness<br/>(3715L, 172 thms)"]
-  DynCell["DynCell<br/>(483L, 33 thms)"]
+  Dtor["Dtor<br/>(1050L, 48 thms)"]
+  DtorWitness["DtorWitness<br/>(2674L, 124 thms)"]
+  DynCell["DynCell<br/>(444L, 27 thms)"]
   EditB["EditB<br/>(3145L, 85 thms)"]
   EditBV["EditBV<br/>(1404L, 51 thms)"]
   EditBVFnWitness["EditBVFnWitness<br/>(264L, 12 thms)"]
@@ -194,11 +195,13 @@ flowchart BT
   Layout["Layout<br/>(182L, 12 thms)"]
   Leak["Leak<br/>(677L, 26 thms)"]
   NameWf["NameWf<br/>(1056L, 50 thms)"]
+  NoRootb["NoRootb<br/>(53L, 6 thms)"]
   Panic["Panic<br/>(387L, 23 thms)"]
   ParamViewWitness["ParamViewWitness<br/>(457L, 21 thms)"]
   PopWitness["PopWitness<br/>(262L, 13 thms)"]
   Preservation["Preservation<br/>(5439L, 124 thms)"]
   Progress["Progress<br/>(953L, 14 thms)"]
+  Reach["Reach<br/>(957L, 53 thms)"]
   Region["Region<br/>(35L, 1 thms)"]
   RegionChangeWitness["RegionChangeWitness<br/>(86L, 5 thms)"]
   RegionMem["RegionMem<br/>(420L, 22 thms)"]
@@ -271,8 +274,9 @@ flowchart BT
   Fresh --> DomTy
   DtorWitness --> DropCode
   PopWitness --> DropInWitness
-  DynCell --> DtorWitness
-  Soundness --> DynCell
+  NoRootb --> Dtor
+  Dtor --> DtorWitness
+  NoRootb --> DynCell
   TypingFacts --> EditB
   EditB --> EditBV
   TakeBVWitness --> EditBVFnWitness
@@ -305,6 +309,7 @@ flowchart BT
   Basic --> Layout
   Steps --> Leak
   Wf --> NameWf
+  Soundness --> NoRootb
   Leak --> Panic
   StoreViewWitness --> ParamViewWitness
   DynCell --> PopWitness
@@ -313,6 +318,8 @@ flowchart BT
   CapsLive --> Preservation
   FrameClause --> Preservation
   Preservation --> Progress
+  Codes --> Reach
+  SweepD --> Reach
   Typing --> Region
   HeldViewThruWitness --> RegionChangeWitness
   ThruPre --> RegionMem
@@ -401,7 +408,8 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/DomTy.lean`](A2/DomTy.lean) | 152 | 14 | 1 |  |
 | 3. Proof Infrastructure | [`A2/DropCode.lean`](A2/DropCode.lean) | 706 | 15 | 9 |  |
 | 3. Proof Infrastructure | [`A2/DropInWitness.lean`](A2/DropInWitness.lean) | 69 | 5 | 3 |  |
-| 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 3715 | 172 | 68 |  |
+| 3. Proof Infrastructure | [`A2/Dtor.lean`](A2/Dtor.lean) | 1050 | 48 | 4 |  |
+| 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 2674 | 124 | 64 |  |
 | 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 3145 | 85 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1404 | 51 | 1 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
 | 3. Proof Infrastructure | [`A2/EditBVFnWitness.lean`](A2/EditBVFnWitness.lean) | 264 | 12 | 17 |  |
@@ -420,7 +428,9 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/HeldViewThruWitness.lean`](A2/HeldViewThruWitness.lean) | 200 | 17 | 13 |  |
 | 3. Proof Infrastructure | [`A2/InoutViewArgWitness.lean`](A2/InoutViewArgWitness.lean) | 409 | 34 | 25 |  |
 | 3. Proof Infrastructure | [`A2/KillVarsStep.lean`](A2/KillVarsStep.lean) | 281 | 11 | 4 |  |
+| 3. Proof Infrastructure | [`A2/NoRootb.lean`](A2/NoRootb.lean) | 53 | 6 | 1 |  |
 | 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 457 | 21 | 6 |  |
+| 3. Proof Infrastructure | [`A2/Reach.lean`](A2/Reach.lean) | 957 | 53 | 9 |  |
 | 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 35 | 1 | 0 |  |
 | 3. Proof Infrastructure | [`A2/RegionChangeWitness.lean`](A2/RegionChangeWitness.lean) | 86 | 5 | 3 |  |
 | 3. Proof Infrastructure | [`A2/RegionMem.lean`](A2/RegionMem.lean) | 420 | 22 | 6 |  |
@@ -460,7 +470,7 @@ flowchart BT
 | 5. Soundness Theorems | [`A2/Preservation.lean`](A2/Preservation.lean) | 5439 | 124 | 15 | Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv. |
 | 5. Soundness Theorems | [`A2/Progress.lean`](A2/Progress.lean) | 953 | 14 | 0 | Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck). |
 | 5. Soundness Theorems | [`A2/Soundness.lean`](A2/Soundness.lean) | 282 | 17 | 2 | Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic. |
-| 5. Worked Examples | [`A2/DynCell.lean`](A2/DynCell.lean) | 483 | 33 | 21 | Per-call ownership through an owner cell: the pick example typed with A2's rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak). |
+| 5. Worked Examples | [`A2/DynCell.lean`](A2/DynCell.lean) | 444 | 27 | 20 | Per-call ownership through an owner cell: the pick example typed with A2's rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak). |
 | 5. Worked Examples | [`A2/ExitWitness.lean`](A2/ExitWitness.lean) | 380 | 47 | 18 | Agora #871: early exits. A break out of while T that drops a live owned Vec on the way (mainB_typed, breakB_steps), a continue-shaped exit of a loop body, and an early ^ across a scope in a callee checked against its summary (gR_ok) with its caller, each run safe and leak-free (mainB_safe, mainC_no_leak, mainR_safe, mainR_no_leak). |
 | 5. Worked Examples | [`A2/HandOver.lean`](A2/HandOver.lean) | 497 | 30 | 12 | AGORA-885: the by-name owner hand-over as an encoding: the owner is a cell and a borrow, the hand-over a take into the cell. Straight-line and decided at run time (an ite on the flag nurlc reads off the buffer), each run safe and leak-free (main_safe, main_no_leak, mainJ_safe, mainJ_no_leak). |
 | 5. Worked Examples | [`A2/PopWitness.lean`](A2/PopWitness.lean) | 262 | 13 | 11 | AGORA-888: a pop and a remove through a borrow, read as a truncation to the last index (Expr.dec), the number read before it, and element sets one place down; through a vec_at borrow of a Vec of Vecs and through a cursor, with memory_safe and no_leak_end applied (main_safe, main_no_leak). |

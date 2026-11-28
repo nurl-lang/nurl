@@ -1148,5 +1148,21 @@ import D
 #print axioms A2.Release.capsInp
 #print axioms A2.EvalR.capsInp
 #print axioms A2.Step.slotsCaps
+-- (A2/Reach.lean, A3/Reach.lean, AGORA-1013): a run names only functions of a set closed under
+-- the program's names, and never reads the program outside it
+#print axioms A2.fns_step
+#print axioms A2.Steps.fns
+#print axioms A2.step_agree
+#print axioms A2.steps_agree_iff
+#print axioms A3.TStep.fns
+#print axioms A3.reach_agree_iff
+-- Phase C16: what a program can run, decided (N.cap)
+#print axioms C.capsOKB_parts
+#print axioms C.caps_names
+#print axioms C.caps_runs
+#print axioms C.caps3_names
+#print axioms C.caps3_runs
+#print axioms C.caps_witness_runs
+#print axioms C.caps_witness_open
 -- Phase D2: an accepted drop-validation path is safe on a concrete heap
 #print axioms D.validated_safe

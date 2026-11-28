@@ -1,0 +1,504 @@
+# stdlib/caps.tsv — what each runtime function does, as a capability class
+# (AGORA-1013, docs/dev/CERTIFICATE.md "N.cap").
+#
+# A certificate's N.cap claim proves which of a program's functions a run can
+# enter (formal/C/Caps.lean); what those functions can do outside the
+# program's memory is read off their calls in the core IR, down to the
+# runtime functions below, and this table gives each one's class. It is a
+# trust row of every certificate that claims N.cap (`caps-table`): a row
+# that understates what a function does would let a claim say "never" of
+# something the program can do. So a row errs wide: a function that may
+# create a file is fs.write even when most calls only read.
+#
+# Format: symbol<TAB>class<TAB>what it does. A symbol ending in `*` covers
+# every name it is a prefix of (the compiler's own built-ins, which no
+# foreign declaration names); the longest prefix wins. A symbol with no
+# row reaches the claim as `ffi.unknown`, a door the claim names.
+# tools/check_caps_table.sh fails when a foreign (`&`) declaration of the
+# standard library has no exact row here.
+#
+# Classes outside the process: stdio.out stdio.err stdio.in fs.read fs.write
+# fs.meta net.connect net.listen net.dns net.io fd proc.exec proc.signal
+# sys.info env args clock random thread device exit panic. Inside it (no
+# door): compute (computes on its arguments), mem (allocates, shares or
+# releases memory).
+
+# ── The standard library's foreign declarations ──────────────────────────
+_exit	exit	ends the process
+accept	net.listen	accepts connections or binds a port
+access	fs.meta	reads names and metadata of files and directories, or watches them
+atan2	compute	computes on its arguments and memory the program owns; no effect outside the process
+atof	compute	computes on its arguments and memory the program owns; no effect outside the process
+atoll	compute	computes on its arguments and memory the program owns; no effect outside the process
+bind	net.listen	accepts connections or binds a port
+calloc	mem	allocates, shares or releases memory of the process
+cbrt	compute	computes on its arguments and memory the program owns; no effect outside the process
+ceil	compute	computes on its arguments and memory the program owns; no effect outside the process
+cfmakeraw	stdio.in	reads the process's standard input or controls its terminal
+chdir	env	reads or changes the environment or the working directory
+chmod	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+clock_gettime	clock	reads a clock or sleeps
+close	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+closedir	fs.meta	reads names and metadata of files and directories, or watches them
+connect	net.connect	opens a network connection, or sends to an address
+cos	compute	computes on its arguments and memory the program owns; no effect outside the process
+dup2	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+erf	compute	computes on its arguments and memory the program owns; no effect outside the process
+erfc	compute	computes on its arguments and memory the program owns; no effect outside the process
+execvp	proc.exec	starts another program, or talks to one it started
+exp	compute	computes on its arguments and memory the program owns; no effect outside the process
+fabs	compute	computes on its arguments and memory the program owns; no effect outside the process
+fclose	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+fcntl	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+fdopen	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+feof	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+ferror	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+fflush	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+fileno	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+floor	compute	computes on its arguments and memory the program owns; no effect outside the process
+fopen	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+fork	proc.exec	starts another program, or talks to one it started
+fputc	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+fputs	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+fread	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+free	mem	allocates, shares or releases memory of the process
+fseek	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+ftell	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+fwrite	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+getcwd	fs.meta	reads names and metadata of files and directories, or watches them
+getenv	env	reads or changes the environment or the working directory
+getpid	sys.info	reads facts about the host, the user or other processes
+hypot	compute	computes on its arguments and memory the program owns; no effect outside the process
+inotify_add_watch	fs.meta	reads names and metadata of files and directories, or watches them
+inotify_init1	fs.meta	reads names and metadata of files and directories, or watches them
+inotify_rm_watch	fs.meta	reads names and metadata of files and directories, or watches them
+ioctl	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+isatty	stdio.in	reads the process's standard input or controls its terminal
+kill	proc.signal	sends, raises, installs or reads signals
+listen	net.listen	accepts connections or binds a port
+log	compute	computes on its arguments and memory the program owns; no effect outside the process
+log10	compute	computes on its arguments and memory the program owns; no effect outside the process
+log2	compute	computes on its arguments and memory the program owns; no effect outside the process
+lseek	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+madvise	mem	allocates, shares or releases memory of the process
+malloc	mem	allocates, shares or releases memory of the process
+memchr	compute	computes on its arguments and memory the program owns; no effect outside the process
+memcmp	compute	computes on its arguments and memory the program owns; no effect outside the process
+memcpy	compute	computes on its arguments and memory the program owns; no effect outside the process
+memmem	compute	computes on its arguments and memory the program owns; no effect outside the process
+memmove	compute	computes on its arguments and memory the program owns; no effect outside the process
+mkdir	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+mkstemp	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+mmap	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+munmap	mem	allocates, shares or releases memory of the process
+nanosleep	clock	reads a clock or sleeps
+nurl_alloc	mem	allocates, shares or releases memory of the process
+nurl_alloc_count	mem	allocates, shares or releases memory of the process
+nurl_arc_release	mem	allocates, shares or releases memory of the process
+nurl_arc_share	mem	allocates, shares or releases memory of the process
+nurl_argc	args	reads the command line
+nurl_argv	args	reads the command line
+nurl_argv_count	args	reads the command line
+nurl_argv_get	args	reads the command line
+nurl_atomic_i64_cas	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_dec_fetch	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_fetch_add	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_fetch_max	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_inc	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_inc_if_live	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_load	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_store	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_atomic_i64_swap	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_available_parallelism	sys.info	reads facts about the host, the user or other processes
+nurl_bits_to_f32	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_bits_to_f64	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_blk_flush	device	reads or writes a block device (the unikernel's disk)
+nurl_blk_read	device	reads or writes a block device (the unikernel's disk)
+nurl_blk_sector_count	device	reads or writes a block device (the unikernel's disk)
+nurl_blk_write	device	reads or writes a block device (the unikernel's disk)
+nurl_byte_substr	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_cc_buffered	mem	allocates, shares or releases memory of the process
+nurl_cc_collect	mem	allocates, shares or releases memory of the process
+nurl_cc_collect_now	mem	allocates, shares or releases memory of the process
+nurl_cc_dead	mem	allocates, shares or releases memory of the process
+nurl_cc_possible_root	mem	allocates, shares or releases memory of the process
+nurl_cc_reclaim_fds	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_closure_clone	mem	allocates, shares or releases memory of the process
+nurl_closure_drop	mem	allocates, shares or releases memory of the process
+nurl_cond_wait_ms	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_count_byte	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_cpu_count	sys.info	reads facts about the host, the user or other processes
+nurl_cpu_x86_v3	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_cpu_x86_v4	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_det_exp	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_det_log	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_dir_list_close	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_dir_list_next	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_dir_list_open	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_dir_sync	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+nurl_dirent_name	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_dns_resolve	net.dns	resolves names
+nurl_dns_resolve_port	net.dns	resolves names
+nurl_dns_reverse	net.dns	resolves names
+nurl_env_at	env	reads or changes the environment or the working directory
+nurl_env_count	env	reads or changes the environment or the working directory
+nurl_eprint	stdio.err	writes to the process's standard error
+nurl_eprint_int	stdio.err	writes to the process's standard error
+nurl_eprintln	stdio.err	writes to the process's standard error
+nurl_eprintln_int	stdio.err	writes to the process's standard error
+nurl_errno_get	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_errno_set	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_exit	exit	ends the process
+nurl_f32_from_bits	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_f32_to_bits	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_f64_bits	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_f64_from_bits	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_f64_to_bits	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_fast_atof	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_fast_atof_ex	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_fcond_broadcast	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fcond_destroy	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fcond_init	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fcond_signal	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fcond_wait_ms	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fd_datasync	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_fd_sync	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_fd_truncate	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_fd_try_lock	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_fiber_current	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_detach	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_join	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_park_with_mutex	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_park_with_mutex_ms	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_sleep_ms	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_spawn	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_spawn_joinable	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_spawn_owned	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_unpark	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_wake	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_worker_id	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_fiber_yield	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_file_map	fs.read	opens or reads a file or the system's certificate store
+nurl_file_sync	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+nurl_file_truncate	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+nurl_file_unmap	fs.read	opens or reads a file or the system's certificate store
+nurl_flush_stderr	stdio.err	writes to the process's standard error
+nurl_flush_stdout	stdio.out	writes to the process's standard output
+nurl_free	mem	allocates, shares or releases memory of the process
+nurl_fs_rename	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+nurl_fs_tempdir	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_fstat_into	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_group_name	sys.info	reads facts about the host, the user or other processes
+nurl_hard_link	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+nurl_have_posix_dirent	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_host_mem	sys.info	reads facts about the host, the user or other processes
+nurl_host_os	sys.info	reads facts about the host, the user or other processes
+nurl_http_perform_full	net.connect	opens a network connection, or sends to an address
+nurl_http_perform_full_to	net.connect	opens a network connection, or sends to an address
+nurl_http_response_free	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_http_stream_close	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_http_stream_next	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_http_stream_open_to	net.connect	opens a network connection, or sends to an address
+nurl_http_stream_pump_headers	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_is_inf	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_is_nan	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_ktls_recv	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_ktls_rtype	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_ktls_send	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_ktls_set	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_ktls_supported	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_lk_await	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_destroy	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_enter	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_exit	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_init	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_restore_begin	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_size	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_take	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lk_taken	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_lstat_into	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_malloc	mem	allocates, shares or releases memory of the process
+nurl_memcpy	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_memmove	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_memset	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_monotonic_ns	clock	reads a clock or sleeps
+nurl_mutex_init	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_mutex_lock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_mutex_unlock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_native_constant	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_native_sizeof	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_once_slot	mem	allocates, shares or releases memory of the process
+nurl_panic	panic	stops with an error: writes a message to standard error, then unwinds to a recover or ends the process
+nurl_panic_index	panic	stops with an error: writes a message to standard error, then unwinds to a recover or ends the process
+nurl_panic_last_msg	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_path_type	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_path_type_follow	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_pread	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_print	stdio.out	writes to the process's standard output
+nurl_print_buf_reset	mem	allocates, shares or releases memory of the process
+nurl_print_buf_start	mem	allocates, shares or releases memory of the process
+nurl_print_buf_stop	mem	allocates, shares or releases memory of the process
+nurl_print_bytes	stdio.out	writes to the process's standard output
+nurl_print_int	stdio.out	writes to the process's standard output
+nurl_println	stdio.out	writes to the process's standard output
+nurl_println_int	stdio.out	writes to the process's standard output
+nurl_proc_cmdlines	sys.info	reads facts about the host, the user or other processes
+nurl_proc_err_kind	proc.exec	starts another program, or talks to one it started
+nurl_proc_exit_code	proc.exec	starts another program, or talks to one it started
+nurl_proc_free	proc.exec	starts another program, or talks to one it started
+nurl_proc_run	proc.exec	starts another program, or talks to one it started
+nurl_proc_run_shell	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_close_stdin	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_eof	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_err_kind	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_free	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_kill	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_last_io_err	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_pid	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_read_line	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_read_line_len	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_wait	proc.exec	starts another program, or talks to one it started
+nurl_proc_spawn_write	proc.exec	starts another program, or talks to one it started
+nurl_proc_stderr	proc.exec	starts another program, or talks to one it started
+nurl_proc_stderr_len	proc.exec	starts another program, or talks to one it started
+nurl_proc_stdout	proc.exec	starts another program, or talks to one it started
+nurl_proc_stdout_len	proc.exec	starts another program, or talks to one it started
+nurl_pthread_create_owned	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_pthread_detach_ptr	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_pthread_join_ptr	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_pwrite	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_rand_fill	random	reads the operating system's randomness
+nurl_rc_drop_value	mem	allocates, shares or releases memory of the process
+nurl_rc_release	mem	allocates, shares or releases memory of the process
+nurl_rc_share	mem	allocates, shares or releases memory of the process
+nurl_reactor_wait_accept	net.listen	accepts connections or binds a port
+nurl_reactor_wait_io	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_reactor_wait_read	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_reactor_wait_write	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_read_file	fs.read	opens or reads a file or the system's certificate store
+nurl_read_int	stdio.in	reads the process's standard input or controls its terminal
+nurl_read_line	stdio.in	reads the process's standard input or controls its terminal
+nurl_read_password	stdio.in	reads the process's standard input or controls its terminal
+nurl_read_stdin	stdio.in	reads the process's standard input or controls its terminal
+nurl_realloc	mem	allocates, shares or releases memory of the process
+nurl_realtime_ns	clock	reads a clock or sleeps
+nurl_recover	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_rsa16_mulm_adx	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_rsa16_sqrm_adx	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_runtime_init	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_runtime_is_cooperative	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_runtime_run	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_runtime_shutdown	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_runtime_worker_count	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_destroy	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_init	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_rdlock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_rdunlock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_size	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_tryrdlock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_trywrlock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_wrlock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_rwlock_wrunlock	thread	starts, joins, schedules or synchronises threads and fibers
+nurl_scan_byte3	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_self_groups	sys.info	reads facts about the host, the user or other processes
+nurl_self_id	sys.info	reads facts about the host, the user or other processes
+nurl_signal_dispatch	proc.signal	sends, raises, installs or reads signals
+nurl_signal_install_shutdown	proc.signal	sends, raises, installs or reads signals
+nurl_signal_pending	proc.signal	sends, raises, installs or reads signals
+nurl_signal_pipe_fd	proc.signal	sends, raises, installs or reads signals
+nurl_signal_poll	proc.signal	sends, raises, installs or reads signals
+nurl_signal_raise	proc.signal	sends, raises, installs or reads signals
+nurl_signal_register	proc.signal	sends, raises, installs or reads signals
+nurl_signal_trigger_shutdown	proc.signal	sends, raises, installs or reads signals
+nurl_signal_unregister	proc.signal	sends, raises, installs or reads signals
+nurl_simd128_native	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_stash_pop	mem	allocates, shares or releases memory of the process
+nurl_stash_push	mem	allocates, shares or releases memory of the process
+nurl_stat_into	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_stat_kind	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_statfs_into	fs.meta	reads names and metadata of files and directories, or watches them
+nurl_stdin_eof	stdio.in	reads the process's standard input or controls its terminal
+nurl_stdin_read	stdio.in	reads the process's standard input or controls its terminal
+nurl_str_float	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_str_int	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_strdup	mem	allocates, shares or releases memory of the process
+nurl_strdup_n	mem	allocates, shares or releases memory of the process
+nurl_stream_read	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+nurl_sys_chain_trusted	fs.read	opens or reads a file or the system's certificate store
+nurl_tcp_accept	net.listen	accepts connections or binds a port
+nurl_tcp_alpn_selected	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_close	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_conn_shutdown	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_connect	net.connect	opens a network connection, or sends to an address
+nurl_tcp_connect_ms	net.connect	opens a network connection, or sends to an address
+nurl_tcp_err_kind	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_get_fd	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_listen	net.listen	accepts connections or binds a port
+nurl_tcp_listen_opts	net.listen	accepts connections or binds a port
+nurl_tcp_listen_tls	net.listen	accepts connections or binds a port
+nurl_tcp_listen_tls_alpn	net.listen	accepts connections or binds a port
+nurl_tcp_listener_pending	net.listen	accepts connections or binds a port
+nurl_tcp_local_addr	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_peer_addr	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_peer_cert_subject	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_read	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_read_nowait	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_ref	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_sendfile	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_set_nonblock	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_set_send_buffer	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_set_timeout	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_set_write_deadline	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_shutdown	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_timeout_ms	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_tls_add_sni	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_tls_reload	fs.read	reloads a TLS listener's certificate and key from their files
+nurl_tcp_tls_require_client_cert	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_unref	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_wait_io	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_write	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_write2	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_write_deadline	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_write_nowait	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tcp_write_wait_ms	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_tz_name	sys.info	reads facts about the host, the user or other processes
+nurl_tz_offset	sys.info	reads facts about the host, the user or other processes
+nurl_udp_addr_format	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_udp_addr_resolve	net.dns	resolves names
+nurl_udp_bind	net.listen	accepts connections or binds a port
+nurl_udp_close	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_connect	net.connect	opens a network connection, or sends to an address
+nurl_udp_err_kind	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_family	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_get_fd	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_join_group	net.listen	accepts connections or binds a port
+nurl_udp_leave_group	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_local_addr	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_peer_addr	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_recv	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_recv_from	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_recv_into	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_send	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_send_addr	net.connect	opens a network connection, or sends to an address
+nurl_udp_send_to	net.connect	opens a network connection, or sends to an address
+nurl_udp_set_broadcast	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_set_multicast_loop	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_set_multicast_ttl	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_set_nonblock	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_set_timeout	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_setsockopt_int	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_udp_shutdown	net.io	reads, writes, configures or closes a connection the program already holds
+nurl_uname_field	sys.info	reads facts about the host, the user or other processes
+nurl_user_name	sys.info	reads facts about the host, the user or other processes
+nurl_utimes_set	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+nurl_version	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_wait_exit_status	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_wait_is_exited	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_wait_is_signaled	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_wait_term_sig	compute	computes on its arguments and memory the program owns; no effect outside the process
+nurl_zalloc	mem	allocates, shares or releases memory of the process
+open	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+opendir	fs.meta	reads names and metadata of files and directories, or watches them
+pipe	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+poll	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+pow	compute	computes on its arguments and memory the program owns; no effect outside the process
+pthread_cond_broadcast	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_cond_destroy	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_cond_init	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_cond_signal	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_cond_wait	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_create	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_mutex_destroy	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_mutex_init	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_mutex_lock	thread	starts, joins, schedules or synchronises threads and fibers
+pthread_mutex_unlock	thread	starts, joins, schedules or synchronises threads and fibers
+puts	stdio.out	writes to the process's standard output
+read	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+readdir	fs.meta	reads names and metadata of files and directories, or watches them
+readlink	fs.meta	reads names and metadata of files and directories, or watches them
+realpath	fs.meta	reads names and metadata of files and directories, or watches them
+remove	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+rint	compute	computes on its arguments and memory the program owns; no effect outside the process
+rmdir	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+round	compute	computes on its arguments and memory the program owns; no effect outside the process
+setenv	env	reads or changes the environment or the working directory
+signal	proc.signal	sends, raises, installs or reads signals
+sin	compute	computes on its arguments and memory the program owns; no effect outside the process
+socket	net.connect	opens a network connection, or sends to an address
+socketpair	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+sqlite3_bind_blob	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_bind_double	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_bind_int64	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_bind_null	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_bind_text	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_busy_timeout	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_changes	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_clear_bindings	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_close	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_close_v2	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_column_blob	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_column_bytes	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_column_count	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_column_double	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_column_int64	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_column_text	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_column_type	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_db_config	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_errmsg	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_exec	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_extended_errcode	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_extended_result_codes	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_finalize	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_free	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_last_insert_rowid	compute	reads a value sqlite already holds for the program (a statement's column, a count, a message); no file access of its own
+sqlite3_limit	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_open	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_open_v2	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_prepare_v2	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_reset	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_set_authorizer	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqlite3_step	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+sqrt	compute	computes on its arguments and memory the program owns; no effect outside the process
+strcmp	compute	computes on its arguments and memory the program owns; no effect outside the process
+strdup	mem	allocates, shares or releases memory of the process
+strlen	compute	computes on its arguments and memory the program owns; no effect outside the process
+strncmp	compute	computes on its arguments and memory the program owns; no effect outside the process
+strnlen	compute	computes on its arguments and memory the program owns; no effect outside the process
+strstr	compute	computes on its arguments and memory the program owns; no effect outside the process
+symlink	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+tan	compute	computes on its arguments and memory the program owns; no effect outside the process
+tcgetattr	stdio.in	reads the process's standard input or controls its terminal
+tcsetattr	stdio.in	reads the process's standard input or controls its terminal
+trunc	compute	computes on its arguments and memory the program owns; no effect outside the process
+unlink	fs.write	creates, writes, renames, removes or changes a file or directory (or opens one in a mode that may)
+unsetenv	env	reads or changes the environment or the working directory
+waitpid	proc.exec	starts another program, or talks to one it started
+write	fd	reads, writes, waits on or closes a descriptor or stream the program already holds (what it may reach is the class of the call that opened it)
+
+# ── The compiler's own built-ins (no foreign declaration) ───────────────
+nurl_v128_*	compute	a 128-bit vector operation on values the program holds
+nurl_v256_*	compute	a 256-bit vector operation on values the program holds
+nurl_v512_*	compute	a 512-bit vector operation on values the program holds
+nurl_cpu_has_*	compute	asks which instructions this CPU has
+nurl_rotl*	compute	a bit rotation
+nurl_rotr*	compute	a bit rotation
+nurl_bswap*	compute	a byte swap
+nurl_addc_*	compute	an add with carry
+nurl_subb_*	compute	a subtract with borrow
+nurl_mac_*	compute	a multiply-accumulate
+nurl_umulhi	compute	the high half of a product
+nurl_smulhi	compute	the high half of a signed product
+nurl_ctz	compute	counts trailing zero bits
+nurl_p256_*	compute	P-256 field arithmetic
+nurl_x25519_*	compute	X25519 field arithmetic
+rand	compute	the C library's pseudo-random sequence (its own state, no OS randomness)
+nurl_vctl_*	mem	reads or writes a vector's control block
+nurl_peek*	mem	reads memory the program owns
+nurl_poke*	mem	writes memory the program owns
+mem_*	mem	an ownership primitive of the compiler (take, forget, drop, check)
+dyn	mem	makes a trait object
+nurl_enable_vt	stdio.out	turns on the terminal's escape sequences on standard output
+nurl_stdout_isatty	stdio.out	asks whether standard output is a terminal
+canvas_*	device	opens, draws on or reads a window (the canvas device)
+audio_*	device	reads or plays audio (the audio device)

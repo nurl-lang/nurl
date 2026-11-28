@@ -1,4 +1,4 @@
-import A2.Soundness
+import A2.NoRootb
 
 /-!
   A2 — a value owned or not per call, as the calculus has it
@@ -325,51 +325,12 @@ def main : Stmt :=
   .letv 0 (.expr (.lit 0)) (.letv 1 (.inl 0 str) (.letv 2 (.new .int)
     (.letv 3 (.expr (.lit 1)) (.letcall 4 0 [1, 2, 3] (.letv 5 (.expr (.len 4)) .skip)))))
 
-/-- A context with no borrowed parameter and no binding that runs a
-    destructor: nothing in it can be pinned, and ending a binding ends no
-    destructor's view. -/
-def NoRootb (Γ : Ctx) : Prop := ∀ v E, Γ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false
-
-theorem NoRootb.noPin {Γ : Ctx} (h : NoRootb Γ) (x : Var) : NoPin Γ x :=
-  fun p E hp hm => absurd hm (h p E hp).1
-
-theorem NoRootb.endOK {Γ : Ctx} (h : NoRootb Γ) (x : Var) : EndOK Γ x :=
-  ⟨h.noPin x, DtorSafe.of_none (fun v E hv => (h v E hv).2.1) _ _ _,
-    DbindSafe.of_none (fun v E hv => (h v E hv).2.2) x⟩
-
-theorem NoRootb.setE {Γ : Ctx} (h : NoRootb Γ) {x : Var} {E : Entry}
-    (hE : E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) :
-    NoRootb (A2.setE Γ x E) := by
-  intro v E' hv
-  simp only [A2.setE, upd] at hv
-  split at hv
-  · cases hv; exact hE
-  · exact h v E' hv
-
-theorem NoRootb.kill {Γ : Ctx} (h : NoRootb Γ) (e : Eff) (hv : Bool) (x : Var) :
-    NoRootb (A2.kill e hv x Γ) := by
-  intro v E' h'
-  simp only [A2.kill] at h'
-  cases hg : Γ v with
-  | none => rw [hg] at h'; cases h'
-  | some E =>
-    rw [hg] at h'; simp only [Option.map_some, Option.some.injEq] at h'; subst h'
-    rw [killE_mode, killE_dtor, killE_dbind]; exact h v E hg
-
-theorem NoRootb.exitScope {Γ : Ctx} (h : NoRootb Γ) (x : Var) : NoRootb (A2.exitScope x Γ) := by
-  intro v E' h'
-  simp only [A2.exitScope, upd] at h'
-  split at h'
-  · cases h'
-  · exact h.kill .replace false x v E' h'
-
 def Ecl : Entry := ⟨opt, .own, true, [], [], false, false, false, false⟩
 def Ex : Entry := ⟨str, .bor, true, [⟨2, .self⟩, ⟨1, .inner⟩], [], false, false, false, false⟩
 
 /-- The caller's context at the call. -/
 def K4 : Ctx := A2.setE (A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew) 3 intE
 
-theorem noRootb_empty : NoRootb (fun _ => none) := fun _ _ h => by cases h
 
 theorem K4_noRootb : NoRootb K4 :=
   (((noRootb_empty.setE (by simp [intE])).setE (by simp [Ecl])).setE (by simp [Enew])).setE

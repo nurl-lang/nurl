@@ -35,6 +35,7 @@ import A2.Codes
 import A2.EnvHand
 import A2.Soundness
 import A2.Settle
+import A2.NoRootb
 import A2.DynCell
 import A2.TakeWitness
 import A2.PopWitness
@@ -46,6 +47,7 @@ import A2.TakeBDWitness
 import A2.HandOver
 import A2.ExitWitness
 import A2.Layout
+import A2.Dtor
 import A2.DtorWitness
 import A2.DropCode
 import A2.ClosureDropWitness
@@ -80,3 +82,4 @@ import A2.RegionThruWitness
 import A2.RegionResWitness
 import A2.CapsStore
 import A2.CapsLive
+import A2.Reach

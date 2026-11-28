@@ -744,6 +744,13 @@ jobs:
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
 
+      - name: every stdlib foreign function has a capability row
+        # A certificate's N.cap claim classes what a program can do by the
+        # runtime functions its calls reach (stdlib/caps.tsv, AGORA-1013).
+        # A new `&` declaration with no row would reach a claim as
+        # `ffi.unknown`; the row goes in with the declaration.
+        run: ./tools/check_caps_table.sh
+
       - name: errno is re-derived on every access (fiber migration)
         # A fiber resumes on any worker thread; errno's `const` accessor
         # lets the optimiser reuse one thread's errno address across a

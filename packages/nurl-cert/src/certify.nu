@@ -23,7 +23,10 @@ $ `lean.nu`
 $ `manifest.nu`
 $ `tolean.nu`
 $ `words.nu`
+$ `caps.nu`
 $ `stdlib/std/random.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/channel.nu`
 
 : s NURLCERT_VERSION ( pkg_version )
 
@@ -431,7 +434,9 @@ open A2 C
     ^ id
 }
 
-@ cert_assumed_row AssumedRow a b threads → Json {
+// (`caps`: N.cap is proved, about the program with its stubs: the row backs
+// it too)
+@ cert_assumed_row AssumedRow a b threads b caps → Json {
     : String id ( cert_assumed_id ( string_data . a name ) )
     : String what ( string_from `function ` )
     ( string_push_str what ( string_data . a name ) )
@@ -444,8 +449,9 @@ open A2 C
     ( string_push_str what `]; hasThru ` )
     ( string_push_str what ? . a has_thru `true` `false` )
     ( string_push_str what ? threads `) and proof obligations (FnOK, codesOK, globsAt)` `) and proof obligations (FnOK, codesOK)` )
+    : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
     ^ ( mj_row ( string_data id ) ( string_data what ) ( string_data . a why ) ( string_data . a loc )
-    `assumed (not translated; checked only by signature and call summary)` ? threads `M.safe M.leak M.race` `M.safe M.leak` )
+    `assumed (not translated; checked only by signature and call summary)` ? caps ( string_data ( __ct_with_ncap mc ) ) mc )
 }
 
 // `elab`: the bundle has Elab.lean, so the term is the kernel's
@@ -453,7 +459,7 @@ open A2 C
 // words (`core-ir-words`), and the encodings the term uses (`enc`,
 // cert_enc_ids), each a row (AGORA-1029). `assumed_rows`: one row per
 // assumed function (AGORA-1033).
-@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab ( Vec String ) enc ( Vec AssumedRow ) assumed_rows → Json {
+@ cert_ledger s prof ( Vec String ) unsafe_rows b threads b elab ( Vec String ) enc ( Vec AssumedRow ) assumed_rows b caps → Json {
     // the claims a shared row backs: M.race too, for a threaded program
     : s mc ? threads `M.safe M.leak M.race` `M.safe M.leak`
     : s muc ? threads `M.unsafe M.safe M.leak M.race` `M.unsafe M.safe M.leak`
@@ -507,6 +513,8 @@ open A2 C
         `M.race is A3's race freedom of the program's model; that a race-free program behaves sequentially consistently in the binary is the memory model's theorem, cited, not mechanized`
         `formal/CLAIM.md (trusted base), A3/DESIGN.md` `the C11 and LLVM memory models (Batty et al.; LLVM LangRef)` `M.race` ) )
     } {}
+    // N.cap's own rows, when it is proved (AGORA-1013)
+    ? caps { ( cert_caps_rows L ) } {}
     ( json_arr_push L ( mj_row `unsafe-report` `nurlc --unsafe-report: the program's own hand-vouched code`
     `M.unsafe is what this report says, not a theorem` `compiler/nurlc.nu (--unsafe-report)` `nurlc` `M.unsafe` ) )
     : i n ( vec_len [String] unsafe_rows )
@@ -517,7 +525,7 @@ open A2 C
                 : String id ( string_from `unsafe-` )
                 ( string_push_int id + k 1 )
                 ( json_arr_push L ( mj_row ( string_data id ) ( string_data r ) `the program vouches for this by hand (unsafe), no rule checks it`
-                ( string_data r ) `the program's author` muc ) )
+                ( string_data r ) `the program's author` ? caps ( string_data ( __ct_with_ncap muc ) ) muc ) )
             }
             F _ → {}
         }
@@ -526,10 +534,127 @@ open A2 C
     : i na ( vec_len [AssumedRow] assumed_rows )
     : ~ i ak 0
     ~ < ak na {
-        ( json_arr_push L ( cert_assumed_row ( vec_at [AssumedRow] assumed_rows ak ) threads ) )
+        ( json_arr_push L ( cert_assumed_row ( vec_at [AssumedRow] assumed_rows ak ) threads caps ) )
         = ak + ak 1
     }
     ^ L
+}
+
+// The claims a hand-vouched place backs, and N.cap too.
+@ __ct_with_ncap s c → String {
+    : String o ( string_from c )
+    ( string_push_str o ` N.cap` )
+    ^ o
+}
+
+// ── formal/'s commit ─────────────────────────────────────────────────
+//
+// `versions.formal_commit` (informational: verify pins the tree's hash,
+// not the commit). Read off the repository's files where they are the
+// plain case, a `.git` directory or a worktree's `.git` file, `HEAD` a ref
+// or a commit, the ref loose or in `packed-refs`: that costs a few small
+// reads, where starting `git rev-parse HEAD` cost about 9 ms of every
+// certify. Anything else asks git, as before.
+
+@ __ct_hex40 String x → b {
+    : ( Slice u ) t ( slice_of_str ( string_data x ) )
+    : i n ( slice_len [u] t )
+    ? != n 40 { ^ F } {}
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte t k )
+        ? ! | & >= c 48 <= c 57 & >= c 97 <= c 102 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// The directory above `p` ("" at the root).
+@ __ct_parent String p → String {
+    : ( Slice u ) t ( slice_of_str ( string_data p ) )
+    : ~ i k - ( slice_len [u] t ) 1
+    ~ & > k 0 | == ( slice_byte t k ) 47 == ( slice_byte t k ) 92 { = k - k 1 }
+    ~ & > k 0 & != ( slice_byte t k ) 47 != ( slice_byte t k ) 92 { = k - k 1 }
+    ? <= k 0 { ^ ( string_new ) } {}
+    ^ ( string_substr p 0 k )
+}
+
+@ __ct_git_commit_files s dir → String {
+    // the repository's git directory, from `dir` up
+    : ~ String d ( nc_abs dir )
+    : ~ String gitdir ( string_new )
+    : ~ i up 0
+    ~ & == 0 ( string_len gitdir ) & > ( string_len d ) 0 < up 64 {
+        : String g ( nc_join ( string_data d ) `.git` )
+        ?? ( dir_list ( string_data g ) ) {
+            T _ → { = gitdir ( string_clone g ) }
+            F _ → {
+                ?? ( nc_read ( string_data g ) ) {
+                    T txt → {
+                        : String l ( string_trim txt )
+                        ? ( string_starts_with l `gitdir: ` ) {
+                            : String rest ( string_substr l 8 - ( string_len l ) 8 )
+                            = gitdir ? ( nc_is_abs ( string_data rest ) ) rest ( nc_join ( string_data d ) ( string_data rest ) )
+                        } { ^ ( string_new ) }
+                    }
+                    F → {}
+                }
+            }
+        }
+        = d ( __ct_parent d )
+        = up + up 1
+    }
+    ? == 0 ( string_len gitdir ) { ^ ( string_new ) } {}
+    // a worktree's refs are its common directory's
+    : ~ String common ( string_clone gitdir )
+    ?? ( nc_read ( string_data ( nc_join ( string_data gitdir ) `commondir` ) ) ) {
+        T c → {
+            : String cd ( string_trim c )
+            = common ? ( nc_is_abs ( string_data cd ) ) cd ( nc_join ( string_data gitdir ) ( string_data cd ) )
+        }
+        F → {}
+    }
+    : String head ?? ( nc_read ( string_data ( nc_join ( string_data gitdir ) `HEAD` ) ) ) { T h → ( string_trim h ) F → { ^ ( string_new ) } }
+    ? ( __ct_hex40 head ) { ^ head } {}
+    ? ! ( string_starts_with head `ref: ` ) { ^ ( string_new ) } {}
+    : String ref ( string_substr head 5 - ( string_len head ) 5 )
+    ?? ( nc_read ( string_data ( nc_join ( string_data common ) ( string_data ref ) ) ) ) {
+        T x → {
+            : String sha ( string_trim x )
+            ? ( __ct_hex40 sha ) { ^ sha } {}
+        }
+        F → {}
+    }
+    ?? ( nc_read ( string_data ( nc_join ( string_data common ) `packed-refs` ) ) ) {
+        T pr → {
+            : ( Vec String ) ls ( nc_lines ( string_data pr ) )
+            : i n ( vec_len [String] ls )
+            : ~ i k 0
+            ~ < k n {
+                : String l ( string_clone ( vec_at [String] ls k ) )
+                ? & > ( string_len l ) 41 ( string_ends_with l ( string_data ref ) ) {
+                    : String sha ( string_substr l 0 40 )
+                    : String tail ( string_substr l 41 - ( string_len l ) 41 )
+                    ? & ( __ct_hex40 sha ) ( string_eq tail ref ) { ^ sha } {}
+                } {}
+                = k + k 1
+            }
+        }
+        F → {}
+    }
+    ^ ( string_new )
+}
+
+@ __ct_formal_commit s formal → String {
+    : String c ( __ct_git_commit_files formal )
+    ? > ( string_len c ) 0 { ^ c } {}
+    : ( Vec String ) ga ( vec_new [String] )
+    ( vec_push [String] ga ( string_from `-C` ) )
+    ( vec_push [String] ga ( string_from formal ) )
+    ( vec_push [String] ga ( string_from `rev-parse` ) )
+    ( vec_push [String] ga ( string_from `HEAD` ) )
+    : Run gr ( nc_run `git` ga )
+    ^ ? & . gr started == . gr code 0 ( __ct_first_line . gr out ) ( string_new )
 }
 
 // ── Certify ──────────────────────────────────────────────────────────
@@ -550,6 +675,41 @@ open A2 C
     ^ c
 }
 
+// The second compile (the LLVM IR and the unsafe report) and nurlc's
+// version, on a thread: a channel the two runs come back on, in that
+// order. Where no thread starts, both run here first.
+: Compile2 {
+    ( Channel Run ) ch
+    Thread th
+}
+
+@ __ct_compile2_run String nurlc ( Vec String ) a2 ( Channel Run ) tx → v {
+    ( chan_send [Run] tx ( nc_run ( string_data nurlc ) a2 ) )
+    : ( Vec String ) a3 ( vec_new [String] )
+    ( vec_push [String] a3 ( string_from `--version` ) )
+    ( chan_send [Run] tx ( nc_run ( string_data nurlc ) a3 ) )
+}
+
+@ __ct_compile2 String nurlc ( Vec String ) a2 → Compile2 {
+    : ( Channel Run ) ch ( chan_new [Run] )
+    : ( Channel Run ) tx ( Channel_share [Run] ch )
+    : String n2 ( string_clone nurlc )
+    : ( Vec String ) b2 ( vec_clone [String] a2 )
+    : ( @ v ) job \ → v { ( __ct_compile2_run nurlc a2 tx ) }
+    ^ ?? ( thread_spawn_owned job ) {
+        T t → @ Compile2 { ch t }
+        F _ → {
+            ( __ct_compile2_run n2 b2 ch )
+            @ Compile2 { ch ( thread_null ) }
+        }
+    }
+}
+
+// The next run back from the thread (none started: not started).
+@ __ct_compile2_next Compile2 c → Run {
+    ^ ?? ( chan_recv [Run] . c ch ) { T r → r F → @ Run { F -1 ( string_new ) ( string_new ) } }
+}
+
 @ __ct_fail s msg → i {
     ( nurl_eprint `nurl-cert: ` )
     ( nurl_eprintln msg )
@@ -566,6 +726,8 @@ open A2 C
     ?? ( file_delete ( string_data ( nc_join out `Claims.lean` ) ) ) { T _ → {} F _ → {} }
     ?? ( file_delete ( string_data ( nc_join out `manifest.json` ) ) ) { T _ → {} F _ → {} }
     ?? ( file_delete ( string_data ( nc_join out `Elab.lean` ) ) ) { T _ → {} F _ → {} }
+    ?? ( file_delete ( string_data ( nc_join out `Caps.lean` ) ) ) { T _ → {} F _ → {} }
+    ?? ( file_delete ( string_data ( nc_join out `caps.tsv` ) ) ) { T _ → {} F _ → {} }
 
     // nurlc runs from the standard library's root: the core IR then names
     // the library's files `stdlib/…`, which is how the translation tells
@@ -608,7 +770,12 @@ open A2 C
         ^ ( __ct_fail `a source file on disk is not the bytes nurlc compiled (changed during the run?); nothing is certified` )
     } {}
 
-    // 2. nurlc: the LLVM IR and the unsafe report.
+    // 2. nurlc: the LLVM IR and the unsafe report, and nurlc's version. They
+    // go only into the manifest, so they run on a thread while the
+    // translation and Lean run (`__ct_compile2`), and are read after Lean.
+    // The thread starts them here, with the standard library's root the
+    // working directory, which no step changes until they are read
+    // (Lean's run sets its toolchain in the environment, `cert_lean_env`).
     : ( Vec String ) a2 ( vec_new [String] )
     ( vec_push [String] a2 ( string_from `--unsafe-report` ) )
     : String tag2 ( rand_hex_str 16 )
@@ -616,28 +783,9 @@ open A2 C
     ( string_push_str tag2_arg ( string_data tag2 ) )
     ( vec_push [String] a2 tag2_arg )
     ( vec_push [String] a2 ( string_from src ) )
-    : Run r2 ( nc_run ( string_data . o nurlc ) a2 )
-    ? ! . r2 started { ^ ( __ct_fail `nurlc did not start` ) } {}
-    // This compile read the sources again: its LLVM IR and its unsafe
-    // report count only when it read the very bytes the first run did.
-    : ( Vec String ) sources2 ( vec_new [String] )
-    : ( Vec String ) shas2 ( vec_new [String] )
-    : ( Vec String ) rest2 ( vec_new [String] )
-    : b rec2 ( cert_records . r2 err ( string_data tag2 ) sources2 shas2 rest2 )
-    ? | | ! rec2 ! ( cert_same sources sources2 ) ! ( cert_same shas shas2 ) {
-        ^ ( __ct_fail `the compile for the LLVM IR and the unsafe report read other source bytes than the first; nothing is certified` )
-    } {}
-    // nurlc's own borrow walk may refuse a program the core IR still
-    // describes: it has no LLVM IR then, and its unsafe report is cut short.
-    : b compiled == . r2 code 0
-    : String llvm_sha ? compiled ( nc_sha256_text ( string_data . r2 out ) ) ( string_new )
-    : ( Vec String ) unsafe_rows ( __ct_unsafe_rows rest2 )
-
-    : ( Vec String ) a3 ( vec_new [String] )
-    ( vec_push [String] a3 ( string_from `--version` ) )
-    : Run r3 ( nc_run ( string_data . o nurlc ) a3 )
-    : String nurlc_ver ( __ct_first_line . r3 out )
-    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
+    // (Lean's environment is set before the thread starts: `cert_lean_env`)
+    ? ! ( cert_lean_env ( string_data . o formal ) ) { ^ ( __ct_fail `cannot set LEAN_PATH for Lean` ) } {}
+    : Compile2 c2 ( __ct_compile2 ( string_clone . o nurlc ) a2 )
 
     // 3. The translation, held to the program grammar.
     : ~ String verdict ( string_from `accepted` )
@@ -678,6 +826,16 @@ open A2 C
     : ~ b elab F
     // why a candidate the checker accepts has no Cert.elab (printed)
     : ~ String elab_why ( string_new )
+    // N.cap: attempted, proved, why not, and what the manifest says of it
+    : String caps_path ( nc_join out `Caps.lean` )
+    : String ctab_path ( nc_join out `caps.tsv` )
+    : ~ b try_caps F
+    : ~ b caps F
+    : ~ String caps_why ( string_from `the program is not accepted: nothing is claimed of it` )
+    : ~ Json caps_json ( json_obj_new )
+    : ~ ( Vec String ) caps_doors ( vec_new [String] )
+    : ~ ( Vec String ) caps_axioms ( vec_new [String] )
+    : ~ String caps_status ( string_from `open` )
     ? ( nc_is verdict `accepted` ) {
         : String claims ( cert_claims_lean prof nv threads cond )
         ? ! ( nc_write ( string_data claims_path ) ( string_data claims ) ) { ^ ( __ct_fail `cannot write Claims.lean` ) } {}
@@ -694,12 +852,32 @@ open A2 C
                 F → {}
             }
         } {}
+        // N.cap (AGORA-1013): the functions a run can enter, the classes
+        // they reach (the core IR, through the capability table), and
+        // Caps.lean, which Lean checks in the same run, as an optional part.
+        : String ctab_src ( nc_join ( string_data . o stdlib ) `stdlib/caps.tsv` )
+        ?? ( nc_read ( string_data ctab_src ) ) {
+            T tab → {
+                ?? ( cert_caps_make . tr lean . r1 out tab ) {
+                    T cm → {
+                        ? & ( nc_write ( string_data caps_path ) ( string_data ( cert_caps_lean . cm runs prof threads ) ) )
+                        ( nc_write ( string_data ctab_path ) ( string_data tab ) ) {
+                            = try_caps T
+                            = caps_json . cm json
+                            = caps_doors ( vec_clone [String] . . cm res doors )
+                        } {}
+                    }
+                    F e → { = caps_why e }
+                }
+            }
+            F → { = caps_why ( string_from `no capability table (stdlib/caps.tsv) under the standard library's root` ) }
+        }
         : String work ( nc_join out `.build` )
         // A fresh directory for the one Lean file the check runs
         // (`cert_lean_check`: the bundle's modules, combined).
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ( nc_mkdirs ( string_data work ) )
-        : LeanRun lr ( cert_lean_check ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab )
+        : LeanRun lr ( cert_lean_check2 ( string_data . o lean ) ( string_data formal ) out ( string_data work ) try_elab try_caps )
         ? ( cert_lean_refused . lr log ) {
             = verdict ( string_from `refused` )
             = reason ( string_from ? & threads cond `the verified checker refuses the program (C.certOK3BA is false)`
@@ -735,6 +913,34 @@ open A2 C
         } {}
         ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
         ? ! elab { ?? ( file_delete ( string_data elab_path ) ) { T _ → {} F _ → {} } } {}
+        = caps & & try_caps ( nc_is verdict `accepted` ) ( cert_caps_proved lr )
+        ? caps {
+            ?? ( cert_lean_axioms . lr caps_log `Cert.n_cap` ) {
+                T ax → { = caps_axioms ( cert_axiom_list ax ) }
+                F → {}
+            }
+            = caps_status ( string_from ( cert_status_of prof caps_axioms ) )
+            = caps_why ( string_new )
+            ? ( nc_is caps_status `open` ) {
+                = caps F
+                = caps_why ( string_from `Cert.n_cap rests on axioms beyond the profile's` )
+            } {
+                // a conditional bundle's N.cap is about the program with its
+                // stubs: assumed, as its M claims are (AGORA-1033)
+                ? cond { = caps_status ( string_from `assumed` ) } {}
+            }
+        } {
+            ? & try_caps ( nc_is verdict `accepted` ) {
+                = caps_why ( string_from `Lean did not check the list of functions a run can enter: ` )
+                ( string_push_str caps_why ( string_data ( __ct_first_err . lr caps_log ) ) )
+            } {}
+        }
+        ? ! caps {
+            ?? ( file_delete ( string_data caps_path ) ) { T _ → {} F _ → {} }
+            ?? ( file_delete ( string_data ctab_path ) ) { T _ → {} F _ → {} }
+            = caps_status ( string_from `open` )
+            = caps_axioms ( vec_new [String] )
+        } {}
         : ~ i k 0
         ~ < k nclaims {
             ?? ( cert_lean_axioms . lr log ( cert_claim_lean k ) ) {
@@ -822,6 +1028,28 @@ open A2 C
         = k + k 1
     }
     // M.unsafe: what nurlc's report says.
+    // 2, read: the compile on the thread, and nurlc's version.
+    : Run r2 ( __ct_compile2_next c2 )
+    : Run r3 ( __ct_compile2_next c2 )
+    ( thread_join . c2 th )
+    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
+    ? ! . r2 started { ^ ( __ct_fail `nurlc did not start` ) } {}
+    // This compile read the sources again: its LLVM IR and its unsafe
+    // report count only when it read the very bytes the first run did.
+    : ( Vec String ) sources2 ( vec_new [String] )
+    : ( Vec String ) shas2 ( vec_new [String] )
+    : ( Vec String ) rest2 ( vec_new [String] )
+    : b rec2 ( cert_records . r2 err ( string_data tag2 ) sources2 shas2 rest2 )
+    ? | | ! rec2 ! ( cert_same sources sources2 ) ! ( cert_same shas shas2 ) {
+        ^ ( __ct_fail `the compile for the LLVM IR and the unsafe report read other source bytes than the first; nothing is certified` )
+    } {}
+    // nurlc's own borrow walk may refuse a program the core IR still
+    // describes: it has no LLVM IR then, and its unsafe report is cut short.
+    : b compiled == . r2 code 0
+    : String llvm_sha ? compiled ( nc_sha256_text ( string_data . r2 out ) ) ( string_new )
+    : ( Vec String ) unsafe_rows ( __ct_unsafe_rows rest2 )
+    : String nurlc_ver ( __ct_first_line . r3 out )
+
     : i nu ( vec_len [String] unsafe_rows )
     : String uen ? == nu 0 ( string_from `It contains no hand-vouched (unsafe) code outside the standard library.` )
     ( string_from `It contains hand-vouched (unsafe) code outside the standard library: see the ledger rows unsafe-*.` )
@@ -831,7 +1059,15 @@ open A2 C
     : s uwhy ? compiled `nurlc --unsafe-report` `nurlc refuses to compile the program, so its unsafe report is incomplete`
     ( json_arr_push cl ( __ct_claim `M.unsafe` `` ust ( string_data uen ) ( string_data ufi )
     uwhy ( vec_new [String] ) `unsafe-report` ) )
+    // N.cap: which functions a run can enter (Cert.n_cap), and the classes
+    // they reach (AGORA-1013)
+    : String cen ? caps ( cert_caps_sentence_en caps_doors ) ( string_from ( cert_caps_open_en ) )
+    : String cfi ? caps ( cert_caps_sentence_fi caps_doors ) ( string_from ( cert_caps_open_fi ) )
+    : String cprem ( cert_caps_premises prof caps elab enc nu assumed_ids )
+    ( json_arr_push cl ( __ct_claim `N.cap` `Cert.n_cap` ( string_data caps_status ) ( string_data cen ) ( string_data cfi )
+    ( string_data caps_why ) caps_axioms ( string_data cprem ) ) )
     ( mj_set m `claims` cl )
+    ? caps { ( mj_set m `capabilities` caps_json ) } {}
 
     // Coverage: the program's own functions.
     : Json cov ( json_obj_new )
@@ -941,6 +1177,10 @@ open A2 C
     ? elab {
         ?? ( nc_sha256_file ( string_data elab_path ) ) { T h → ( mj_str hs `elab_lean` ( string_data h ) ) F → {} }
     } {}
+    ? caps {
+        ?? ( nc_sha256_file ( string_data caps_path ) ) { T h → ( mj_str hs `caps_lean` ( string_data h ) ) F → {} }
+        ?? ( nc_sha256_file ( string_data ctab_path ) ) { T h → ( mj_str hs `caps_tsv` ( string_data h ) ) F → {} }
+    } {}
     ? > ( string_len . o binary ) 0 {
         : Json bo ( json_obj_new )
         ( mj_str bo `path` ( string_data . o binary ) )
@@ -956,20 +1196,13 @@ open A2 C
     : Json vs ( json_obj_new )
     ( mj_str vs `nurlc` ( string_data nurlc_ver ) )
     ( mj_str vs `formal_tree` ( string_data ( cert_formal_hash ( string_data formal ) ) ) )
-    : ( Vec String ) ga ( vec_new [String] )
-    ( vec_push [String] ga ( string_from `-C` ) )
-    ( vec_push [String] ga ( string_clone formal ) )
-    ( vec_push [String] ga ( string_from `rev-parse` ) )
-    ( vec_push [String] ga ( string_from `HEAD` ) )
-    : Run gr ( nc_run `git` ga )
-    : String commit ? & . gr started == . gr code 0 ( __ct_first_line . gr out ) ( string_new )
-    ( mj_str vs `formal_commit` ( string_data commit ) )
+    ( mj_str vs `formal_commit` ( string_data ( __ct_formal_commit ( string_data formal ) ) ) )
     : String tc_path ( nc_join ( string_data formal ) `lean-toolchain` )
     : String tc ?? ( nc_read ( string_data tc_path ) ) { T t → ( string_trim t ) F → ( string_new ) }
     ( mj_str vs `lean_toolchain` ( string_data tc ) )
     ( mj_set m `versions` vs )
 
-    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab enc assumed_rows ) )
+    ( mj_set m `ledger` ( cert_ledger prof unsafe_rows threads elab enc assumed_rows caps ) )
 
     : String text ( json_pretty m )
     ( string_push_char text 10 )
@@ -994,6 +1227,12 @@ open A2 C
             }
             = z + z 1
         }
+        ( nurl_print `  N.cap ` )
+        ( nurl_println ( string_data caps_status ) )
+        ? > ( string_len caps_why ) 0 {
+            ( nurl_print `  N.cap not proved: ` )
+            ( nurl_println ( string_data caps_why ) )
+        } {}
         ? cond {
             ( nurl_print `  assumed: ` )
             ( nurl_print_int ( vec_len [AssumedRow] assumed_rows ) )

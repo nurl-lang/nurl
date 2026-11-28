@@ -16,7 +16,10 @@
 > the NURL port of `tools/ncore/tolean.py`), and a
 > program's own certificate (C13, `C/Cert.lean`, `packages/nurl-cert`)
 > states `M.safe` and `M.leak` about its term as kernel-checked theorems,
-> and `M.race` too for a program that spawns threads (C14, `C/Cert3.lean`).
+> and `M.race` too for a program that spawns threads (C14, `C/Cert3.lean`),
+> and `N.cap`, which of its functions a run can enter (C16, `C/Caps.lean`,
+> `C/Caps3.lean`, on `A2/Reach.lean` and `A3/Reach.lean`: a program with the
+> same functions at those indices has the same runs).
 > Phase D is under way: D0–D1 validate the drops and the panic journal in
 > the LLVM nurlc emits, and D2 proves what that validation means for a
 > model of one path. Until a phase
@@ -77,7 +80,9 @@ formal/
                    the table from them at release (rules/README.md)
   C.lean, C/       phase C: the verified checker (C0–C4: A1, C5–C11: A2, C12: A3, end to end;
                    C13: a program's certificate claims, C/Cert.lean;
-                   C14: a threaded program's, C/Cert3.lean)
+                   C14: a threaded program's, C/Cert3.lean;
+                   C16: which functions a program's runs can enter, N.cap, C/Caps.lean,
+                   C/Caps3.lean, on A2/Reach.lean and A3/Reach.lean)
   B.lean, B/       phase B: the unsafe base against the rules' types (B1: `Vec`, B2: `String`, B3: `rcbox`, B4: `HashMap`, B5: `Arc`, B6: `Channel`, B7: cycle collection, B8: sizes, B9: `Rc`)
   check.sh         builds the proof and checks it has no sorry and no new axiom
   lean-toolchain, lakefile.toml, A1.lean, A2.lean, A3.lean, Check.lean

@@ -5,7 +5,7 @@
 #  nurl-cert end-to-end tests (AGORA-1019).
 #
 #  Run from anywhere in a checkout:  packages/nurl-cert/tests/nurl-cert_test.sh
-#  Needs: build/nurlc, Lean's lean (and lake) on PATH, formal/ built (lake build C.Cert C.Cert3 C.Elab).
+#  Needs: build/nurlc, Lean's lean (and lake) on PATH, formal/ built (lake build C.Cert C.Cert3 C.Elab C.Caps C.Caps3).
 #  Env:   NURL_CERT  a built nurl-cert (default: build it into build/)
 #         JOBS       parallel certify runs (default: nproc)
 #
@@ -35,6 +35,13 @@
 #     Lean reads back as the word.
 #  3. The fast profile: a bundle whose claims are `validated`, with the
 #     compiled-code axiom listed, verifies.
+#  3e. N.cap (AGORA-1013): every accepted certify program proves which of
+#     its functions a run can enter (Caps.lean, Cert.n_cap), every refused
+#     one leaves it open; seeded programs get exactly the classes their
+#     reachable calls have (a print in main, behind a closure, in a
+#     destructor, in a spawned thread; none from a function nothing calls);
+#     and verify fails on each of: the list, the capability table, a class,
+#     a sentence or the status edited.
 # ============================================================
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -144,7 +151,8 @@ for n in vec_push_len thread_sends_on_a_channel_main_receives struct_fields_read
     B="$TMP/progs/$n/$n.cert"; W="$TMP/mod/$n"; mkdir -p "$W"
     ( cd "$ROOT/formal" && lake env lean --root="$B" -o "$W/Program.olean" "$B/Program.lean" > "$W/p.log" 2>&1 \
         && LEAN_PATH="$W" lake env lean "$B/Claims.lean" > "$W/c.log" 2>&1 \
-        && { [ ! -e "$B/Elab.lean" ] || LEAN_PATH="$W" lake env lean "$B/Elab.lean" > "$W/e.log" 2>&1; } ); mrc=$?
+        && { [ ! -e "$B/Elab.lean" ] || LEAN_PATH="$W" lake env lean "$B/Elab.lean" > "$W/e.log" 2>&1; } \
+        && { [ ! -e "$B/Caps.lean" ] || LEAN_PATH="$W" lake env lean "$B/Caps.lean" > "$W/k.log" 2>&1; } ); mrc=$?
     if [ "$mrc" = 0 ] && python3 - "$B" "$W" <<'EOF2'
 import json, os, re, sys
 b, w = sys.argv[1:]
@@ -153,8 +161,12 @@ log = open(os.path.join(w, "c.log")).read()
 def axioms(text, name):
     x = re.search(r"^'%s' (depends on axioms: \[(.*)\]|does not depend on any axioms)" % re.escape(name), text, re.M)
     return None if x is None else ([] if x.group(2) is None else x.group(2).split(", "))
-lean = [c for c in m["claims"] if c["lean"]]   # (M.unsafe is the ledger's, not Lean's)
+lean = [c for c in m["claims"] if c["lean"] and c["id"] != "N.cap"]   # (M.unsafe is the ledger's, not Lean's)
 ok = len(lean) >= 2 and all(c["status"] == "proved" and axioms(log, c["lean"]) == c["axioms"] for c in lean)
+ncap = [c for c in m["claims"] if c["id"] == "N.cap"]
+has_caps = os.path.exists(os.path.join(b, "Caps.lean"))
+ok = ok and len(ncap) == 1 and has_caps and ncap[0]["status"] == "proved" \
+    and axioms(open(os.path.join(w, "k.log")).read(), "Cert.n_cap") == ncap[0]["axioms"]
 has_elab = os.path.exists(os.path.join(b, "Elab.lean"))
 if has_elab:
     ok = ok and "elab_lean" in m["hashes"] and axioms(open(os.path.join(w, "e.log")).read(), "Cert.elab") == ["propext", "Quot.sound"]
@@ -448,6 +460,27 @@ m["hashes"][k] = hashlib.sha256(open(f, "rb").read()).hexdigest()
 open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
 EOF2
 }
+# nocaps DIR: the bundle without its N.cap proof, as certify writes one
+# that proves none (Caps.lean, caps.tsv and capabilities gone, N.cap open on
+# its definition alone, the N.cap rows out of the ledger).
+nocaps() {
+    rm -f "$1/Caps.lean" "$1/caps.tsv"
+    python3 - "$1/manifest.json" <<'EOF2'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p))
+m.pop("capabilities", None)
+m["hashes"].pop("caps_lean", None); m["hashes"].pop("caps_tsv", None)
+for c in m["claims"]:
+    if c["id"] == "N.cap":
+        c.update(status="open", axioms=[], premises=["claim-definitions"], reason="dropped",
+                 sentence={"en": "Not claimed: which runtime functions it can reach is not proved for this program.",
+                           "fi": "Ei väitetä: mitä ajonaikaisia funktioita se voi tavoittaa, ei ole todistettu tälle ohjelmalle."})
+m["ledger"] = [r for r in m["ledger"] if not r["id"].startswith("caps-")]
+for r in m["ledger"]:
+    r["claims"] = [c for c in r["claims"] if c != "N.cap"]
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF2
+}
 # expect_only_fail NAME CHECK-TEXT: verify fails, and on that check alone
 # (besides the Lean checks it then does not run).
 expect_only_fail() {
@@ -469,6 +502,9 @@ else bad "a fresh scalar bundle has Elab.lean, its ledger says so, and it verifi
 efresh
 cmp -s "$P/w/Claims.lean" "$P/w2.cert/Claims.lean" || bad "the two scalar programs share a Claims.lean (one slot each)"
 cmp -s "$P/w/Program.lean" "$P/w2.cert/Program.lean" && bad "the two scalar programs have different terms"
+# (N.cap dropped honestly first: its list, made again from the swapped term,
+# would refuse the bundle before Lean runs, and this case is the kernel's)
+nocaps "$P/w"
 cp "$P/w2.cert/Program.lean" "$P/w/Program.lean"; rehash program_lean "$P/w/Program.lean"
 expect_only_fail "another scalar program's term, its hash updated: plain verify fails on Cert.elab" "Lean proves Cert.elab"
 efresh; rm "$P/w/Elab.lean"
@@ -947,7 +983,8 @@ ok = (m["program"]["verdict"] == "accepted"
       and "core-ir-words" in lr and "translation" not in lr
       and cl["M.safe"]["status"] == "assumed" and cl["M.leak"]["status"] == "assumed" and cl["M.race"]["status"] == "assumed"
       and all("assumed-fn:log_msg" in cl[k]["premises"] for k in ("M.safe", "M.leak", "M.race"))
-      and row is not None and "globsAt" in row["what"] and set(row["claims"]) == {"M.safe", "M.leak", "M.race"})
+      and row is not None and "globsAt" in row["what"] and set(row["claims"]) == {"M.safe", "M.leak", "M.race", "N.cap"}
+      and cl["N.cap"]["status"] == "assumed" and "assumed-fn:log_msg" in cl["N.cap"]["premises"])
 sys.exit(0 if ok else 1)
 EOF3
 then ok "A3 conditional certificate: M.safe/M.leak/M.race assumed, Cert.elab, verifies (+ --rebuild)"
@@ -991,9 +1028,217 @@ if ! "$C" verify "$CC/tt1.cert" --formal "$ROOT/formal" > "$CC/tt1.out" 2>&1; th
     ok "A3 conditional tamper: M.race upgraded from assumed to proved fails verify"
 else bad "A3 conditional tamper: M.race upgraded from assumed to proved should fail verify"; fi
 
+echo "== 3e. N.cap: which functions a run can enter, and what they reach (AGORA-1013)"
+# Every accepted certify program proves N.cap (Caps.lean, Cert.n_cap on the
+# standard axioms), every refused one leaves it open with no Caps.lean.
+if python3 - "$TMP"/progs/*/*.cert <<'EOF2'
+import json, os, sys
+bad = []
+for b in sys.argv[1:]:
+    m = json.load(open(os.path.join(b, "manifest.json")))
+    n = [c for c in m["claims"] if c["id"] == "N.cap"]
+    caps = os.path.exists(os.path.join(b, "Caps.lean"))
+    if m["program"]["verdict"] == "accepted":
+        good = (len(n) == 1 and n[0]["status"] == "proved" and caps and "capabilities" in m
+                and n[0]["axioms"] and set(n[0]["axioms"]) <= {"propext", "Classical.choice", "Quot.sound"})
+    else:
+        good = len(n) == 1 and n[0]["status"] == "open" and not caps and "capabilities" not in m
+    if not good:
+        bad.append(os.path.basename(b))
+if bad: print("        " + " ".join(bad))
+sys.exit(1 if bad else 0)
+EOF2
+then ok "every accepted certify program proves N.cap; every refused one leaves it open"
+else bad "every accepted certify program proves N.cap; every refused one leaves it open"; fi
+
+# Seeded programs: the classes are exactly what the calls a run can make
+# reach. A print in main, behind a closure, in a destructor and in a
+# spawned thread is there (with a chain through the function that makes
+# it); a print in a function nothing calls is not, and that function is
+# not in the list.
+NC="$TMP/ncap"; mkdir -p "$NC"
+printf '@ main → i {\n    : i a 40\n    ^ + a 2\n}\n' > "$NC/pure.nu"
+printf '@ main → i {\n    ( nurl_println `hello` )\n    ^ 0\n}\n' > "$NC/prints.nu"
+printf '@ main → i {\n    : ( @ v ) say \\ → v { ( nurl_println `from a closure` ) }\n    ( say )\n    ^ 0\n}\n' > "$NC/closure.nu"
+printf '@ say → v { ( nurl_println `never` ) }\n\n@ main → i {\n    : i a 40\n    ^ + a 2\n}\n' > "$NC/unreached.nu"
+printf '$ `stdlib/std/thread.nu`\n\n@ main → i {\n    : ( @ v ) body \\ → v { ( nurl_println_int 7 ) }\n    : !Thread ThreadErr r ( thread_spawn_owned body )\n    ^ ?? r { T t → ( thread_join t ) F _ → 1 }\n}\n' > "$NC/thread.nu"
+cp tools/ncore/certify/destructor_reads_a_view_of_a_live_source.nu "$NC/dtor.nu"
+for n in pure prints closure unreached thread dtor; do
+    "$C" certify "$NC/$n.nu" "${CA[@]}" > "$NC/$n.out" 2>&1 || true
+done
+if python3 - "$NC" <<'EOF2'
+import json, os, sys
+d = sys.argv[1]
+def caps(n):
+    m = json.load(open(os.path.join(d, n + ".cert", "manifest.json")))
+    nc = [c for c in m["claims"] if c["id"] == "N.cap"][0]
+    if nc["status"] != "proved":
+        return None
+    c = m["capabilities"]
+    names = {f["index"]: f["name"] for f in c["functions"]}
+    chains = {w["class"]: w["chain"] for w in c["classes"]}
+    return set(chains), names, chains, nc["sentence"]["en"]
+want = {
+    "pure": lambda s, names, ch, en: "stdio.out" not in s and "write to standard output" in en.split("It never:")[1],
+    "prints": lambda s, names, ch, en: "stdio.out" in s and ch["stdio.out"][-1].startswith("nurl_println ")
+              and en.startswith("Outside its own memory it can only: write to standard output"),
+    "closure": lambda s, names, ch, en: "stdio.out" in s and any(x.startswith("__closure_") for x in ch["stdio.out"]),
+    "unreached": lambda s, names, ch, en: "stdio.out" not in s and "say" not in names.values(),
+    "thread": lambda s, names, ch, en: "stdio.out" in s and "thread" in s and any(x.startswith("__closure_") for x in ch["stdio.out"]),
+    "dtor": lambda s, names, ch, en: "stdio.out" in s and ch["stdio.out"][0].startswith("drop__W "),
+}
+bad = []
+for n, f in want.items():
+    r = caps(n)
+    if r is None or not f(*r):
+        bad.append(n)
+if bad: print("        " + " ".join(bad))
+sys.exit(1 if bad else 0)
+EOF2
+then ok "seeded programs: a print in main, a closure, a destructor and a thread is claimed; one nothing calls is not"
+else bad "seeded programs get exactly the classes their reachable calls reach"; fi
+for n in pure prints closure unreached thread dtor; do
+    "$C" verify "$NC/$n.cert" --formal "$ROOT/formal" > "$NC/$n.vout" 2>&1 \
+        || { bad "$n's N.cap bundle verifies"; grep -v '^  ok' "$NC/$n.vout" | head -5; }
+done
+ok "the seeded N.cap bundles verify"
+
+# Tampering with N.cap: each is refused by verify.
+K="$NC/prints.cert"
+kfresh() { rm -rf "$NC/k"; cp -r "$K" "$NC/k"; }
+krehash() {
+    python3 - "$NC/k/manifest.json" "$1" "$2" <<'EOF3'
+import hashlib, json, sys
+p, k, f = sys.argv[1:]; m = json.load(open(p))
+m["hashes"][k] = hashlib.sha256(open(f, "rb").read()).hexdigest()
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF3
+}
+kexpect() {
+    out="$("$C" verify "$NC/k" --formal "$ROOT/formal" 2>&1)"; rc=$?
+    if [ "$rc" != 0 ] && printf '%s\n' "$out" | grep -q "FAIL  .*$2"; then ok "$1"
+    else bad "$1 (verify rc $rc; expected a FAIL naming: $2)"; printf '%s\n' "$out" | grep -v "^  ok" | sed 's/^/        /'; fi
+}
+# (a) the list cut short in Caps.lean and the manifest alike: the template
+# check passes, the capabilities made again differ (main's index gone)
+kfresh
+python3 - "$NC/k" <<'EOF3'
+import json, os, re, sys
+d = sys.argv[1]; p = os.path.join(d, "manifest.json"); m = json.load(open(p))
+m["capabilities"]["runs"] = []
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+c = open(os.path.join(d, "Caps.lean")).read()
+open(os.path.join(d, "Caps.lean"), "w").write(re.sub(r"def runs : List Nat := \[[0-9, ]*\]", "def runs : List Nat := []", c))
+EOF3
+krehash caps_lean "$NC/k/Caps.lean"
+kexpect "N.cap's list emptied in Caps.lean and the manifest: refused" "the capabilities are the ones"
+# (b) the table edited (nurl_println made pure), its hash updated
+kfresh; sed -i 's/^nurl_println\tstdio.out\t/nurl_println\tcompute\t/' "$NC/k/caps.tsv"; krehash caps_tsv "$NC/k/caps.tsv"
+kexpect "caps.tsv edited to call a print pure, its hash updated: refused" "the capabilities are the ones"
+# (c) the table edited, hash kept
+kfresh; sed -i 's/^nurl_println\tstdio.out\t/nurl_println\tcompute\t/' "$NC/k/caps.tsv"
+kexpect "caps.tsv edited, its hash kept: refused" "caps.tsv hashes as recorded"
+# (d) a class dropped from the manifest
+kfresh
+python3 - "$NC/k/manifest.json" <<'EOF3'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p))
+m["capabilities"]["classes"] = [w for w in m["capabilities"]["classes"] if w["class"] != "stdio.out"]
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF3
+kexpect "a class dropped from the manifest's capabilities: refused" "the capabilities are the ones"
+# (e) the sentence made to say it never prints
+kfresh
+python3 - "$NC/k/manifest.json" <<'EOF3'
+import json, sys
+p = sys.argv[1]; m = json.load(open(p))
+for c in m["claims"]:
+    if c["id"] == "N.cap":
+        c["sentence"]["en"] = c["sentence"]["en"].replace("write to standard output", "do nothing")
+open(p, "w").write(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+EOF3
+kexpect "N.cap's sentence edited: refused" "N.cap's sentences name exactly the classes"
+# (f) the proof removed, the status kept
+kfresh; rm "$NC/k/Caps.lean"
+kexpect "Caps.lean removed, N.cap still proved in the manifest: refused" "Caps.lean hashes as recorded"
+# (g) the theorem weakened in Caps.lean, its hash updated
+kfresh; sed -i 's/= true := by decide +kernel/= true ∨ True := by decide +kernel/' "$NC/k/Caps.lean"; krehash caps_lean "$NC/k/Caps.lean"
+kexpect "Caps.lean's check weakened, its hash updated: refused" "Caps.lean is the template"
+# (h) the kernel itself: a list that leaves out a function the program
+# calls is not closed, and Lean refuses Cert.runs_closed (the module way,
+# so no template check stands between): what guards a wrong list from the
+# scan that makes it.
+KW="$NC/kw"; mkdir -p "$KW"
+KB="$NC/closure.cert"
+sed 's/def runs : List Nat := \[[0-9, ]*\]/def runs : List Nat := [0]/' "$KB/Caps.lean" > "$KW/Caps.lean"
+grep -q 'def runs : List Nat := \[0\]' "$KW/Caps.lean" && ! cmp -s "$KW/Caps.lean" "$KB/Caps.lean" \
+    || bad "the closure program's list has more than its first function"
+if ( cd "$ROOT/formal" && lake env lean --root="$KB" -o "$KW/Program.olean" "$KB/Program.lean" > "$KW/p.log" 2>&1 \
+        && ! LEAN_PATH="$KW" lake env lean "$KW/Caps.lean" > "$KW/k.log" 2>&1 ) && grep -q "C.capsOKB P entry runs = true" "$KW/k.log" && grep -q "is false" "$KW/k.log"; then
+    ok "a list missing a called function: the kernel refuses Cert.runs_closed"
+else bad "a list missing a called function: the kernel refuses Cert.runs_closed"; head -5 "$KW/k.log"; fi
+# (i) a `def fn<k>` with a huge index, its hash updated: the capabilities
+# are not made from it (an index is the next declaration's, so the work grows
+# with the declarations, not with the index: verify ends at once), and Lean
+# is not run.
+kfresh; sed -i 's/^def fn0 : Fn :=/def fn1000000000 : Fn :=/' "$NC/k/Program.lean"; krehash program_lean "$NC/k/Program.lean"
+out="$(timeout 60 "$C" verify "$NC/k" --formal "$ROOT/formal" 2>&1)"; rc=$?
+if [ "$rc" != 0 ] && [ "$rc" != 124 ] && printf '%s\n' "$out" | grep -q "FAIL  the capabilities can be made again from the bundle: .*out of order"; then
+    ok "a def fn<k> with a huge index: refused at once, the capabilities not made"
+else bad "a def fn<k> with a huge index: refused at once, the capabilities not made (rc $rc)"; printf '%s\n' "$out" | grep -v "^  ok" | head -5; fi
+# (i2) a definition no run reaches that names a function the term does not
+# declare: refused too (every definition's names are checked, not only
+# those the closure walks).
+kfresh
+python3 - "$NC/k/Program.lean" <<'EOF3'
+import re, sys
+p = sys.argv[1]; t = open(p).read()
+k = len(re.findall(r"^def fn\d+ : Fn :=", t, re.M))
+t = t.replace("def P : Prog", "def fn%d : Fn :=\n  .letcall 0 999 [] .skip\n\ndef P : Prog" % k, 1)
+open(p, "w").write(t)
+EOF3
+krehash program_lean "$NC/k/Program.lean"
+kexpect "an unreached definition naming an undeclared function: refused" "the capabilities can be made again from the bundle: .*names one it does not declare"
+# (j) a runtime function the table does not class (ffi.unknown): the
+# sentence says no "never", only that its effects outside its memory are not
+# bounded. (A standard library root whose caps.tsv has no nurl_println row.)
+SL="$NC/sl"; mkdir -p "$SL/stdlib"
+for e in "$ROOT"/stdlib/*; do [ "$(basename "$e")" = caps.tsv ] || ln -s "$e" "$SL/stdlib/"; done
+grep -v $'^nurl_println\t' "$ROOT/stdlib/caps.tsv" > "$SL/stdlib/caps.tsv"
+"$C" certify "$NC/prints.nu" "${CA[@]}" --stdlib "$SL" --out "$NC/unk.cert" > "$NC/unk.out" 2>&1 || true
+if python3 - "$NC/unk.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+nc = [c for c in m["claims"] if c["id"] == "N.cap"][0]
+en, fi = nc["sentence"]["en"], nc["sentence"]["fi"]
+ok = (nc["status"] == "proved" and "ffi.unknown" in {w["class"] for w in m["capabilities"]["classes"]}
+      and "never" not in en and en.endswith("Its effects outside its own memory are not bounded.")
+      and "ei koskaan" not in fi and fi.endswith("Sen vaikutuksia oman muistinsa ulkopuolella ei ole rajattu."))
+sys.exit(0 if ok else 1)
+EOF3
+then ok "a runtime function the table does not class: no \"never\", its effects are not bounded"
+else bad "a runtime function the table does not class: no \"never\", its effects are not bounded"; grep -i "n.cap\|error" "$NC/unk.out" | head -5; fi
+"$C" verify "$NC/unk.cert" --formal "$ROOT/formal" > "$NC/unk.vout" 2>&1 \
+    && ok "the ffi.unknown bundle verifies" || { bad "the ffi.unknown bundle verifies"; grep -v '^  ok' "$NC/unk.vout" | head -5; }
+# (k) an optional part's import Lean cannot load (a formal tree with no
+# built C.Caps): the claims are checked again alone and stand; N.cap is open
+# and says why.
+F2="$NC/f2"; cp -rs "$ROOT/formal" "$F2"; rm -f "$F2"/.lake/build/lib/lean/C/Caps.olean
+"$C" certify "$NC/prints.nu" --nurlc "$NURLC" --formal "$F2" --out "$NC/noimp.cert" > "$NC/noimp.out" 2>&1 || true
+if python3 - "$NC/noimp.cert/manifest.json" <<'EOF3'
+import json, sys
+m = json.load(open(sys.argv[1]))
+st = {c["id"]: c["status"] for c in m["claims"]}
+nc = [c for c in m["claims"] if c["id"] == "N.cap"][0]
+sys.exit(0 if st["M.safe"] == "proved" and st["N.cap"] == "open" and "caps_lean" not in m["hashes"] else 1)
+EOF3
+then ok "C.Caps not loadable: the M claims stand, N.cap is open"
+else bad "C.Caps not loadable: the M claims stand, N.cap is open"; tail -8 "$NC/noimp.out"; fi
+rm -rf "$F2"
+
 echo "== 4. every manifest against docs/dev/certificate.schema.json"
 if python3 -c "import jsonschema" 2> /dev/null; then
-    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$CC/cond.cert/manifest.json" "$CC/cond_refused.cert/manifest.json" "$CC/tcond.cert/manifest.json" "$CC/tcond_refused.cert/manifest.json" <<'EOF2'
+    if python3 - "$ROOT/docs/dev/certificate.schema.json" "$TMP"/progs/*/*.cert/manifest.json "$B/manifest.json" "$E/manifest.json" "$P/fast.cert/manifest.json" "$TMP/cov/two_gaps.cert/manifest.json" "$CC/cond.cert/manifest.json" "$CC/cond_refused.cert/manifest.json" "$CC/tcond.cert/manifest.json" "$CC/tcond_refused.cert/manifest.json" "$TMP"/ncap/*.cert/manifest.json <<'EOF2'
 import json, sys, jsonschema
 schema = json.load(open(sys.argv[1]))
 bad = 0

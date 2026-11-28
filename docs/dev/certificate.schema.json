@@ -202,11 +202,11 @@
       "items": {
         "$ref": "#/$defs/claim"
       },
-      "description": "M.safe, M.leak, then M.unsafe; a threaded program: M.safe, M.leak, M.race, then M.unsafe",
+      "description": "M.safe, M.leak, M.unsafe, then N.cap; a threaded program: M.safe, M.leak, M.race, M.unsafe, then N.cap",
       "oneOf": [
         {
-          "minItems": 3,
-          "maxItems": 3,
+          "minItems": 4,
+          "maxItems": 4,
           "prefixItems": [
             {
               "properties": {
@@ -243,12 +243,22 @@
                   ]
                 }
               }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "N.cap"
+                },
+                "lean": {
+                  "const": "Cert.n_cap"
+                }
+              }
             }
           ]
         },
         {
-          "minItems": 4,
-          "maxItems": 4,
+          "minItems": 5,
+          "maxItems": 5,
           "prefixItems": [
             {
               "properties": {
@@ -293,6 +303,16 @@
                     "assumed",
                     "open"
                   ]
+                }
+              }
+            },
+            {
+              "properties": {
+                "id": {
+                  "const": "N.cap"
+                },
+                "lean": {
+                  "const": "Cert.n_cap"
                 }
               }
             }
@@ -383,6 +403,14 @@
         },
         "binary": {
           "$ref": "#/$defs/file"
+        },
+        "caps_lean": {
+          "$ref": "#/$defs/sha256",
+          "description": "Caps.lean (N.cap proved)"
+        },
+        "caps_tsv": {
+          "$ref": "#/$defs/sha256",
+          "description": "caps.tsv, the capability table the classes are read with (N.cap proved)"
         }
       }
     },
@@ -416,6 +444,74 @@
         "$ref": "#/$defs/row"
       },
       "minItems": 1
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "N.cap (AGORA-1013), present when it is proved: the functions a run can enter (the term's indices, Caps.lean's list), each program function among them with the classes its core IR calls reach, and each class with one shortest chain of calls from a function in the list to the runtime function that has it",
+      "required": [
+        "runs",
+        "functions",
+        "classes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "name",
+              "classes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "classes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "classes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "class",
+              "chain"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "class": {
+                "type": "string"
+              },
+              "chain": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

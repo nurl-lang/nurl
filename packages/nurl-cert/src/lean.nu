@@ -89,12 +89,23 @@ $ `stdlib/ext/json.nu`
 
 // ── One check ────────────────────────────────────────────────────────
 
+// Lean's worker threads. A check is one file whose parallel parts are few
+// (the claims' theorems, Elab.lean's, Caps.lean's) and mostly the kernel's
+// sequential work; a worker more than two finds nothing to do and only
+// keeps an allocator heap of its own. Over the certify corpus two workers
+// against Lean's default (one per core, four here) took 3.0 % less time and
+// 0.34 % less peak memory (AGORA-1013).
+: s LEAN_THREADS `--threads=2`
+
 : LeanRun {
     b ran
     String log
     // `elab`: Elab.lean checked too, and its part of the output
     b elab_ran
     String elab_log
+    // `caps`: Caps.lean (N.cap, AGORA-1013) checked too, and its part
+    b caps_ran
+    String caps_log
 }
 
 // A blank line, or a comment line (`--`).
@@ -164,7 +175,7 @@ $ `stdlib/ext/json.nu`
 // before Lean runs). Only lines checked to be exactly the expected ones are
 // left out; anything else is none (`why`). No `.olean` passes from one
 // process to the next any more.
-@ __lt_combined String prog String claims ? String elab inout String why inout i estart → ?String {
+@ __lt_combined String prog String claims ? String elab ? String caps inout String why inout i estart inout i cstart → ?String {
     : s head `import C.Cert\nopen A2 C\n`
     ? ! ( string_starts_with prog head ) {
         = why ( string_from `Program.lean does not start with its two lines 'import C.Cert' and 'open A2 C'` )
@@ -214,11 +225,40 @@ $ `stdlib/ext/json.nu`
         }
         F → {}
     }
-    : String o ( string_with_cap + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) 256 )
+    : ~ String kbody ( string_new )
+    : ~ b has_caps F
+    // (a threaded program's Caps.lean imports C.Caps3, another's C.Caps)
+    : ~ b caps3 F
+    ?? caps {
+        T c → {
+            ?? ( __lt_unimport c ( __lt_v2 `import Program` `import C.Caps` ) ) {
+                T x → {
+                    = kbody x
+                    = has_caps T
+                }
+                F → {
+                    ?? ( __lt_unimport c ( __lt_v2 `import Program` `import C.Caps3` ) ) {
+                        T x → {
+                            = kbody x
+                            = has_caps T
+                            = caps3 T
+                        }
+                        F → {
+                            = why ( string_from `Caps.lean's imports are not the template's` )
+                            ^ @ ?String { F }
+                        }
+                    }
+                }
+            }
+        }
+        F → {}
+    }
+    : String o ( string_with_cap + + + + ( string_len prog ) ( string_len cbody ) ( string_len ebody ) ( string_len kbody ) 256 )
     ( string_push_str o `import C.Cert\n` )
     ? threads { ( string_push_str o `import C.Cert3\n` ) } {}
     ? cond { ( string_push_str o `import C.Complete\n` ) } {}
     ? has_elab { ( string_push_str o `import C.Elab\n` ) } {}
+    ? has_caps { ( string_push_str o ? caps3 `import C.Caps3\n` `import C.Caps\n` ) } {}
     ( string_push_str o `section\nopen A2 C\n` )
     ( string_push_str o ( string_data pbody ) )
     ( string_push_str o `\nend\n\n` )
@@ -233,6 +273,17 @@ $ `stdlib/ext/json.nu`
         ~ < k n { ? == ( slice_byte t k ) 10 { = nl + nl 1 } {} = k + k 1 }
         = estart + nl 1
         ( string_push_str o ( string_data ebody ) )
+    } {}
+    ? has_caps {
+        ( string_push_str o `\n` )
+        // (the line the Caps.lean part starts at)
+        : ( Slice u ) t ( slice_of_str ( string_data o ) )
+        : i n ( slice_len [u] t )
+        : ~ i nl 0
+        : ~ i k 0
+        ~ < k n { ? == ( slice_byte t k ) 10 { = nl + nl 1 } {} = k + k 1 }
+        = cstart + nl 1
+        ( string_push_str o ( string_data kbody ) )
     } {}
     ^ @ ?String { T o }
 }
@@ -259,9 +310,75 @@ $ `stdlib/ext/json.nu`
 
 @ nc_is_s s a s b → b { ^ != 0 ( nurl_str_eq a b ) }
 
+// Lean's environment, for a run on formal/'s build: `LEAN_PATH` its library
+// (`lake env lean` set the same and cost ≈ 45 ms a run before Lean
+// started, AGORA-1029 step 9; `lean` adds its own library itself), set in
+// nurl-cert's own environment, which Lean inherits, so no `env` program
+// stands between (there is none on a Windows PATH, AGORA-1031); and
+// `ELAN_TOOLCHAIN` formal/'s toolchain (formal/lean-toolchain), which elan's
+// `lean` runs, as it did when Lean ran inside formal/. No step changes the
+// working directory, so a compile certify runs meanwhile on another thread
+// starts where it was started (AGORA-1013). An `ELAN_TOOLCHAIN` the caller
+// set stands, as it did inside formal/ (so does one this function set
+// earlier). F when `LEAN_PATH` cannot be set.
+@ cert_lean_env s formal → b {
+    : String lp ( string_from formal )
+    ( string_push_str lp `/.lake/build/lib/lean` )
+    : b set ( __lt_setenv `LEAN_PATH` ( string_data lp ) )
+    // (set once: certify sets it before its compile thread starts, and a
+    // value already in place is not set again, so no thread starts a
+    // process while the environment changes)
+    : b had ?? ( env_get `ELAN_TOOLCHAIN` ) { T _ → T F → F }
+    ? ! had {
+        ?? ( nc_read ( string_data ( nc_join formal `lean-toolchain` ) ) ) {
+            T tc → {
+                : String tcs ( string_trim tc )
+                ? > ( string_len tcs ) 0 { : b _t ( __lt_setenv `ELAN_TOOLCHAIN` ( string_data tcs ) ) } {}
+            }
+            F → {}
+        }
+    } {}
+    ^ set
+}
+
+// Set `name` to `v` unless it holds `v` already.
+@ __lt_setenv s name s v → b {
+    : b same ?? ( env_get name ) { T x → ( nc_is_s ( string_data x ) v ) F → F }
+    ? same { ^ T } {}
+    ^ ?? ( env_set name v ) { T _ → T F _ → F }
+}
+
+// The lines of `text`'s import header: its first lines, as long as they
+// start `import `.
+@ __lt_header_lines s text → i {
+    : ( Slice u ) t ( slice_of_str text )
+    : i n ( slice_len [u] t )
+    : ~ i lines 0
+    : ~ i k 0
+    ~ < k n {
+        ? ! ( __lt_at t k `import ` ) { ^ lines } {}
+        = lines + lines 1
+        ~ & < k n != ( slice_byte t k ) 10 { = k + k 1 }
+        = k + k 1
+    }
+    ^ lines
+}
+
+@ __lt_at ( Slice u ) t i k s p → b {
+    : ( Slice u ) q ( slice_of_str p )
+    : i m ( slice_len [u] q )
+    ? > + k m ( slice_len [u] t ) { ^ F } {}
+    : ~ i j 0
+    ~ < j m {
+        ? != ( slice_byte t + k j ) ( slice_byte q j ) { ^ F } {}
+        = j + j 1
+    }
+    ^ T
+}
+
 // Check `bundle/Program.lean` and `bundle/Claims.lean` (and with `elab`,
 // `bundle/Elab.lean`) in one Lean process: the file `__lt_combined` makes,
-// in `work`, run by `lean --json` inside formal/ with formal/'s build on
+// in `work`, run by `lean --json` with formal/'s toolchain and its build on
 // `LEAN_PATH` (`<formal>/.lake/build/lib/lean`, set in the environment, so
 // that `import C.Cert` is formal/'s). Each message is the claims' (`log`) or Elab.lean's
 // (`elab_log`) by its own position, not by where it comes in the output: a
@@ -273,6 +390,12 @@ $ `stdlib/ext/json.nu`
 // alone (they only mean that Cert.elab is not proved); Elab.lean's counts
 // only on an exit 0.
 @ cert_lean_check s lean s formal s bundle s work b elab → LeanRun {
+    ^ ( cert_lean_check2 lean formal bundle work elab F )
+}
+
+// ... and with Caps.lean too (`caps`, N.cap): its messages, from line
+// `cstart` on, are its own part (`caps_log`), as Elab.lean's are.
+@ cert_lean_check2 s lean s formal s bundle s work b elab b caps → LeanRun {
     : ~ String log ( string_new )
     : String prog ( nc_join bundle `Program.lean` )
     : String claims ( nc_join bundle `Claims.lean` )
@@ -286,58 +409,54 @@ $ `stdlib/ext/json.nu`
             F → {}
         }
     } {}
+    : ~ ? String ktext @ ?String { F }
+    ? caps {
+        ?? ( nc_read ( string_data ( nc_join bundle `Caps.lean` ) ) ) {
+            T x → { = ktext @ ?String { T x } }
+            F → {}
+        }
+    } {}
     : ~ String why ( string_new )
     : ~ String text ( string_new )
     : ~ i estart 0
-    ?? ( __lt_combined ptext ctext etext why estart ) {
+    : ~ i cstart 0
+    ?? ( __lt_combined ptext ctext etext ktext why estart cstart ) {
         T t → { = text t }
         F → {
             ( string_push_str log ( string_data why ) )
-            ^ @ LeanRun { F log F ( string_new ) }
+            ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
         }
     }
     ? ! ( nc_write ( string_data all ) ( string_data text ) ) {
         ( string_push_str log `cannot write the combined Lean file ` )
         ( string_push_str log ( string_data all ) )
-        ^ @ LeanRun { F log F ( string_new ) }
+        ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
     } {}
-    : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
-    ?? ( env_chdir formal ) {
-        T _ → {}
-        F _ → {
-            ( string_push_str log `cannot enter the formal tree ` )
-            ( string_push_str log formal )
-            ^ @ LeanRun { F log F ( string_new ) }
-        }
-    }
     : ( Vec String ) a1 ( vec_new [String] )
-    // (`lake env lean` set the same `LEAN_PATH` and cost ≈ 45 ms a run
-    // before Lean started, AGORA-1029 step 9; `lean` adds its own library
-    // itself. Run inside formal/, elan's `lean` picks formal/'s toolchain,
-    // as its `lake` did; `LEAN_PATH` is set, not inherited: nurl-cert sets
-    // it in its own environment, which Lean inherits, so no `env` program
-    // stands between (there is none on a Windows PATH, AGORA-1031).)
-    : String lp ( string_from formal )
-    ( string_push_str lp `/.lake/build/lib/lean` )
-    ?? ( env_set `LEAN_PATH` ( string_data lp ) ) {
-        T _ → {}
-        F _ → {
-            ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
-            ( string_push_str log `cannot set LEAN_PATH for Lean` )
-            ^ @ LeanRun { F log F ( string_new ) }
-        }
-    }
+    // (Lean's environment: `cert_lean_env`)
+    ? ! ( cert_lean_env formal ) {
+        ( string_push_str log `cannot set LEAN_PATH for Lean` )
+        ^ @ LeanRun { F log F ( string_new ) F ( string_new ) }
+    } {}
+    ( vec_push [String] a1 ( string_from LEAN_THREADS ) )
     ( vec_push [String] a1 ( string_from `--json` ) )
     ( vec_push [String] a1 ( string_clone all ) )
     : Run r ( nc_run lean a1 )
-    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     : b has_elab ?? etext { T _ → T F → F }
+    : b has_caps ?? ktext { T _ → T F → F }
     : ~ String elog ( string_new )
+    : ~ String klog ( string_new )
     : ( Vec String ) ls ( nc_lines ( string_data . r out ) )
     : i n ( vec_len [String] ls )
     : ~ i k 0
     // an error Lean itself placed in the claims' part
     : ~ b cerr F
+    // an error in the import header (Lean places a module it cannot load at
+    // the header, line 1): it may be an optional part's import (C.Elab,
+    // C.Caps, C.Caps3), so it does not stand against the claims until they
+    // are checked again alone
+    : ~ b herr F
+    : i hdr ( __lt_header_lines ( string_data text ) )
     ~ < k n {
         : String l ( string_clone ( vec_at [String] ls k ) )
         ? > ( string_len ( string_trim l ) ) 0 {
@@ -353,11 +472,17 @@ $ `stdlib/ext/json.nu`
                         T ln → {
                             ? & ( string_eq file all ) | ( nc_is_s ( string_data sev ) `error` ) | ( nc_is_s ( string_data sev ) `warning` ) ( nc_is_s ( string_data sev ) `information` ) {
                                 : String mt ( __lt_msg_text ( string_data file ) ln col ( string_data sev ) ( string_data data ) )
-                                ? & has_elab >= ln estart {
-                                    ( string_push_str elog ( string_data mt ) )
+                                ? & has_caps >= ln cstart {
+                                    ( string_push_str klog ( string_data mt ) )
                                 } {
-                                    ( string_push_str log ( string_data mt ) )
-                                    ? ( nc_is_s ( string_data sev ) `error` ) { = cerr T } {}
+                                    ? & has_elab >= ln estart {
+                                        ( string_push_str elog ( string_data mt ) )
+                                    } {
+                                        ( string_push_str log ( string_data mt ) )
+                                        ? ( nc_is_s ( string_data sev ) `error` ) {
+                                            ? <= ln hdr { = herr T } { = cerr T }
+                                        } {}
+                                    }
                                 }
                                 = placed T
                             } {}
@@ -384,24 +509,48 @@ $ `stdlib/ext/json.nu`
         ( string_push_char log 10 )
     } {}
     : b ok0 & . r started == . r code 0
-    : b elab_failed & & & & has_elab . r started == . r code 1 ( cert_lean_has_error elog ) ! ( cert_lean_has_error log )
+    // (an error in an optional part, Elab.lean's or Caps.lean's, and none in
+    // the claims': the claims stand, the part is not proved)
+    : b elab_failed & & & & | has_elab has_caps . r started == . r code 1 | ( cert_lean_has_error elog ) ( cert_lean_has_error klog ) ! ( cert_lean_has_error log )
     // A run that ended otherwise (killed, out of memory, an exit Lean does
-    // not give for an error) with no error of Lean's in the claims' part
-    // may have ended in the optional Elab.lean part: the claims are checked
-    // again alone, once, and Elab.lean is not proved. (Without Elab.lean,
-    // as in verify of a bundle that holds it, Cert.elab then fails.)
-    ? & & has_elab ! | ok0 elab_failed ! cerr {
-        : LeanRun again ( cert_lean_check lean formal bundle work F )
-        : String note ( string_from `the Lean run ended abnormally (exit ` )
-        ( string_push_int note . r code )
-        ( string_push_str note `) before the Elab.lean part was checked; the claims were checked again alone` )
-        ^ @ LeanRun { . again ran . again log F note }
+    // not give for an error, an import it could not load) with no error of
+    // Lean's in the claims' own part may have ended in an optional part
+    // (Elab.lean's, Caps.lean's, or their imports): the claims are checked
+    // again alone, once, and the optional parts are not proved. A failure of
+    // that run is the claims' own. (Without Elab.lean, as in verify of a
+    // bundle that holds it, Cert.elab then fails; so does Cert.n_cap.)
+    ? & & | has_elab has_caps ! | ok0 elab_failed ! cerr {
+        : LeanRun again ( cert_lean_check2 lean formal bundle work F F )
+        : String note ( string_new )
+        ? herr {
+            ( string_push_str note `Lean could not load the imports with the optional parts' (` )
+            ( string_push_str note ( string_data ( string_trim log ) ) )
+            ( string_push_str note `); the claims were checked again alone` )
+        } {
+            ( string_push_str note `the Lean run ended abnormally (exit ` )
+            ( string_push_int note . r code )
+            ( string_push_str note `) before the optional parts were checked; the claims were checked again alone` )
+        }
+        : String knote ( string_clone note )
+        ^ @ LeanRun { . again ran . again log F note F knote }
     } {}
-    ^ @ LeanRun { | ok0 elab_failed log & ok0 has_elab elog }
+    // (each optional part ran when the run did and held no error of its
+    // own: a failed Caps.lean part leaves Elab.lean's proof standing)
+    : b ran_ok | ok0 elab_failed
+    : b eran & & ran_ok has_elab ! ( cert_lean_has_error elog )
+    : b kran & & ran_ok has_caps ! ( cert_lean_has_error klog )
+    ^ @ LeanRun { ran_ok log eran elog kran klog }
 }
 
 // Lean proved `Cert.elab` on the standard axioms alone: the run exited 0,
 // reported no error, and `#print axioms` lists no other axiom.
+// Caps.lean (N.cap) proved: its part ran with no error, and Lean lists
+// `Cert.n_cap`'s axioms (which the status is read off).
+@ cert_caps_proved LeanRun lr → b {
+    ? | ! . lr caps_ran ( cert_lean_has_error . lr caps_log ) { ^ F } {}
+    ^ ?? ( cert_lean_axioms . lr caps_log `Cert.n_cap` ) { T _ → T F → F }
+}
+
 @ cert_elab_proved LeanRun lr → b {
     ? | ! . lr elab_ran ( cert_lean_has_error . lr elab_log ) { ^ F } {}
     ^ ?? ( cert_lean_axioms . lr elab_log `Cert.elab` ) {
@@ -457,16 +606,12 @@ theorem refuted : C.certOK2B P entry 1 = false := by decide +kernel
     }
     : String file ( nc_join work `Refute.lean` )
     ? ! ( nc_write ( string_data file ) ( string_data o ) ) { ^ F } {}
-    : String back ?? ( env_cwd ) { T c → c F _ → ( string_from `/` ) }
-    ?? ( env_chdir formal ) { T _ → {} F _ → { ^ F } }
-    : String lp ( string_from formal )
-    ( string_push_str lp `/.lake/build/lib/lean` )
-    : b set ?? ( env_set `LEAN_PATH` ( string_data lp ) ) { T _ → T F _ → F }
+    : b set ( cert_lean_env formal )
     : ( Vec String ) a ( vec_new [String] )
+    ( vec_push [String] a ( string_from LEAN_THREADS ) )
     ( vec_push [String] a ( string_from `--json` ) )
     ( vec_push [String] a ( string_clone file ) )
     : Run r ? set ( nc_run lean a ) @ Run { F -1 ( string_new ) ( string_new ) }
-    ?? ( env_chdir ( string_data back ) ) { T _ → {} F _ → {} }
     // proved: Lean exited 0, wrote no error and nothing on stderr
     ^ & & & . r started == . r code 0 ! ( string_contains . r out `\"severity\":\"error\"` ) == 0 ( string_len . r err )
 }

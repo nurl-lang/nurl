@@ -52,7 +52,7 @@ jobs:
           echo "$HOME/leanbin" >> "$GITHUB_PATH"
       - name: Build the checker's modules
         working-directory: formal
-        run: lake build C.Cert C.Cert3 C.Elab C.Complete
+        run: lake build C.Cert C.Cert3 C.Elab C.Complete C.Caps C.Caps3
       - name: Build the toolchain
         run: ./build.sh --no-tests
       - name: Build nurl-cert

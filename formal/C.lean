@@ -21,7 +21,11 @@ import C.DedupWitness
 import C.Cert
 import C.Cert3
 import C.Elab
+import C.ElabWitness
 import C.Complete
+import C.Caps
+import C.CapsWitness
+import C.Caps3
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
@@ -54,6 +58,13 @@ callees and `hasThru`); `certOK2BA` checks the rest, and `cert_safe_cond`,
 completion in which the assumed functions are well-typed (`StmtT.complete`:
 typing over the stubs is typing over any completion); `cond_witness_safe`
 shows the hypotheses hold for a real program.
+C16, what a program can run (`C/Caps.lean`, AGORA-1013): `capsOKB P s L`
+checks that the entry and every function of `L` name only functions of `L`
+(`A2/Reach.lean`, `A3/Reach.lean`: such a set holds every function a run
+names); `caps_runs` and `caps3_runs` give, for the program, that one with
+the same functions at the indices of `L` has the same runs and the same
+interleavings: a function outside `L` is never entered. `reachB` computes
+`L`, the closure of the entry's names.
 `C/Elab.lean` (AGORA-1029): the core IR as words (`C.Elab.IR`) and its
 reader, in the kernel, the first part of building the term inside it;
 step 2, `C.Elab.elabIR`: the term of a scalar program built from those
