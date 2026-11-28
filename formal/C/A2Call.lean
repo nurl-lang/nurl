@@ -299,12 +299,21 @@ theorem callB2_OK (P : Prog) (D : List Var) : CallDec.OK P D (callB2 P D) := by
 
 /-- A2's checker so far: core, data, lock, channel and closure right-hand sides,
     calls, and the core statements, sound for any exits. -/
-def checkA2 (P : Prog) (D : List Var) : Ctx → List Var → Stmt → Option Ctx :=
-  checkStmt2 P (inferRhs2p P D) (callB2 P D) D
+def checkA2 (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) : Option Ctx :=
+  (checkStmt2T P (rhsTreeFast D (inferRhs2p P D)) (callB2 P D) D (tblOf D Γ) F s).map CtxT.get
 
 theorem checkA2_sound {P : Prog} {D : List Var} {s : Stmt} {ξ : Exits} {Γ : Ctx} {F : List Var} {Δ : Ctx}
     (hs : Supported2 Γ D) (hD : ∀ v ∈ s.vars, v ∈ D) (h : checkA2 P D Γ F s = some Δ) :
-    StmtT P ξ Γ F s Δ ∧ Supported2 Δ D :=
-  checkStmt2_sound (inferRhs2p_OK P D) (callB2_OK P D) hs hD h
+    StmtT P ξ Γ F s Δ ∧ Supported2 Δ D := by
+  unfold checkA2 at h
+  cases ht : checkStmt2T P (rhsTreeFast D (inferRhs2p P D)) (callB2 P D) D (tblOf D Γ) F s with
+  | none => rw [ht] at h; cases h
+  | some TΔ =>
+    rw [ht] at h; simp only [Option.map_some, Option.some.injEq] at h; subst h
+    have hself : (tblOf D Γ).get = Γ := ctxOfTbl_self hs
+    obtain ⟨h1, h2⟩ := checkStmt2T_sound (rhsTreeFast_OK (inferRhs2p_OK P D)) (callB2_OK P D)
+      (by rwa [hself]) hD ht
+    rw [hself] at h1
+    exact ⟨h1, h2⟩
 
 end C

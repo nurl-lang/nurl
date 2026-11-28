@@ -237,17 +237,40 @@ def hasExit : Stmt → Bool
   | .block s | .loop s | .takeB _ _ _ s => hasExit s
   | .skip | .assign _ _ | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ => false
 
-/-- `checkStmt2`, asked only of a statement with no `exit`. -/
-def pre2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) :
-    Option Ctx :=
-  if hasExit s then none else checkStmt2 P R C D Γ F s
+/-- The statement contains a `loop` (whose weakening round is handled by
+    `checkX` rather than `checkStmt2`). -/
+def hasLoop : Stmt → Bool
+  | .loop _ => true
+  | .seq a b => hasLoop a || hasLoop b
+  | .ite _ a b => hasLoop a || hasLoop b
+  | .letv _ _ s | .letcall _ _ _ s | .while _ s | .scope _ s | .rbind _ s | .frozen _ s
+  | .letrec _ _ s | .catchR _ _ s | .unpair _ _ _ s | .callc _ _ _ _ _ s | .letd _ _ _ s
+  | .scopeD _ _ s | .withLock _ _ s | .scopeL _ _ _ s | .withElem _ _ _ s | .callcE _ _ _ _ s
+  | .block s | .takeB _ _ _ s => hasLoop s
+  | .exit _ | .skip | .assign _ _ | .push _ _ | .free _ | .panic | .edit _ _ _ | .insert _ _ _ => false
 
-theorem pre2_some {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} {Γ : Ctx} {F : List Var} {s : Stmt}
-    {Δ : Ctx} (h : pre2 P R C D Γ F s = some Δ) : checkStmt2 P R C D Γ F s = some Δ := by
-  unfold pre2 at h
+/-- `checkStmt2T` (wrapped to `Ctx`), asked only of a statement with no `exit`:
+    `some (some Δ)` means accepted, `some none` means refused (with no `loop`
+    needing `checkX`'s weakening round, so `checkX` stops immediately), `none`
+    means `checkX` is needed. -/
+def pre2T (P : Prog) (RT : RhsTreeDec) (C : CallDec) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) :
+    Option (Option Ctx) :=
+  if hasExit s then none
+  else match checkStmt2T P RT C D (tblOf D Γ) F s with
+    | some TΔ => some (some TΔ.get)
+    | none => if hasLoop s then none else some none
+
+theorem pre2T_some {P : Prog} {RT : RhsTreeDec} {C : CallDec} {D : List Var} {Γ : Ctx} {F : List Var} {s : Stmt}
+    {Δ : Ctx} (h : pre2T P RT C D Γ F s = some (some Δ)) :
+    ∃ TΔ, checkStmt2T P RT C D (tblOf D Γ) F s = some TΔ ∧ Δ = TΔ.get := by
+  unfold pre2T at h
   split at h
   · cases h
-  · exact h
+  · split at h
+    · rename_i TΔ hT
+      simp only [Option.some.injEq] at h
+      exact ⟨TΔ, hT, h.symm⟩
+    · split at h <;> cases h
 
 /-- What `checkX` finds: the end context, the obligations on the exits
     context, and, for a statement that ends in an exit, that exit's depth
@@ -278,25 +301,27 @@ theorem blkTail_some {r : XR} {n : Nat} {Γe : Ctx} (h : blkTail r = some (n, Γ
     · cases h
   · cases h
 
-def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option XR
+def checkXT (P : Prog) (RT : RhsTreeDec) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option XR
   | Γ, _, .exit n => if exitToB D Γ Γ then some ⟨Γ, [(n, Γ)], some (n, Γ)⟩ else none
   | Γ, F, .seq a b =>
-    match pre2 P R C D Γ F (.seq a b) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.seq a b) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
       if b.src then
-        match checkX P R C D Γ F a with
+        match checkXT P RT R C D Γ F a with
         | some ra =>
-          match checkX P R C D ra.Δ F b with
+          match checkXT P RT R C D ra.Δ F b with
           | some rb => some ⟨rb.Δ, ra.E ++ rb.E, rb.tail⟩
           | none => none
         | none => none
       else none
   | Γ, F, .block s =>
-    match pre2 P R C D Γ F (.block s) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.block s) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
-      match checkX P R C D Γ F s with
+      match checkXT P RT R C D Γ F s with
       | some r =>
         if oblBlkOKB D r.Δ r.E then
           -- (AGORA-994: a body with no exit of the block's own that ends in an
@@ -312,11 +337,12 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         else none
       | none => none
   | Γ, F, .ite c a b =>
-    match pre2 P R C D Γ F (.ite c a b) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.ite c a b) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
       if a.src ∧ b.src ∧ checkExpr2 Γ c then
-        match checkX P R C D Γ F a, checkX P R C D Γ F b with
+        match checkXT P RT R C D Γ F a, checkXT P RT R C D Γ F b with
         | some ra, some rb =>
           if D.all (fun v => ra.Δ v == rb.Δ v) then some ⟨ra.Δ, ra.E ++ rb.E, none⟩
           -- (a direct panic arm first, into the other arm's end, as
@@ -336,24 +362,26 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
             | none, some (_, Γe) => if exitToB D Γe ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩ else none
             -- (C7w: the arms' ends joined by weakening, as `checkStmt2`'s)
             | none, none =>
-              if ctxWF2B D Γ && nameWFB D Γ && weaker2B D ra.Δ (ctxOfList (joinTbl D ra.Δ rb.Δ)) &&
-                  weaker2B D rb.Δ (ctxOfList (joinTbl D ra.Δ rb.Δ)) then
-                some ⟨ctxOfList (joinTbl D ra.Δ rb.Δ), ra.E ++ rb.E, none⟩
-              else none
+              match joinIte2 D Γ ra.Δ rb.Δ with
+              | some J => some ⟨J, ra.E ++ rb.E, none⟩
+              | none => none
         | _, _ => none
       else none
   | Γ, F, .letv x r s =>
-    match pre2 P R C D Γ F (.letv x r s) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.letv x r s) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
       if s.src ∧ Γ x = none ∧ x ∉ F then
         match R Γ F r with
         | some (E, Γ1) =>
           if decide (E.mode = .own → E.ty.holdsDtor = false) then
-            match checkX P R C D (setE Γ1 x E) F s with
+            match checkXT P RT R C D (setE Γ1 x E) F s with
             | some rs =>
-              if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x) then
-                some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
+              if rs.E.all (fun e => endOK2B D e.2 x) then
+                match exitScopeStep D rs.Δ x with
+                | some Δ' => some ⟨Δ', oblUnder x rs.E, none⟩
+                | none => none
               else none
             | none => none
           else none
@@ -362,13 +390,14 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
   | Γ, F, .scope x s =>
     -- (a run-time scope's body may exit: each exit ends `x`'s scope as its
     -- end does; github#2242's review)
-    match pre2 P R C D Γ F (.scope x s) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.scope x s) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
       match Γ x with
       | some E =>
         if decide (E.mode ≠ .rootb) && decide (x ∉ F) then
-          match checkX P R C D Γ F s with
+          match checkXT P RT R C D Γ F s with
           | some rs =>
             if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x) then
               some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
@@ -379,8 +408,9 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
   | Γ, F, .letd x f r s =>
     -- (a destructor frame's body may exit: each exit ends `x`'s scope as its
     -- end does, under `Exits.underD`; AGORA-975)
-    match pre2 P R C D Γ F (.letd x f r s) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.letd x f r s) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
       if s.src ∧ Γ x = none ∧ x ∉ F ∧ x ∉ s.assigns then
         match R Γ F r with
@@ -389,7 +419,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
           | some (t, τ) =>
             if decide (E.mode = .own) && t.isStruct && !t.hasFn &&
                 letdFnB P f t E.ty x s && takeOKB P Γ r then
-              match checkX P R C D (setE Γ1 x (Entry.arm { E with ty := τ, held := E.held })) F s with
+              match checkXT P RT R C D (setE Γ1 x (Entry.arm { E with ty := τ, held := E.held })) F s with
               | some rs =>
                 if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x && underDB e.2 x) then
                   some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
@@ -400,13 +430,14 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | none => none
       else none
   | Γ, F, .letcall x f args s =>
-    match pre2 P R C D Γ F (.letcall x f args s) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.letcall x f args s) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
       if s.src ∧ Γ x = none ∧ x ∉ F ∧ dtorHeadB P f x s then
         match C Γ F f args with
         | some (E, Γ1) =>
-          match checkX P R C D (ctxOfTbl <| settleL2 D (x :: args) (setE Γ1 x E)) F s with
+          match checkXT P RT R C D (ctxOfTbl <| settleL2 D (x :: args) (setE Γ1 x E)) F s with
           | some rs =>
             if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x) then
               some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
@@ -415,18 +446,19 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | none => none
       else none
   | Γ, F, .loop s =>
-    match pre2 P R C D Γ F (.loop s) with
-    | some Δ => some ⟨Δ, [], none⟩
+    match pre2T P RT C D Γ F (.loop s) with
+    | some (some Δ) => some ⟨Δ, [], none⟩
+    | some none => none
     | none =>
       if s.src then
-        match checkX P R C D Γ F s with
+        match checkXT P RT R C D Γ F s with
         | some rs =>
           if D.all (fun v => rs.Δ v == Γ v) && exitToB D Γ (loopEnd Γ rs.E) then
             some ⟨loopEnd Γ rs.E, rs.E, none⟩
           -- (C7w: a round that ends weaker than it started, a binding moved
           -- and given back, or not: the loop runs from the join of both)
           else if weaker2B D Γ (ctxOfList (joinTbl D Γ rs.Δ)) then
-            match checkX P R C D (ctxOfList (joinTbl D Γ rs.Δ)) F s with
+            match checkXT P RT R C D (ctxOfList (joinTbl D Γ rs.Δ)) F s with
             | some rj =>
               if weaker2B D (ctxOfList (joinTbl D Γ rs.Δ)) (ctxOfList (joinTbl D Γ rs.Δ)) && weaker2B D rj.Δ (ctxOfList (joinTbl D Γ rs.Δ)) &&
                   exitToB D (ctxOfList (joinTbl D Γ rs.Δ)) (loopEnd (ctxOfList (joinTbl D Γ rs.Δ)) rj.E) then
@@ -437,9 +469,12 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | none => none
       else none
   | Γ, F, s =>
-    match checkStmt2 P R C D Γ F s with
-    | some Δ => some ⟨Δ, [], none⟩
+    match checkStmt2T P RT C D (tblOf D Γ) F s with
+    | some TΔ => some ⟨TΔ.get, [], none⟩
     | none => none
+
+def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option XR :=
+  checkXT P (rhsTreeOf D R) R C D
 
 /-- What `checkX` proves of a statement. -/
 def XSound (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) (r : XR) : Prop :=
@@ -453,14 +488,31 @@ theorem xsound_of_check2 {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
   refine ⟨(checkStmt2_sound hR hC (ξ := .none) hs hD h).2, fun e he => (by cases he),
     fun ξ _ => (checkStmt2_sound hR hC hs hD h).1, fun n Γe ht => (by cases ht)⟩
 
-theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
+theorem xsound_of_check2T {P : Prog} {RT : RhsTreeDec} {C : CallDec} {D : List Var} (hRT : RT.OK D) (hC : C.OK P D)
+    {Γ : Ctx} {F : List Var} {s : Stmt} {TΔ : CtxT Entry} (hs : Supported2 Γ D) (hD : ∀ v ∈ s.vars, v ∈ D)
+    (h : checkStmt2T P RT C D (tblOf D Γ) F s = some TΔ) : XSound P D Γ F s ⟨TΔ.get, [], none⟩ := by
+  have hself : (tblOf D Γ).get = Γ := ctxOfTbl_self hs
+  have hsT : Supported2 (tblOf D Γ).get D := by rwa [hself]
+  refine ⟨(checkStmt2T_sound hRT hC (ξ := .none) hsT hD h).2, fun e he => (by cases he),
+    fun ξ _ => ?_, fun n Γe ht => (by cases ht)⟩
+  have ht := (checkStmt2T_sound hRT hC (ξ := ξ) hsT hD h).1
+  rwa [hself] at ht
+
+theorem xsound_of_pre2T {P : Prog} {RT : RhsTreeDec} {C : CallDec} {D : List Var} (hRT : RT.OK D) (hC : C.OK P D)
+    {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (hs : Supported2 Γ D) (hD : ∀ v ∈ s.vars, v ∈ D)
+    (h : pre2T P RT C D Γ F s = some (some Δ)) : XSound P D Γ F s ⟨Δ, [], none⟩ := by
+  obtain ⟨TΔ, hT, rfl⟩ := pre2T_some h
+  exact xsound_of_check2T hRT hC hs hD hT
+
+theorem checkXT_sound {P : Prog} {RT : RhsTreeDec} {R : RhsDec} {C : CallDec} {D : List Var}
+    (hRT : RT.OK D) (hR : R.OK D) (hC : C.OK P D) :
     ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {r : XR}, Supported2 Γ D → (∀ v ∈ s.vars, v ∈ D) →
-      checkX P R C D Γ F s = some r → XSound P D Γ F s r := by
+      checkXT P RT R C D Γ F s = some r → XSound P D Γ F s r := by
   intro s
   induction s with
   | exit n =>
     intro Γ F r hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i hx
       simp only [Option.some.injEq] at h; subst h
@@ -473,11 +525,12 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     · cases h
   | seq a b iha ihb =>
     intro Γ F r hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i hsrc
         split at h
@@ -502,11 +555,12 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | block s ih =>
     intro Γ F r hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i r0 hr0
         split at h
@@ -546,11 +600,12 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | ite c a b iha ihb =>
     intro Γ F r hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i hc
         obtain ⟨ha, hb, hce⟩ := hc
@@ -623,27 +678,25 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                     exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (hre ra.Δ sa hto ξ h2)
                   · cases h
                 · split at h
-                  · rename_i hj
-                    simp only [Bool.and_eq_true] at hj
-                    obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hj
+                  · rename_i J hj
                     simp only [Option.some.injEq] at h; subst h
-                    have sj := joinTbl_supported D ra.Δ rb.Δ
-                    have wΓ := weaker_self2 hs h1 h2
+                    obtain ⟨sj, wΓ, wa, wb⟩ := joinIte2_sound hs sa sb hj
                     refine ⟨sj, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
                     obtain ⟨k1, k2⟩ := OblOK.append hξ
                     exact .ite ha hb (checkExpr2_sound hce)
-                      (.sub wΓ (ta ξ k1) (Or.inr (weaker2B_sound sa sj h3)))
-                      (.sub wΓ (tb ξ k2) (Or.inr (weaker2B_sound sb sj h4)))
+                      (.sub wΓ (ta ξ k1) (Or.inr wa))
+                      (.sub wΓ (tb ξ k2) (Or.inr wb))
                   · cases h
         · cases h
       · cases h
   | letv x r s ih =>
     intro Γ F rr hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF⟩ := hc
@@ -654,18 +707,20 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
             split at h
             · rename_i rs hrs
               split at h
-              · rename_i he
-                simp only [Option.some.injEq] at h; subst h
-                simp only [Bool.and_eq_true] at he
-                obtain ⟨hend, hendE⟩ := he
-                obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
-                obtain ⟨s0, e0, t0, _⟩ := ih (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
-                  (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
-                refine ⟨supported2_exitScope s0 x, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
-                · obtain ⟨e', he', rfl⟩ := List.mem_map.mp he
-                  exact supported2_exitScope (e0 e' he') x
-                · exact .letv hsrc hx hF hrt (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
-                    (of_decide_eq_true hnd)
+              · rename_i hendE
+                split at h
+                · rename_i Δ' hstep
+                  simp only [Option.some.injEq] at h; subst h
+                  obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+                  obtain ⟨s0, e0, t0, _⟩ := ih (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
+                    (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
+                  obtain ⟨hend, rfl⟩ := exitScopeStep_sound s0 hstep
+                  refine ⟨supported2_exitScope s0 x, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+                  · obtain ⟨e', he', rfl⟩ := List.mem_map.mp he
+                    exact supported2_exitScope (e0 e' he') x
+                  · exact .letv hsrc hx hF hrt (t0 _ (oblUnder_ok e0 hendE hξ)) hend
+                      (of_decide_eq_true hnd)
+                · cases h
               · cases h
             · cases h
           · cases h
@@ -673,11 +728,12 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | scope x s ih =>
     intro Γ F rr hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i E hE
         split at h
@@ -701,11 +757,12 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | letd x f r s ih =>
     intro Γ F rr hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF, hna⟩ := hc
@@ -741,11 +798,12 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | letcall x f args s ih =>
     intro Γ F rr hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF, hdk⟩ := hc
@@ -774,11 +832,12 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | loop s ih =>
     intro Γ F r hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
+      exact xsound_of_pre2T hRT hC hs hD h0
+    · cases h
     · split at h
       · rename_i hsrc
         split at h
@@ -819,11 +878,16 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | _ =>
     intro Γ F r hs hD h
-    simp only [checkX] at h
+    simp only [checkXT] at h
     split at h
-    · rename_i Δ h0
+    · rename_i TΔ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2T hRT hC hs hD h0
     · cases h
+
+theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
+    ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {r : XR}, Supported2 Γ D → (∀ v ∈ s.vars, v ∈ D) →
+      checkX P R C D Γ F s = some r → XSound P D Γ F s r :=
+  checkXT_sound (rhsTreeOf_OK hR) hR hC
 
 end C

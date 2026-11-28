@@ -189,7 +189,7 @@ theorem supported_tbl1 {D : List Var} (L : Var → Option Entry) : Supported (ct
   fun _ hv => ctxOfTbl_none _ hv
 
 /-- `Γ` with the entries of `vs` deduplicated, read into a table over `D`. -/
-def dedupTbl1 (D vs : List Var) (Γ : Ctx) : List (Var × Option Entry) := tblOf D (mapAt Entry.dedup1 vs Γ)
+def dedupTbl1 (D vs : List Var) (Γ : Ctx) : CtxT Entry := tblOf D (mapAt Entry.dedup1 vs Γ)
 
 theorem weaker_dedup1 {Γ : Ctx} {D : List Var} (hs : Supported Γ D) (vs : List Var)
     (hw : CtxWF (ctxOfTbl (dedupTbl1 D vs Γ))) : Weaker Γ (ctxOfTbl (dedupTbl1 D vs Γ)) := by
@@ -221,7 +221,7 @@ theorem weaker_self1 {D : List Var} {Γ : Ctx} (hs : Supported Γ D) (h : ctxWFB
     duplicates dropped if that changes it and keeps it well formed. As A2's
     `settleL2`, it is a `List` the checker reads through `ctxOfTbl`, so it
     is built once. -/
-def settleL1 (D vs : List Var) (Γ : Ctx) : List (Var × Option Entry) :=
+def settleL1 (D vs : List Var) (Γ : Ctx) : CtxT Entry :=
   if dupsAt1 vs Γ then
     let L := dedupTbl1 D vs Γ
     if ctxWFB D (ctxOfTbl L) then L else tblOf D Γ
@@ -254,7 +254,7 @@ theorem stmtT_settleIn1 {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ct
 
 /-- The context a statement ends in, as a table over `D`, its duplicates
     dropped where that and the context it started from are well formed. -/
-def settleOutL1 (D vs : List Var) (Γ Δ : Ctx) : List (Var × Option Entry) :=
+def settleOutL1 (D vs : List Var) (Γ Δ : Ctx) : CtxT Entry :=
   if dupsAt1 vs Δ && ctxWFB D (ctxOfTbl (tblOf D Γ)) then settleL1 D vs Δ else tblOf D Δ
 
 theorem settleOutL1_supported {Γ Δ : Ctx} {D : List Var} (vs : List Var) :
