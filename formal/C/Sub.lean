@@ -16,7 +16,7 @@ certificate together and is proven sound (`checkC_sound`,
 `checkedC_memory_safe`). This is the format such a certificate would take,
 the contexts a walk used, for a small proven checker to check; nurlc
 emitting it is a proposed integration (today nurlc's core IR goes to A2's
-checker through `tools/ncore/tolean.py`).
+checker through nurl-cert's translator, `packages/nurl-cert/src/tolean.nu`).
 -/
 
 namespace C

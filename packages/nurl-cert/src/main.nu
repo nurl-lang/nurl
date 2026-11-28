@@ -12,7 +12,7 @@
 // (M.leak), each proved from formal/'s theorems with the checker's verdict
 // decided by the Lean kernel. `verify` checks a bundle again without
 // nurlc. `translate` prints the Lean term of a core IR (`nurlc
-// --emit-core`), as tools/ncore/tolean.py prints it. `coverage` prints the
+// --emit-core`). `coverage` prints the
 // coverage table (Markdown) of the bundles DIR/*.cert: programs by verdict,
 // own functions by status, and why the unsupported ones are (AGORA-1015).
 // docs/dev/CERTIFICATE.md describes the bundle.
@@ -164,7 +164,7 @@ $ `coverage.nu`
 }
 
 // `translate`: the term on stdout, or `unsupported: <why>` on stderr and
-// exit 2 (tolean.py's output and exit code); a core IR it cannot read is
+// exit 2 (the prototype's output and exit code); a core IR it cannot read is
 // exit 1.
 @ __cmd_translate String target → i {
     : String text ?? ( nc_read ( string_data target ) ) {

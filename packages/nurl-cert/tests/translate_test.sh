@@ -12,15 +12,14 @@
 #     cannot render faithfully are reported `unsupported` (exit 2, the
 #     reason on stderr), and a core IR it cannot read (a column that is not
 #     an integer, fewer fields than a line counts, an `endfn` with no
-#     function open, a missing word; and, deliberately stricter than
-#     tools/ncore/tolean.py, an operand count past the words there are or
-#     a block with no `end`) is exit 1, never a term
-#     (tools/ncore/tolean_selftest.sh's cases, and more); a sparse variable
+#     function open, a missing word; and, deliberately stricter than the
+#     Python prototype was, an operand count past the words there are or
+#     a block with no `end`) is exit 1, never a term; a sparse variable
 #     id or many variables cost no more than their number.
-#  2. The reference: on every certify program the translator prints what
-#     tools/ncore/tolean.py prints, byte for byte, with its exit code and
-#     its message (skipped without python3; tools/ncore/tolean_parity.sh
-#     compares the two over every hole probe as well).
+#  The term itself is checked against formal/C's own elaborator, `elabIR`,
+#  in the kernel (tools/ncore/elab_parity.sh). The Python prototype it was
+#  once compared with byte for byte is retired (AGORA-1048: no Python
+#  mirror of a NURL component, note python-dev-only).
 # ============================================================
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -116,7 +115,7 @@ if [ "$rc" = 1 ] && [ ! -s "$TMP/out" ] && grep -q '^nurl-cert: internal: ' "$TM
 else bad "an unreadable core IR stops the translation (exit $rc)"; sed 's/^/        /' "$TMP/err" | head -3; fi
 
 # expect_internal NAME CORE REASON: exit 1, nothing on stdout, `nurl-cert: internal: …REASON…`
-# (where tolean.py stops with an exception).
+# (where the retired Python prototype stopped with an exception).
 expect_internal() {
     rc=$(tl "$2")
     if [ "$rc" = 1 ] && [ ! -s "$TMP/out" ] && grep -q "^nurl-cert: internal: .*$3" "$TMP/err"; then ok "$1"
@@ -137,7 +136,7 @@ expect_internal "a ty line with fewer field pairs than it counts" "$TMP/n2.core"
 { cat "$TMP/s.core"; printf 'endfn\n'; } > "$TMP/n4.core"
 expect_internal "an endfn with no function open" "$TMP/n4.core" "an endfn with no function open"
 # A sparse variable id: indexed sparsely (no billion-entry table), read as
-# tolean.py reads it (the numbering past it).
+# the retired prototype read it (the numbering past it).
 awk '/^fn\tmain\t/{print; print "v\t1000000000\t2\t1\t0\t2\t-1\t\ti64"; next} {print}' "$TMP/s.core" > "$TMP/n3.core"
 rc=$(timeout 20 "$CERT" translate "$TMP/n3.core" > "$TMP/out" 2> "$TMP/err"; echo $?)
 if [ "$rc" = 0 ] && grep -q 'nvars := 1000000005 }' "$TMP/out"; then ok "a sparse variable id (10^9) costs nothing"
@@ -153,9 +152,9 @@ else bad "sink=2^64 marks no parameter (exit $rc)"; fi
 { printf 'fn\tmain\ti64\t0\t1\tp.nu\t0\t\n'; seq 200000 -1 1 | awk '{print "v\t" $1 "\t2\t1\t0\t1\t-1\t\ti64"}'; printf 'scope\nret c\nend\nendfn\n'; } > "$TMP/n6.core"
 rc=$(timeout 20 "$CERT" translate "$TMP/n6.core" > "$TMP/out" 2> "$TMP/err"; echo $?)
 [ "$rc" = 0 ] && ok "200000 variables in reverse order translate in time" || bad "200000 variables in reverse order translate in time (exit $rc)"
-# Intentional deviations from tolean.py (fail closed on malformed IR):
+# Intentional deviations from the retired prototype (fail closed on malformed IR):
 # an operand count past the operand words there are, and a block with no
-# `end` (tolean.py reads both). An empty scope stays valid.
+# `end` (the prototype read both). An empty scope stays valid.
 sed 's/^eval call helper 1 c$/eval call helper 1/' "$TMP/s.core" > "$TMP/r1.core"
 expect_internal "a call that counts more operands than it has" "$TMP/r1.core" "malformed operands: main, statement 2: a call that counts 1 operands and has 0"
 sed 's/^eval call helper 1 c$/eval call helper 0/' "$TMP/s.core" > "$TMP/r1b.core"
@@ -169,7 +168,7 @@ expect_internal "an end with no block open" "$TMP/r2b.core" "malformed block: ma
 awk '/^fn\tmain\t/{m=1} m && /^scope$/ && !d {print; print "scope"; print "end"; d=1; next} {print}' "$TMP/s.core" > "$TMP/r2c.core"
 rc=$(tl "$TMP/r2c.core"); [ "$rc" = 0 ] && ok "an empty scope translates" || bad "an empty scope translates (exit $rc)"
 
-# Deliberately stricter than tolean.py too (`malformed`): counts below 0,
+# Deliberately stricter than the prototype too (`malformed`): counts below 0,
 # a function left open, ids below 0, kinds outside 0-3.
 { cat "$TMP/s.core"; printf 'ty\t%%S\t0\t1c----\tS\tA\t0\tF\t-1\tV\t0\n'; } > "$TMP/q1.core"
 expect_internal "a ty line's field count -1" "$TMP/q1.core" "malformed: a ty line's field count below 0"
@@ -237,7 +236,7 @@ if [ "$rc" = 0 ] && [ -n "$q" ] && case "$inloop" in *"(.letv $q (.expr .any) (.
     ok "a call's untracked argument in a loop is bound in the loop's body (fresh each round)"
 else bad "a call's untracked argument in a loop is bound in the loop's body (exit $rc, temporary ${q:-none})"; fi
 
-echo "== 1b. threads (A3; beyond tolean.py)"
+echo "== 1b. threads (A3)"
 # A program that spawns (`thread_spawn_owned`) is translated for A3: the
 # closure of class `send`, a spawn wrapper, `def spawns`, the claim
 # certOK3B. One that spawns nothing is translated as before.
@@ -427,36 +426,6 @@ EOF2
     [ "$wbad" = 0 ] && ok "words of $nw certify programs are their lines' split as numbers, the library's functions and the sum lines no other word names left out" || bad "words: $wbad of $nw differ from the split"
 else
     echo "  SKIP  words parity: no python3"
-fi
-
-echo "== 2. the reference (tools/ncore/tolean.py)"
-if command -v python3 > /dev/null; then
-    n=0; same=0
-    for f in tools/ncore/certify/*.nu; do
-        k=$(basename "$f" .nu)
-        # a threaded program is beyond tolean.py (A3, part 1b above)
-        case "$k" in thread_*) continue ;; esac
-        "$NURLC" --emit-core "$f" > "$TMP/$k.core" 2> /dev/null || { bad "$k: nurlc --emit-core"; continue; }
-        n=$((n + 1))
-        python3 tools/ncore/tolean.py "$TMP/$k.core" > "$TMP/$k.py.out" 2> "$TMP/$k.py.err"; prc=$?
-        "$CERT" translate "$TMP/$k.core" > "$TMP/$k.nu.raw" 2> "$TMP/$k.nu.err"; nrc=$?
-        # AGORA-1030: `.any` where tolean.py writes `(.lit 0)`; compared modulo that
-        # (and where a literal temporary is bound: at its statement, not at
-        # the top of the function, compared with those bindings dropped)
-        # (a normalizer that fails is a failure, never two empty files equal)
-        if ! python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.nu.raw" > "$TMP/$k.nu.out" \
-            || ! python3 tools/ncore/norm_any.py --drop-temps "$TMP/$k.py.out" > "$TMP/$k.py.n"; then
-            bad "$k: tools/ncore/norm_any.py failed"; continue
-        fi
-        mv "$TMP/$k.py.n" "$TMP/$k.py.out"
-        if [ "$prc" = "$nrc" ] && cmp -s "$TMP/$k.py.out" "$TMP/$k.nu.out" && cmp -s "$TMP/$k.py.err" "$TMP/$k.nu.err"; then
-            same=$((same + 1))
-        else bad "$k: the translator differs from tolean.py (exit $nrc, tolean.py $prc)"; fi
-    done
-    [ "$same" = "$n" ] && ok "every certify program ($n) translates as tolean.py translates it"
-
-else
-    echo "  SKIP  python3 is not on PATH"
 fi
 
 echo

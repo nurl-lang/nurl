@@ -17,11 +17,8 @@ decides the hole probes without any code per surface spelling.
 | `diagcmp.py` | the engine's diagnostics against the walk's goldens (compiler/tests): the same line, another, none |
 | `run.py` | runs probes and compares the verdict with each probe's `// map:` line |
 | `openprobes/` | probes written from open hole tickets |
-| `tolean.py` | nurlc's core IR as a program of formal/A2's calculus, for the verified checker of formal/C (AGORA-975). The reference of nurl-cert's translator (`packages/nurl-cert/src/tolean.nu`, AGORA-1020), which certificates are made with: a change to one is made to the other, and `tolean_parity.sh` holds them to the same bytes |
-| `certify.sh` | one program through `--emit-core`, `tolean.py` and the verified checker (`C.progOK2B`, `C.checkA2`), by `#eval`: `accepted`, `refused` or `unsupported: …`. The prototype of `packages/nurl-cert` (AGORA-1019), which states the verdict's consequences as kernel-checked theorems in a certificate bundle (docs/dev/CERTIFICATE.md) and is what CI runs (`certify.yml`); kept for the sweeps that read its one-word answer |
+| `certify.sh` | one program through `--emit-core`, `nurl-cert translate` (NURL_CERT) and the verified checker (`C.progOK2B`, `C.checkA2`), by `#eval`: `accepted`, `refused` or `unsupported: …`. The prototype of `packages/nurl-cert` (AGORA-1019), which states the verdict's consequences as kernel-checked theorems in a certificate bundle (docs/dev/CERTIFICATE.md) and is what CI runs (`certify.yml`); kept for the sweeps that read its one-word answer |
 | `certify/` | the certify programs: `*_refused.nu` must be refused, every other one certified (`packages/nurl-cert/tests/nurl-cert_test.sh`) |
-| `tolean_selftest.sh` | edits of a certify program's core IR that `tolean.py` must report `unsupported` (fail-closed) |
-| `tolean_parity.sh` | `nurl-cert translate` (the translator in NURL, `packages/nurl-cert/src/tolean.nu`) against `tolean.py`, its reference, over every certify program and every hole probe: stdout byte for byte, the exit's class and the `unsupported` message, with both timed (AGORA-1020) |
 
 `fromnurlc.py` reads the core IR nurlc itself builds
 (`nurlc --emit-core`, [docs/dev/CORE_IR.md](../../docs/dev/CORE_IR.md)):

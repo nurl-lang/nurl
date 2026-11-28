@@ -232,10 +232,11 @@ prog.cert/
   (`packages/nurl-cert/src/tolean.nu`, on the one reader of the core IR,
   `coreir.nu`), with no other program in between: `nurl-cert translate
   prog.core` prints the same term with the checker's `#eval` frame. It
-  is the NURL port of the Python prototype `tools/ncore/tolean.py`, which
-  stays its reference: `tools/ncore/tolean_parity.sh` runs both over
-  every certify program and every hole probe and finds no byte of
-  difference, and `packages/nurl-cert/tests/translate_test.sh` holds the
+  began as the NURL port of a Python prototype, held to it byte for byte;
+  that prototype is retired (AGORA-1048, no Python mirror of a NURL
+  component), and the term is checked against formal/C's own elaborator,
+  `elabIR`, in the kernel (`tools/ncore/elab_parity.sh`, Cert.elab), and
+  `packages/nurl-cert/tests/translate_test.sh` holds the
   fail-closed cases (a core IR the translation cannot render is
   `unsupported`, never a term).
 - **Program.lean** is held to the translator's grammar:
