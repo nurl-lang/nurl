@@ -16,8 +16,8 @@
 #     Python prototype was, an operand count past the words there are or
 #     a block with no `end`) is exit 1, never a term; a sparse variable
 #     id or many variables cost no more than their number.
-#  The term itself is checked against formal/C's own elaborator, `elabIR`,
-#  in the kernel (tools/ncore/elab_parity.sh). The Python prototype it was
+#  The term is compared with formal/C's own elaborator, `elabIR`, over the
+#  corpus (tools/ncore/elab_parity.sh). The Python prototype it was
 #  once compared with byte for byte is retired (AGORA-1048: no Python
 #  mirror of a NURL component, note python-dev-only).
 # ============================================================

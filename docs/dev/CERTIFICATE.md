@@ -234,8 +234,9 @@ prog.cert/
   prog.core` prints the same term with the checker's `#eval` frame. It
   began as the NURL port of a Python prototype, held to it byte for byte;
   that prototype is retired (AGORA-1048, no Python mirror of a NURL
-  component), and the term is checked against formal/C's own elaborator,
-  `elabIR`, in the kernel (`tools/ncore/elab_parity.sh`, Cert.elab), and
+  component). Its term is compared with formal/C's own elaborator,
+  `elabIR`, over the corpus (`tools/ncore/elab_parity.sh`), and a bundle
+  with `Elab.lean` has the kernel-built term (Cert.elab).
   `packages/nurl-cert/tests/translate_test.sh` holds the
   fail-closed cases (a core IR the translation cannot render is
   `unsupported`, never a term).

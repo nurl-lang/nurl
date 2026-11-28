@@ -2,9 +2,11 @@
 // the verified checker of formal/C to decide (AGORA-1020). It began as the
 // NURL port of the translation AGORA-975 wrote in Python, held to it byte
 // for byte; that prototype is retired (AGORA-1048: no Python mirror of a
-// NURL component), and this file is the translation. What checks its term
-// now is formal/C's own elaborator, `elabIR`, in the kernel
-// (tools/ncore/elab_parity.sh, and Cert.elab in every bundle).
+// NURL component), and this file is the translation. Its term is compared
+// with formal/C's own elaborator, `elabIR`, over the corpus
+// (tools/ncore/elab_parity.sh); a bundle with `Elab.lean` has the term the
+// kernel built itself (Cert.elab), and only one without it rests on this
+// file (the `translation` ledger row).
 //
 //   ( tolean_translate core_text ) → !String String
 //

@@ -13,7 +13,8 @@
 > claim (C12, `C.checked_claim_made_full`: spawned functions and globals
 > decided, memory safety, race freedom and no leak on every interleaving);
 > nurlc's core IR reaches the checker (`packages/nurl-cert/src/tolean.nu`,
-> checked against `elabIR` in the kernel), and a
+> compared with `elabIR` over the corpus; a bundle with `Elab.lean` has the
+> kernel-built term), and a
 > program's own certificate (C13, `C/Cert.lean`, `packages/nurl-cert`)
 > states `M.safe` and `M.leak` about its term as kernel-checked theorems,
 > and `M.race` too for a program that spawns threads (C14, `C/Cert3.lean`),
