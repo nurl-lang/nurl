@@ -44,3 +44,19 @@ wrong and there is no other output.
   LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY
   WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
+
+
+stdlib/nurl_detmath.h (and its copy in packages/gpu/src/cpu.nu) holds
+double-precision exp, log, pow, sin, cos, tanh, erf, erfc, expm1 and
+log1p ported from musl 1.2.5. They give the same bits on every host,
+which a host's libm does not. The header carries the full notices.
+
+  exp, log, pow and their tables — Copyright (c) 2018, Arm Limited.
+  musl — Copyright (c) 2005-2020 Rich Felker, et al.
+  SPDX-License-Identifier: MIT
+
+  sin, cos, expm1, log1p, tanh, erf, erfc and the pi/2 reduction
+  (fdlibm) — Copyright (C) 1993 by Sun Microsystems, Inc. All rights
+  reserved. Developed at SunPro, a Sun Microsystems, Inc. business.
+  Permission to use, copy, modify, and distribute this software is
+  freely granted, provided that this notice is preserved.

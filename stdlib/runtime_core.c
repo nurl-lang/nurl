@@ -1439,6 +1439,15 @@ double    nurl_bits_to_f64(long long b) { double x; memcpy(&x, &b, 8); return x;
 long long nurl_f32_to_bits(float x) { unsigned int b; memcpy(&b, &x, 4); return (long long)b; }
 float     nurl_bits_to_f32(long long b) { unsigned int u = (unsigned int)b; float x; memcpy(&x, &u, 4); return x; }
 
+/* e^x and ln x with the same bits on every host (AGORA-568), behind
+ * std/float.nu's float_exp / float_log. glibc, UCRT, MinGW and macOS round
+ * these differently, so a grad tape (and anything built on it) gave other
+ * numbers on another OS, and could not equal a CPU-backend gpu kernel,
+ * which computes them with the same header. */
+#include "nurl_detmath.h"
+double nurl_det_exp(double x) { return __nd_exp(x); }
+double nurl_det_log(double x) { return __nd_log(x); }
+
 /* ── §2c  Decimal text -> double, correctly rounded ───────────────
  *
  * `nurl_fast_atof` is the parser behind CSV column typing and every
